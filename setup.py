@@ -1,4 +1,4 @@
-import json, os, requests, platform
+import json, os, requests
 from plexapi.server import PlexServer
 from plexapi.exceptions import BadRequest
 
