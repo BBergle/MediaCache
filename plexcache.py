@@ -120,7 +120,7 @@ if debug:
     logging.info(f"Real source: {real_source}")
     logging.info(f"Cache dir: {cache_dir}")
     logging.info(f"Plex source: {plex_source}")
-    logging.info(f"Nas folders: ({nas_library_folders}")
+    logging.info(f"NAS folders: ({nas_library_folders}")
     logging.info(f"Plex folders: {plex_library_folders}")
     logging.info(f"Unraid: {unraid}")
 
@@ -538,7 +538,7 @@ def is_connected():
     except socket.error:
         return False
 
-print("Initializing script...")
+print("Initialising script...")
 logging.info("Initializing script...")
 print("Checking paths and permissions...")
 logging.info("Checking paths and permissions...")
