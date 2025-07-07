@@ -100,19 +100,26 @@ class ConfigManager:
         
     def load_config(self) -> None:
         """Load configuration from file and validate."""
+        logging.info(f"Loading configuration from: {self.config_file}")
+        
         if not self.config_file.exists():
+            logging.error(f"Settings file not found: {self.config_file}")
             raise FileNotFoundError(f"Settings file not found: {self.config_file}")
         
         try:
             with open(self.config_file, 'r') as f:
                 self.settings_data = json.load(f)
+            logging.debug("Configuration file loaded successfully")
         except json.JSONDecodeError as e:
+            logging.error(f"Invalid JSON in settings file: {e}")
             raise ValueError(f"Invalid JSON in settings file: {e}")
         
+        logging.debug("Processing configuration...")
         self._process_first_start()
         self._load_all_configs()
         self._validate_config()
         self._save_updated_config()
+        logging.info("Configuration loaded and validated successfully")
     
     def _process_first_start(self) -> None:
         """Handle first start configuration."""
@@ -188,6 +195,8 @@ class ConfigManager:
     
     def _validate_config(self) -> None:
         """Validate the loaded configuration."""
+        logging.debug("Validating configuration...")
+        
         required_fields = [
             'PLEX_URL', 'PLEX_TOKEN', 'number_episodes', 'valid_sections',
             'days_to_monitor', 'users_toggle', 'watchlist_toggle',
@@ -199,7 +208,10 @@ class ConfigManager:
         
         missing_fields = [field for field in required_fields if field not in self.settings_data]
         if missing_fields:
+            logging.error(f"Missing required fields in settings: {missing_fields}")
             raise ValueError(f"Missing required fields in settings: {missing_fields}")
+        
+        logging.debug("Configuration validation successful")
     
     def _save_updated_config(self) -> None:
         """Save updated configuration back to file."""

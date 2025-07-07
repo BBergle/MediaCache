@@ -11,6 +11,7 @@ import shutil
 import ntpath
 import posixpath
 from typing import Tuple, Optional
+import logging
 
 
 class SystemDetector:
@@ -145,14 +146,21 @@ class FileUtils:
     
     def check_path_exists(self, path: str) -> None:
         """Check if path exists, is a directory, and is writable."""
+        logging.debug(f"Checking path: {path}")
+        
         if not os.path.exists(path):
+            logging.error(f"Path does not exist: {path}")
             raise FileNotFoundError(f"Path {path} does not exist.")
         
         if not os.path.isdir(path):
+            logging.error(f"Path is not a directory: {path}")
             raise NotADirectoryError(f"Path {path} is not a directory.")
         
         if not os.access(path, os.W_OK):
+            logging.error(f"Path is not writable: {path}")
             raise PermissionError(f"Path {path} is not writable.")
+        
+        logging.debug(f"Path validation successful: {path}")
     
     def get_free_space(self, directory: str) -> Tuple[float, str]:
         """Get free space in a human-readable format."""
@@ -187,6 +195,8 @@ class FileUtils:
     
     def move_file(self, src: str, dest: str) -> int:
         """Move a file with proper permissions."""
+        logging.debug(f"Moving file from {src} to {dest}")
+        
         try:
             if self.is_linux:
                 stat_info = os.stat(src)
@@ -195,21 +205,27 @@ class FileUtils:
                 
                 # Move the file first
                 shutil.move(src, dest)
+                logging.debug(f"File moved successfully: {src} -> {dest}")
                 
                 # Then set the owner and group to the original values
                 os.chown(dest, uid, gid)
                 original_umask = os.umask(0)
                 os.chmod(dest, self.permissions)
                 os.umask(original_umask)
+                logging.debug(f"Permissions restored for: {dest}")
             else:  # Windows logic
                 shutil.move(src, dest)
+                logging.debug(f"File moved successfully (Windows): {src} -> {dest}")
             
             return 0
         except (FileNotFoundError, PermissionError, Exception) as e:
+            logging.error(f"Error moving file from {src} to {dest}: {str(e)}")
             raise RuntimeError(f"Error moving file: {str(e)}")
     
     def create_directory_with_permissions(self, path: str, src_file_for_permissions: str) -> None:
         """Create directory with proper permissions."""
+        logging.debug(f"Creating directory with permissions: {path}")
+        
         if not os.path.exists(path):
             if self.is_linux:
                 # Get the permissions of the source file
@@ -221,5 +237,9 @@ class FileUtils:
                 os.chown(path, uid, gid)
                 os.chmod(path, self.permissions)
                 os.umask(original_umask)
+                logging.debug(f"Directory created with permissions (Linux): {path}")
             else:  # Windows platform
-                os.makedirs(path, exist_ok=True) 
+                os.makedirs(path, exist_ok=True)
+                logging.debug(f"Directory created (Windows): {path}")
+        else:
+            logging.debug(f"Directory already exists: {path}") 

@@ -29,9 +29,14 @@ class PlexManager:
         
     def connect(self) -> None:
         """Connect to the Plex server."""
+        logging.info(f"Connecting to Plex server: {self.plex_url}")
+        
         try:
             self.plex = PlexServer(self.plex_url, self.plex_token)
+            logging.info("Successfully connected to Plex server")
+            logging.debug(f"Plex server version: {self.plex.version}")
         except Exception as e:
+            logging.error(f"Error connecting to the Plex server: {e}")
             raise ConnectionError(f"Error connecting to the Plex server: {e}")
     
     def get_plex_instance(self, user=None) -> Tuple[Optional[str], Optional[PlexServer]]:
@@ -155,7 +160,9 @@ class PlexManager:
             try:
                 if user:
                     account = account.switchHomeUser(f'{user.title}')
-                return account.watchlist(filter='released')
+                watchlist = account.watchlist(filter='released')
+                logging.debug(f"Found {len(watchlist)} items in watchlist for user {user.title if user else 'main'}")
+                return watchlist
             except (BadRequest, NotFound) as e:
                 if "429" in str(e) and retries < self.retry_limit:
                     logging.warning(f"Rate limit exceeded. Retrying {retries + 1}/{self.retry_limit}. Sleeping for {self.delay} seconds...")
@@ -170,6 +177,7 @@ class PlexManager:
         def process_show(file, watchlist_episodes: int) -> Generator[str, None, None]:
             """Process episodes of a TV show file up to a specified number."""
             episodes = file.episodes()
+            logging.debug(f"Processing show {file.title} with {len(episodes)} episodes")
             for episode in episodes[:watchlist_episodes]:
                 if len(episode.media) > 0 and len(episode.media[0].parts) > 0:
                     if not episode.isPlayed:
@@ -177,8 +185,10 @@ class PlexManager:
 
         def process_movie(file) -> Generator[str, None, None]:
             """Process a movie file."""
-            if not file.isPlayed:
-                yield file.media[0].parts[0].file
+            # Remove the isPlayed check - move to cache regardless of watch status
+            if len(file.media) > 0 and len(file.media[0].parts) > 0:
+                file_path = file.media[0].parts[0].file
+                yield file_path
 
         def fetch_user_watchlist(user) -> List[str]:
             current_username = self.plex.myPlexAccount().title if user is None else user.title
@@ -196,11 +206,13 @@ class PlexManager:
 
                 for item in watchlist:
                     file = self.search_plex(item.title)
-                    if file and (not filtered_sections or (file.librarySectionID in filtered_sections)):
-                        if file.TYPE == 'show':
-                            results.extend(process_show(file, watchlist_episodes))
-                        else:
-                            results.extend(process_movie(file))
+                    if file:
+                        if not filtered_sections or (file.librarySectionID in filtered_sections):
+                            if file.TYPE == 'show':
+                                results.extend(process_show(file, watchlist_episodes))
+                            else:
+                                results.extend(process_movie(file))
+                        
                 return results
             except Exception as e:
                 logging.error(f"Error fetching watchlist for {current_username}: {str(e)}")
@@ -209,6 +221,8 @@ class PlexManager:
         users_to_fetch = [None]  # Start with main user (None)
         if users_toggle:
             users_to_fetch += self.plex.myPlexAccount().users()
+            
+        logging.debug(f"Processing {len(users_to_fetch)} users for watchlist")
 
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = {executor.submit(fetch_user_watchlist, user) for user in users_to_fetch}

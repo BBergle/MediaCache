@@ -109,14 +109,12 @@ class FileFilter:
         self.real_source = real_source
         self.cache_dir = cache_dir
         self.is_unraid = is_unraid
-        self.mover_cache_exclude_file = mover_cache_exclude_file
+        self.mover_cache_exclude_file = mover_cache_exclude_file or ""
     
     def filter_files(self, files: List[str], destination: str, 
                     media_to_cache: Optional[List[str]] = None, 
                     files_to_skip: Optional[Set[str]] = None) -> List[str]:
         """Filter files based on destination and conditions."""
-        logging.info(f"Filtering media files for {destination}...")
-
         if media_to_cache is None:
             media_to_cache = []
 
@@ -145,11 +143,6 @@ class FileFilter:
                     media_to.append(file)
                     logging.info(f"Adding file to cache: {file}")
 
-        if self.is_unraid:
-            with open(self.mover_cache_exclude_file, "w") as file:
-                for item in cache_files_to_exclude:
-                    file.write(str(item) + "\n")
-
         return media_to or []
     
     def _should_add_to_array(self, file: str, cache_file_name: str, media_to_cache: List[str]) -> bool:
@@ -176,6 +169,7 @@ class FileFilter:
             os.remove(array_file)
             logging.info(f"Removed array version of file: {array_file}")
             return False
+        
         return not os.path.isfile(cache_file_name)
     
     def _get_cache_paths(self, file: str) -> Tuple[str, str]:
@@ -188,25 +182,122 @@ class FileFilter:
         
         return cache_path, cache_file_name
 
+    def get_files_to_move_back_to_array(self, current_ondeck_items: Set[str], 
+                                       current_watchlist_items: Set[str]) -> Tuple[List[str], List[str]]:
+        """Get files in cache that should be moved back to array because they're no longer needed."""
+        files_to_move_back = []
+        cache_paths_to_remove = []
+        
+        try:
+            # Read the exclude file to get all files currently in cache
+            if not os.path.exists(self.mover_cache_exclude_file):
+                logging.info("No exclude file found, nothing to move back")
+                return files_to_move_back, cache_paths_to_remove
+            
+            with open(self.mover_cache_exclude_file, 'r') as f:
+                cache_files = [line.strip() for line in f if line.strip()]
+            
+            logging.info(f"Found {len(cache_files)} files in exclude list")
+            
+            # Get shows that are still needed (in OnDeck or watchlist)
+            needed_shows = set()
+            for item in current_ondeck_items | current_watchlist_items:
+                # Extract show name from path (e.g., "House Hunters (1999)" from "/path/to/House Hunters (1999) {imdb-tt0369117}/Season 263/...")
+                show_name = self._extract_show_name(item)
+                if show_name:
+                    needed_shows.add(show_name)
+            
+            # Check each file in cache
+            for cache_file in cache_files:
+                if not os.path.exists(cache_file):
+                    logging.debug(f"Cache file no longer exists: {cache_file}")
+                    cache_paths_to_remove.append(cache_file)
+                    continue
+                
+                # Extract show name from cache file
+                show_name = self._extract_show_name(cache_file)
+                if not show_name:
+                    continue
+                
+                # If show is still needed, keep this file in cache
+                if show_name in needed_shows:
+                    logging.debug(f"Show still needed, keeping in cache: {show_name}")
+                    continue
+                
+                # Show is no longer needed, move this file back to array
+                array_file = cache_file.replace(self.cache_dir, self.real_source, 1)
+                
+                logging.info(f"Show no longer needed, will move back to array: {show_name} - {cache_file}")
+                files_to_move_back.append(array_file)
+                cache_paths_to_remove.append(cache_file)
+            
+            logging.info(f"Found {len(files_to_move_back)} files to move back to array")
+            
+        except Exception as e:
+            logging.error(f"Error getting files to move back to array: {str(e)}")
+        
+        return files_to_move_back, cache_paths_to_remove
+
+    def _extract_show_name(self, file_path: str) -> str:
+        """Extract show name from file path."""
+        try:
+            # Split path and find the show directory (usually the last directory before Season)
+            path_parts = file_path.split('/')
+            for i, part in enumerate(path_parts):
+                if part.startswith('Season') or part.isdigit():
+                    if i > 0:
+                        return path_parts[i-1]
+                    break
+            return ""
+        except Exception:
+            return ""
+
+    def remove_files_from_exclude_list(self, cache_paths_to_remove: List[str]) -> None:
+        """Remove specified files from the exclude list."""
+        try:
+            if not os.path.exists(self.mover_cache_exclude_file):
+                logging.warning("Exclude file does not exist, cannot remove files")
+                return
+            
+            # Read current exclude list
+            with open(self.mover_cache_exclude_file, 'r') as f:
+                current_files = [line.strip() for line in f if line.strip()]
+            
+            # Remove specified files
+            updated_files = [f for f in current_files if f not in cache_paths_to_remove]
+            
+            # Write back updated list
+            with open(self.mover_cache_exclude_file, 'w') as f:
+                for file_path in updated_files:
+                    f.write(f"{file_path}\n")
+            
+            logging.info(f"Removed {len(cache_paths_to_remove)} files from exclude list")
+            
+        except Exception as e:
+            logging.error(f"Error removing files from exclude list: {str(e)}")
+
 
 class FileMover:
     """Handles file moving operations."""
     
     def __init__(self, real_source: str, cache_dir: str, is_unraid: bool, 
-                 file_utils, debug: bool = False):
+                 file_utils, debug: bool = False, mover_cache_exclude_file: Optional[str] = None):
         self.real_source = real_source
         self.cache_dir = cache_dir
         self.is_unraid = is_unraid
         self.file_utils = file_utils
         self.debug = debug
+        self.mover_cache_exclude_file = mover_cache_exclude_file
     
     def move_media_files(self, files: List[str], destination: str, 
                         max_concurrent_moves_array: int, max_concurrent_moves_cache: int) -> None:
         """Move media files to the specified destination."""
         logging.info(f"Moving media files to {destination}...")
+        logging.debug(f"Total files to process: {len(files)}")
         
         processed_files = set()
         move_commands = []
+        cache_file_names = []
 
         # Iterate over each file to move
         for file_to_move in files:
@@ -222,7 +313,12 @@ class FileMover:
             move = self._get_move_command(destination, cache_file_name, user_path, user_file_name, cache_path)
             
             if move is not None:
-                move_commands.append(move)
+                move_commands.append((move, cache_file_name))
+                logging.debug(f"Added move command for: {file_to_move}")
+            else:
+                logging.debug(f"No move command generated for: {file_to_move}")
+        
+        logging.info(f"Generated {len(move_commands)} move commands for {destination}")
         
         # Execute the move commands
         self._execute_move_commands(move_commands, max_concurrent_moves_array, 
@@ -265,29 +361,80 @@ class FileMover:
                 move = (user_file_name, cache_path)
         return move
     
-    def _execute_move_commands(self, move_commands: List[Tuple[str, str]], 
+    def _execute_move_commands(self, move_commands: List[Tuple[Tuple[str, str], str]], 
                              max_concurrent_moves_array: int, max_concurrent_moves_cache: int, 
                              destination: str) -> None:
         """Execute the move commands."""
         if self.debug:
-            for move_cmd in move_commands:
-                print(move_cmd)
+            for move_cmd, cache_file_name in move_commands:
                 logging.info(move_cmd)
         else:
             max_concurrent_moves = max_concurrent_moves_array if destination == 'array' else max_concurrent_moves_cache
+            from functools import partial
             with ThreadPoolExecutor(max_workers=max_concurrent_moves) as executor:
-                results = list(executor.map(self._move_file, move_commands))
+                results = list(executor.map(partial(self._move_file, destination=destination), move_commands))
                 errors = [result for result in results if result != 0]
-                print(f"Finished moving files with {len(errors)} errors.")
                 logging.info(f"Finished moving files with {len(errors)} errors.")
     
-    def _move_file(self, move_cmd: Tuple[str, str]) -> int:
-        """Move a single file."""
-        src, dest = move_cmd
+    def _move_file(self, move_cmd_with_cache: Tuple[Tuple[str, str], str], destination: str) -> int:
+        """Move a single file and update exclude file if moving to cache."""
+        (src, dest), cache_file_name = move_cmd_with_cache
         try:
             self.file_utils.move_file(src, dest)
             logging.info(f"Moved file from {src} to {dest} with original permissions and owner.")
+            # Only append to exclude file if moving to cache and move succeeded
+            if destination == 'cache' and self.mover_cache_exclude_file:
+                with open(self.mover_cache_exclude_file, "a") as f:
+                    f.write(f"{cache_file_name}\n")
             return 0
         except Exception as e:
             logging.error(f"Error moving file: {str(e)}")
             return 1 
+
+
+class CacheCleanup:
+    """Handles cleanup of empty folders in cache directories."""
+    
+    def __init__(self, cache_dir: str):
+        self.cache_dir = cache_dir
+    
+    def cleanup_empty_folders(self) -> None:
+        """Remove empty folders from cache directories."""
+        logging.info("Starting cache cleanup process...")
+        cleaned_count = 0
+        
+        # Check both tv and movies directories
+        for subdir in ['tv', 'movies']:
+            subdir_path = os.path.join(self.cache_dir, subdir)
+            if os.path.exists(subdir_path):
+                logging.debug(f"Cleaning up {subdir} directory: {subdir_path}")
+                cleaned_count += self._cleanup_directory(subdir_path)
+            else:
+                logging.debug(f"Directory does not exist, skipping: {subdir_path}")
+        
+        if cleaned_count > 0:
+            logging.info(f"Cleaned up {cleaned_count} empty folders")
+        else:
+            logging.info("No empty folders found to clean up")
+    
+    def _cleanup_directory(self, directory_path: str) -> int:
+        """Recursively remove empty folders from a directory."""
+        cleaned_count = 0
+        
+        try:
+            # Walk through the directory tree from bottom up
+            for root, dirs, files in os.walk(directory_path, topdown=False):
+                for dir_name in dirs:
+                    dir_path = os.path.join(root, dir_name)
+                    try:
+                        # Check if directory is empty
+                        if not os.listdir(dir_path):
+                            os.rmdir(dir_path)
+                            logging.debug(f"Removed empty folder: {dir_path}")
+                            cleaned_count += 1
+                    except OSError as e:
+                        logging.debug(f"Could not remove directory {dir_path}: {e}")
+        except Exception as e:
+            logging.error(f"Error cleaning up directory {directory_path}: {e}")
+        
+        return cleaned_count 

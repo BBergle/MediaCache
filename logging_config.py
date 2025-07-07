@@ -31,7 +31,6 @@ class UnraidHandler(logging.Handler):
         self.notify_cmd_base = "/usr/local/emhttp/webGui/scripts/notify"
         if not os.path.isfile(self.notify_cmd_base) or not os.access(self.notify_cmd_base, os.X_OK):
             logging.warning(f"{self.notify_cmd_base} does not exist or is not executable. Unraid notifications will not be sent.")
-            print(f"{self.notify_cmd_base} does not exist or is not executable. Unraid notifications will not be sent.")
             self.notify_cmd_base = None
 
     def emit(self, record):
@@ -90,7 +89,7 @@ class WebhookHandler(logging.Handler):
         }
         response = requests.post(self.webhook_url, data=json.dumps(payload), headers=headers)
         if not response.status_code == 204:
-            print(f"Failed to send summary message. Error code: {response.status_code}")
+            logging.error(f"Failed to send summary message. Error code: {response.status_code}")
 
     def send_webhook_message(self, record):
         payload = {
@@ -101,7 +100,7 @@ class WebhookHandler(logging.Handler):
         }
         response = requests.post(self.webhook_url, data=json.dumps(payload), headers=headers)
         if not response.status_code == 204:
-            print(f"Failed to send message. Error code: {response.status_code}")
+            logging.error(f"Failed to send message. Error code: {response.status_code}")
 
 
 class LoggingManager:
@@ -166,7 +165,7 @@ class LoggingManager:
             if log_level in level_mapping:
                 self.logger.setLevel(level_mapping[log_level])
             else:
-                print(f"Invalid log_level: {log_level}. Using default level: INFO")
+                logging.warning(f"Invalid log_level: {log_level}. Using default level: INFO")
                 self.logger.setLevel(logging.INFO)
         else:
             self.logger.setLevel(logging.INFO)
@@ -221,7 +220,7 @@ class LoggingManager:
             if level_str in level_mapping:
                 handler.setLevel(level_mapping[level_str])
             else:
-                print(f"Invalid notification level: {level_str}. Using default level: ERROR")
+                logging.warning(f"Invalid notification level: {level_str}. Using default level: ERROR")
                 handler.setLevel(logging.ERROR)
         else:
             handler.setLevel(logging.ERROR)

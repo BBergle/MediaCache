@@ -9,12 +9,13 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Set
+import os
 
 from config import ConfigManager
 from logging_config import LoggingManager
 from system_utils import SystemDetector, PathConverter, FileUtils
 from plex_api import PlexManager, CacheManager
-from file_operations import FilePathModifier, SubtitleFinder, FileFilter, FileMover
+from file_operations import FilePathModifier, SubtitleFinder, FileFilter, FileMover, CacheCleanup
 
 
 class PlexCacheApp:
@@ -44,44 +45,54 @@ class PlexCacheApp:
         self.files_to_skip = []
         self.media_to_cache = []
         self.media_to_array = []
+        self.ondeck_items = set()
         
     def run(self) -> None:
         """Run the main application."""
         try:
-            print("*** PlexCache ***")
+            logging.info("Starting PlexCache application...")
             
             # Load configuration
+            logging.info("Phase 1: Loading configuration")
             self.config_manager.load_config()
             
             # Setup logging
+            logging.info("Phase 2: Setting up logging")
             self._setup_logging()
             
             # Initialize components that depend on config
+            logging.info("Phase 3: Initializing components")
             self._initialize_components()
             
-            # Log system information
-            logging.info(self.system_detector.get_system_info())
-            
             # Check paths
+            logging.info("Phase 4: Validating paths")
             self._check_paths()
             
             # Connect to Plex
+            logging.info("Phase 5: Connecting to Plex")
             self._connect_to_plex()
             
             # Check for active sessions
+            logging.info("Phase 6: Checking active sessions")
             self._check_active_sessions()
             
             # Set debug mode
+            logging.info("Phase 7: Setting debug mode")
             self._set_debug_mode()
             
             # Process media
+            logging.info("Phase 8: Processing media")
             self._process_media()
             
             # Move files
+            logging.info("Phase 9: Moving files")
             self._move_files()
             
             # Log summary and cleanup
+            logging.info("Phase 10: Finalizing")
             self._finish()
+            
+            logging.info("PlexCache application completed successfully")
             
         except Exception as e:
             if self.logging_manager:
@@ -107,7 +118,10 @@ class PlexCacheApp:
     
     def _initialize_components(self) -> None:
         """Initialize components that depend on configuration."""
+        logging.info("Initializing application components...")
+        
         # Initialize Plex manager
+        logging.debug("Initializing Plex manager...")
         self.plex_manager = PlexManager(
             plex_url=self.config_manager.plex.plex_url,
             plex_token=self.config_manager.plex.plex_token,
@@ -116,17 +130,19 @@ class PlexCacheApp:
         )
         
         # Initialize file operation components
+        logging.debug("Initializing file operation components...")
         self.file_path_modifier = FilePathModifier(
             plex_source=self.config_manager.paths.plex_source,
             real_source=self.config_manager.paths.real_source,
-            plex_library_folders=self.config_manager.paths.plex_library_folders,
-            nas_library_folders=self.config_manager.paths.nas_library_folders
+            plex_library_folders=self.config_manager.paths.plex_library_folders or [],
+            nas_library_folders=self.config_manager.paths.nas_library_folders or []
         )
         
         self.subtitle_finder = SubtitleFinder()
         
         # Get cache files
         watchlist_cache, watched_cache, mover_exclude = self.config_manager.get_cache_files()
+        logging.debug(f"Cache files: watchlist={watchlist_cache}, watched={watched_cache}, exclude={mover_exclude}")
         
         self.file_filter = FileFilter(
             real_source=self.config_manager.paths.real_source,
@@ -140,8 +156,12 @@ class PlexCacheApp:
             cache_dir=self.config_manager.paths.cache_dir,
             is_unraid=self.system_detector.is_unraid,
             file_utils=self.file_utils,
-            debug=self.debug
+            debug=self.debug,
+            mover_cache_exclude_file=str(mover_exclude)
         )
+        
+        self.cache_cleanup = CacheCleanup(self.config_manager.paths.cache_dir)
+        logging.info("All components initialized successfully")
     
     def _check_paths(self) -> None:
         """Check that required paths exist and are accessible."""
@@ -176,10 +196,8 @@ class PlexCacheApp:
                 
                 if media_type == "episode":
                     show_title = media_item.grandparentTitle
-                    print(f"Active session detected, skipping: {show_title} - {media_title}")
                     logging.warning(f"Active session detected, skipping: {show_title} - {media_title}")
                 elif media_type == "movie":
-                    print(f"Active session detected, skipping: {media_title}")
                     logging.warning(f"Active session detected, skipping: {media_title}")
                 
                 media_path = media_item.media[0].parts[0].file
@@ -192,52 +210,89 @@ class PlexCacheApp:
     def _set_debug_mode(self) -> None:
         """Set debug mode if enabled."""
         if self.debug:
-            print("Debug mode is active, NO FILE WILL BE MOVED.")
             logging.getLogger().setLevel(logging.DEBUG)
             logging.warning("Debug mode is active, NO FILE WILL BE MOVED.")
-            logging.info(f"Real source: {self.config_manager.paths.real_source}")
-            logging.info(f"Cache dir: {self.config_manager.paths.cache_dir}")
-            logging.info(f"Plex source: {self.config_manager.paths.plex_source}")
-            logging.info(f"NAS folders: {self.config_manager.paths.nas_library_folders}")
-            logging.info(f"Plex folders: {self.config_manager.paths.plex_library_folders}")
         else:
             logging.getLogger().setLevel(logging.INFO)
     
     def _process_media(self) -> None:
         """Process all media types (onDeck, watchlist, watched)."""
+        logging.info("Starting media processing...")
+        
+        # Use a set to collect all unique media items
+        media_to_cache_set = set()
+
         # Fetch OnDeck Media
-        self.media_to_cache.extend(
-            self.plex_manager.get_on_deck_media(
-                self.config_manager.plex.valid_sections,
-                self.config_manager.plex.days_to_monitor,
-                self.config_manager.plex.number_episodes,
-                self.config_manager.plex.users_toggle,
-                self.config_manager.plex.skip_ondeck
-            )
+        logging.info("Fetching OnDeck media...")
+        ondeck_media = self.plex_manager.get_on_deck_media(
+            self.config_manager.plex.valid_sections or [],
+            self.config_manager.plex.days_to_monitor,
+            self.config_manager.plex.number_episodes,
+            self.config_manager.plex.users_toggle,
+            self.config_manager.plex.skip_ondeck or []
         )
+        
+        # Store OnDeck items separately for filtering
+        self.ondeck_items = set(ondeck_media)
+        logging.info(f"Found {len(self.ondeck_items)} OnDeck items")
+        
+        # Add OnDeck items to set
+        media_to_cache_set.update(ondeck_media)
 
         # Edit file paths for the above fetched media
-        self.media_to_cache = self.file_path_modifier.modify_file_paths(self.media_to_cache)
+        logging.debug("Modifying file paths for OnDeck media...")
+        modified_ondeck = self.file_path_modifier.modify_file_paths(list(self.ondeck_items))
+        
+        # Update ondeck_items with modified paths
+        self.ondeck_items = set(modified_ondeck)
+        media_to_cache_set.update(self.ondeck_items)
 
         # Fetches subtitles for the above fetched media
-        self.media_to_cache.extend(
-            self.subtitle_finder.get_media_subtitles(self.media_to_cache, files_to_skip=set(self.files_to_skip))
-        )
+        logging.debug("Finding subtitles for OnDeck media...")
+        subtitles = self.subtitle_finder.get_media_subtitles(list(self.ondeck_items), files_to_skip=set(self.files_to_skip))
+        media_to_cache_set.update(subtitles)
+        logging.debug(f"Found {len(subtitles)} subtitle files for OnDeck media")
 
         # Process watchlist
         if self.config_manager.cache.watchlist_toggle:
-            self._process_watchlist()
+            logging.info("Processing watchlist media...")
+            watchlist_items = self._process_watchlist()
+            if watchlist_items:
+                media_to_cache_set.update(watchlist_items)
+                logging.info(f"Added {len(watchlist_items)} watchlist items to cache set")
+        else:
+            logging.info("Watchlist processing is disabled")
 
         # Process watched media
         if self.config_manager.cache.watched_move:
+            logging.info("Processing watched media...")
             self._process_watched_media()
-    
-    def _process_watchlist(self) -> None:
-        """Process watchlist media."""
+            logging.info(f"Added {len(self.media_to_array)} watched items to array move list")
+        else:
+            logging.info("Watched media processing is disabled")
+
+        # Set the final media_to_cache as a list of modified (real source) paths
+        logging.debug("Finalizing media to cache list...")
+        self.media_to_cache = self.file_path_modifier.modify_file_paths(list(media_to_cache_set))
+        logging.info(f"Total media items to cache: {len(self.media_to_cache)}")
+
+        # Check for files that should be moved back to array (no longer needed in cache)
+        logging.info("Checking for files to move back to array...")
+        self._check_files_to_move_back_to_array()
+
+    def _process_watchlist(self) -> set:
+        """Process watchlist media and return a set of modified file paths and subtitles."""
+        result_set = set()
         try:
             watchlist_cache, _, _ = self.config_manager.get_cache_files()
             watchlist_media_set, last_updated = CacheManager.load_media_from_cache(watchlist_cache)
             current_watchlist_set = set()
+
+            logging.debug(f"Watchlist cache exists: {watchlist_cache.exists()}")
+            logging.debug(f"Watchlist cache last updated: {last_updated}")
+            logging.debug(f"Current watchlist items in cache: {len(watchlist_media_set)}")
+            for item in watchlist_media_set:
+                logging.debug(f"Cached watchlist item: {item}")
 
             if self.system_detector.is_connected():
                 # Check if cache should be refreshed
@@ -249,9 +304,11 @@ class PlexCacheApp:
                      timedelta(hours=self.config_manager.cache.watchlist_cache_expiry))
                 )
                 
+                logging.debug(f"Cache expired: {cache_expired}")
+                logging.debug(f"Skip cache: {self.skip_cache}")
+                logging.debug(f"Debug mode: {self.debug}")
+                
                 if cache_expired:
-                    logging.info("Fetching watchlist media...")
-                    
                     # Fetch the watchlist media from Plex server
                     fetched_watchlist = list(self.plex_manager.get_watchlist_media(
                         self.config_manager.plex.valid_sections,
@@ -259,37 +316,36 @@ class PlexCacheApp:
                         self.config_manager.plex.users_toggle,
                         self.config_manager.plex.skip_watchlist
                     ))
-
                     # Add new media paths to the cache
                     for file_path in fetched_watchlist:
                         current_watchlist_set.add(file_path)
                         if file_path not in watchlist_media_set:
-                            self.media_to_cache.append(file_path)
+                            result_set.add(file_path)
 
                     # Remove media that no longer exists in the watchlist
                     watchlist_media_set.intersection_update(current_watchlist_set)
 
                     # Add new media to the watchlist media set
-                    watchlist_media_set.update(self.media_to_cache)
+                    watchlist_media_set.update(result_set)
 
                     # Modify file paths and add subtitles
-                    self.media_to_cache = self.file_path_modifier.modify_file_paths(self.media_to_cache)
-                    self.media_to_cache.extend(
-                        self.subtitle_finder.get_media_subtitles(self.media_to_cache, files_to_skip=set(self.files_to_skip))
-                    )
+                    modified_watchlist = self.file_path_modifier.modify_file_paths(list(result_set))
+                    result_set.update(modified_watchlist)
+                    subtitles = self.subtitle_finder.get_media_subtitles(modified_watchlist, files_to_skip=set(self.files_to_skip))
+                    result_set.update(subtitles)
 
                     # Update the cache file
-                    CacheManager.save_media_to_cache(watchlist_cache, self.media_to_cache)
+                    CacheManager.save_media_to_cache(watchlist_cache, list(result_set))
                 else:
-                    logging.info("Loading watchlist media from cache...")
-                    self.media_to_cache.extend(watchlist_media_set)
+                    result_set.update(watchlist_media_set)
             else:
                 logging.warning("Unable to connect to the internet, skipping fetching new watchlist media due to plexapi limitation.")
                 logging.info("Loading watchlist media from cache...")
-                self.media_to_cache.extend(watchlist_media_set)
+                result_set.update(watchlist_media_set)
                 
         except Exception as e:
             logging.error(f"An error occurred while processing the watchlist: {str(e)}")
+        return result_set
     
     def _process_watched_media(self) -> None:
         """Process watched media."""
@@ -365,6 +421,7 @@ class PlexCacheApp:
 
         # Move files to cache
         try:
+            logging.debug(f"Files being passed to cache move: {self.media_to_cache}")
             self._check_free_space_and_move_files(
                 self.media_to_cache, 'cache', 
                 self.config_manager.paths.real_source, 
@@ -388,9 +445,7 @@ class PlexCacheApp:
         total_size, total_size_unit = self.file_utils.get_total_size_of_files(media_files_filtered)
         
         if total_size > 0:
-            logging.info(f"Total size of media files to be moved to {destination}: {total_size:.2f} {total_size_unit}")
-            print(f"Total size of media files to be moved to {destination}: {total_size:.2f} {total_size_unit}")
-            
+            print(f"Moving {total_size:.2f} {total_size_unit} to {destination}")
             self.logging_manager.add_summary_message(
                 f"Total size of media files moved to {destination}: {total_size:.2f} {total_size_unit}"
             )
@@ -398,8 +453,6 @@ class PlexCacheApp:
             free_space, free_space_unit = self.file_utils.get_free_space(
                 cache_dir if destination == 'cache' else real_source
             )
-            print(f"Free space on the {destination}: {free_space:.2f} {free_space_unit}")
-            logging.info(f"Free space on the {destination}: {free_space:.2f} {free_space_unit}")
             
             # Check if enough space
             size_multipliers = {'KB': 0, 'MB': 1, 'GB': 2, 'TB': 3}
@@ -410,11 +463,7 @@ class PlexCacheApp:
                 if not self.debug:
                     sys.exit(f"Not enough space on {destination} drive.")
                 else:
-                    print(f"Not enough space on {destination} drive.")
                     logging.error(f"Not enough space on {destination} drive.")
-            
-            logging.info(f"Moving media to {destination}...")
-            print(f"Moving media to {destination}...")
             
             self.file_mover.move_media_files(
                 media_files_filtered, destination,
@@ -422,10 +471,37 @@ class PlexCacheApp:
                 self.config_manager.performance.max_concurrent_moves_cache
             )
         else:
-            print(f"Nothing to move to {destination}")
-            logging.info(f"Nothing to move to {destination}")
             if not self.logging_manager.files_moved:
                 self.logging_manager.summary_messages = ["There were no files to move to any destination."]
+    
+    def _check_files_to_move_back_to_array(self):
+        """Check for files in cache that should be moved back to array because they're no longer needed."""
+        try:
+            # Get current OnDeck and watchlist items (already processed and path-modified)
+            current_ondeck_items = self.ondeck_items
+            current_watchlist_items = set()
+            
+            # Get watchlist items from the processed media
+            if self.config_manager.cache.watchlist_toggle:
+                watchlist_cache, _, _ = self.config_manager.get_cache_files()
+                if watchlist_cache.exists():
+                    watchlist_media_set, _ = CacheManager.load_media_from_cache(watchlist_cache)
+                    current_watchlist_items = set(self.file_path_modifier.modify_file_paths(list(watchlist_media_set)))
+            
+            # Get files that should be moved back to array (tracked by exclude file)
+            files_to_move_back, cache_paths_to_remove = self.file_filter.get_files_to_move_back_to_array(
+                current_ondeck_items, current_watchlist_items
+            )
+            
+            if files_to_move_back:
+                logging.info(f"Found {len(files_to_move_back)} files to move back to array")
+                self.media_to_array.extend(files_to_move_back)
+                # Remove these files from the exclude list since they're no longer in cache
+                self.file_filter.remove_files_from_exclude_list(cache_paths_to_remove)
+            else:
+                logging.info("No files need to be moved back to array")
+        except Exception as e:
+            logging.error(f"Error checking files to move back to array: {str(e)}")
     
     def _finish(self) -> None:
         """Finish the application and log summary."""
@@ -436,17 +512,16 @@ class PlexCacheApp:
         self.logging_manager.add_summary_message(f"The script took approximately {execution_time} to execute.")
         self.logging_manager.log_summary()
 
-        print(f"Execution time of the script: {execution_time}")
         logging.info(f"Execution time of the script: {execution_time}")
-
-        print("Thank you for using bexem's script: \nhttps://github.com/bexem/PlexCache")
         logging.info("Thank you for using bexem's script: https://github.com/bexem/PlexCache")
         logging.info("Also special thanks to: - /u/teshiburu2020 - /u/planesrfun - /u/trevski13 - /u/extrobe - /u/dsaunier-sunlight")
         logging.info("*** The End ***")
         
+        # Clean up empty folders in cache
+        self.cache_cleanup.cleanup_empty_folders()
+        
         self.logging_manager.shutdown()
-        print("*** The End ***")
-    
+
     def _convert_time(self, execution_time_seconds: float) -> str:
         """Convert execution time to human-readable format."""
         days, remainder = divmod(execution_time_seconds, 86400)
@@ -472,7 +547,7 @@ def main():
     debug = "--debug" in sys.argv
     
     # Default config file location
-    config_file = "/mnt/user/system/plexcache/plexcache_settings.json"
+    config_file = "/mnt/user/appdata/PlexCache/plexcache_settings.json"
     
     app = PlexCacheApp(config_file, skip_cache, debug)
     app.run()
