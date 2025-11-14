@@ -28,8 +28,8 @@ class NotificationConfig:
 @dataclass
 class PathConfig:
     """Configuration for file paths and directories."""
-    script_folder: str = "/mnt/user/system/plexcache/"
-    logs_folder: str = "/mnt/user/system/plexcache/"
+    script_folder: str = "/mnt/user/appdata/plexcache/"
+    logs_folder: str = "/mnt/user/appdata/plexcache/logs"
     plex_source: str = ""
     real_source: str = ""
     cache_dir: str = ""
@@ -79,8 +79,8 @@ class PerformanceConfig:
     """Configuration for performance settings."""
     max_concurrent_moves_array: int = 2
     max_concurrent_moves_cache: int = 5
-    retry_limit: int = 3
-    delay: int = 5
+    retry_limit: int = 5
+    delay: int = 10
     permissions: int = 0o777
 
 
