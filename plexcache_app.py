@@ -281,7 +281,7 @@ class PlexCacheApp:
         self._check_files_to_move_back_to_array()
 
     def _process_watchlist(self) -> set:
-        """Process watchlist media and return a set of modified file paths and subtitles."""
+        """Process watchlist media (local API + remote RSS) and return a set of modified file paths and subtitles."""
         result_set = set()
         try:
             watchlist_cache, _, _ = self.config_manager.get_cache_files()
@@ -291,61 +291,77 @@ class PlexCacheApp:
             logging.debug(f"Watchlist cache exists: {watchlist_cache.exists()}")
             logging.debug(f"Watchlist cache last updated: {last_updated}")
             logging.debug(f"Current watchlist items in cache: {len(watchlist_media_set)}")
-            for item in watchlist_media_set:
-                logging.debug(f"Cached watchlist item: {item}")
 
             if self.system_detector.is_connected():
-                # Check if cache should be refreshed
+                # Determine if cache should be refreshed
                 cache_expired = (
-                    self.skip_cache or 
-                    (not watchlist_cache.exists()) or 
-                    self.debug or 
-                    (datetime.now() - datetime.fromtimestamp(watchlist_cache.stat().st_mtime) > 
-                     timedelta(hours=self.config_manager.cache.watchlist_cache_expiry))
+                    self.skip_cache or
+                    (not watchlist_cache.exists()) or
+                    self.debug or
+                    (datetime.now() - datetime.fromtimestamp(watchlist_cache.stat().st_mtime) >
+                    timedelta(hours=self.config_manager.cache.watchlist_cache_expiry))
                 )
-                
                 logging.debug(f"Cache expired: {cache_expired}")
-                logging.debug(f"Skip cache: {self.skip_cache}")
-                logging.debug(f"Debug mode: {self.debug}")
-                
+
                 if cache_expired:
-                    # Fetch the watchlist media from Plex server
+                    # --- Local Plex users ---
                     fetched_watchlist = list(self.plex_manager.get_watchlist_media(
                         self.config_manager.plex.valid_sections,
                         self.config_manager.cache.watchlist_episodes,
                         self.config_manager.plex.users_toggle,
                         self.config_manager.plex.skip_watchlist
                     ))
-                    # Add new media paths to the cache
                     for file_path in fetched_watchlist:
                         current_watchlist_set.add(file_path)
                         if file_path not in watchlist_media_set:
                             result_set.add(file_path)
 
-                    # Remove media that no longer exists in the watchlist
                     watchlist_media_set.intersection_update(current_watchlist_set)
-
-                    # Add new media to the watchlist media set
                     watchlist_media_set.update(result_set)
 
-                    # Modify file paths and add subtitles
-                    modified_watchlist = self.file_path_modifier.modify_file_paths(list(result_set))
-                    result_set.update(modified_watchlist)
-                    subtitles = self.subtitle_finder.get_media_subtitles(modified_watchlist, files_to_skip=set(self.files_to_skip))
+                    # --- Remote users via RSS ---
+                    if self.config_manager.cache.remote_watchlist_toggle and self.config_manager.cache.remote_watchlist_rss_url:
+                        logging.info("Fetching watchlist via RSS feed for remote users...")
+                        try:
+                            # Use get_watchlist_media with rss_url parameter; users_toggle=False because this is just RSS
+                            remote_items = list(
+                                self.plex_manager.get_watchlist_media(
+                                    valid_sections=self.config_manager.plex.valid_sections,
+                                    watchlist_episodes=self.config_manager.cache.watchlist_episodes,
+                                    users_toggle=False,  # only RSS, no local Plex users
+                                    skip_watchlist=[],
+                                    rss_url=self.config_manager.cache.remote_watchlist_rss_url
+                                )
+                            )
+                            logging.info(f"Found {len(remote_items)} remote watchlist items from RSS")
+                            current_watchlist_set.update(remote_items)
+                            result_set.update(remote_items)
+                        except Exception as e:
+                            logging.error(f"Failed to fetch remote watchlist via RSS: {str(e)}")
+
+
+                    # Modify file paths and fetch subtitles
+                    modified_items = self.file_path_modifier.modify_file_paths(list(result_set))
+                    result_set.update(modified_items)
+                    subtitles = self.subtitle_finder.get_media_subtitles(modified_items, files_to_skip=set(self.files_to_skip))
                     result_set.update(subtitles)
 
-                    # Update the cache file
+                    # Update cache file
                     CacheManager.save_media_to_cache(watchlist_cache, list(result_set))
+
                 else:
+                    logging.info("Loading watchlist media from cache...")
                     result_set.update(watchlist_media_set)
             else:
                 logging.warning("Unable to connect to the internet, skipping fetching new watchlist media due to plexapi limitation.")
                 logging.info("Loading watchlist media from cache...")
                 result_set.update(watchlist_media_set)
-                
+
         except Exception as e:
             logging.error(f"An error occurred while processing the watchlist: {str(e)}")
+
         return result_set
+
     
     def _process_watched_media(self) -> None:
         """Process watched media."""
