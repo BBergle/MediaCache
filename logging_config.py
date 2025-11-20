@@ -135,7 +135,7 @@ class LoggingManager:
         current_time = datetime.now().strftime("%Y%m%d_%H%M")
         log_file = self.logs_folder / f"plexcache_log_{current_time}.log"
         latest_log_file = self.logs_folder / "plexcache_log_latest.log"
-        
+
         # Configure the rotating file handler
         handler = RotatingFileHandler(
             log_file, 
@@ -144,11 +144,21 @@ class LoggingManager:
         )
         handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
         self.logger.addHandler(handler)
-        
+
+        # Ensure the logs folder exists
+        if not self.logs_folder.exists():
+            self.logs_folder.mkdir(parents=True, exist_ok=True)
+
         # Create or update the symbolic link to the latest log file
-        if latest_log_file.exists():
+        try:
+            if latest_log_file.exists() or latest_log_file.is_symlink():
+                latest_log_file.unlink()
+            latest_log_file.symlink_to(log_file)
+        except FileExistsError:
+            # If still exists for some reason, remove and retry
             latest_log_file.unlink()
-        latest_log_file.symlink_to(log_file)
+            latest_log_file.symlink_to(log_file)
+
         
     def _set_log_level(self) -> None:
         """Set the logging level."""
