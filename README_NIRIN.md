@@ -1,4 +1,6 @@
-# PlexCache - Updated 11/2025
+# PlexCache: Automate Plex Media Management - Updated 11/25
+
+Automate Plex media management: Efficiently transfer media from the On Deck/Watchlist to the cache, and seamlessly move watched media back to their respective locations.
 An updated version of the "PlexCache-Refactored" script with various bugfixes and improvements.
 
 
