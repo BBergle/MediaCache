@@ -3,7 +3,7 @@
 
 ## Current Bugs
 
-**27th Nov '25**  - So I -thought- this was in a pretty decent working state, at least for the major functions. However while trying to add in a new feature today I found that it -seems- like the PlexCache script is only caching movie files and not tv files. No idea why, cos it -used- to work, but seems it's not now for me. It could be an issue on my local machine, but I thought I'd add this here until I am able to squash the bug. I'll remove this note once it's all working again. 
+Probably several, but I fixed the really bad one. So should be good to go now. 
 
 
 ## Overview
@@ -140,4 +140,5 @@ It seems we all owe a debt of thanks to someone called brimur[^3] for providing 
 
 - **11/25 - Handling of script_folder link**: Old version had a hardcoded link to the script folder instead of using the user-defined setting.
 - **11/25 - Adding logic so a 401 error when looking for watched-media doesn't cause breaking errors**: Seems it's only possible to get 'watched files' data from home users and not remote friends, and the 401 error would stop the script working? Added some logic to plex_api.py.
-- **11/25 - Ended up totally changing several functions, and adding some new ones, to fix all the issues with remote users and watchlists and various other things**: So the changelog became way too difficult to maintain at this point cos it was just a bunch of stuff. Hence this changing to a new version of PlexCache. 
+- **11/25 - Ended up totally changing several functions, and adding some new ones, to fix all the issues with remote users and watchlists and various other things**: So the changelog became way too difficult to maintain at this point cos it was just a bunch of stuff. Hence this changing to a new version of PlexCache.
+- **28/11/25** - Fixed the setup.py script to automatically set the correct plex root directory for media, and the correct media folder paths. These can still be manually corrected if your setup is different/unique. 
