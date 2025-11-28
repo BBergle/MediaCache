@@ -133,6 +133,8 @@ class PlexManager:
                             self._process_movie_ondeck(video, on_deck_files)
                         else:
                             logging.warning(f"Skipping OnDeck item '{video.title}' — unknown type {type(video)}")
+                else:
+                    logging.debug(f"Skipping OnDeck item '{video.title}' — section {section_key} not in valid_sections {filtered_sections}")
 
             return on_deck_files
 
@@ -164,16 +166,16 @@ class PlexManager:
             for part in media.parts:
                 logging.info(f"OnDeck found: {part.file}")
     
-    def _get_next_episodes(self, episodes: List[Episode], current_season: int, 
+    def _get_next_episodes(self, episodes: List[Episode], current_season: int,
                           current_episode_index: int, number_episodes: int) -> List[Episode]:
         """Get the next episodes after the current one."""
         next_episodes = []
         for episode in episodes:
-            if (episode.parentIndex > current_season or 
-                (episode.parentIndex == current_season and episode.index > current_episode_index)) and len(next_episodes) < number_episodes:
+            if (episode.parentIndex > current_season or
+                (episode.parentIndex == current_season and episode.index > current_episode_index)):
                 next_episodes.append(episode)
-            if len(next_episodes) == number_episodes:
-                break
+                if len(next_episodes) >= number_episodes:
+                    break
         return next_episodes
 
     def clean_rss_title(self, title: str) -> str:
@@ -231,8 +233,8 @@ class PlexManager:
             if user:
                 try:
                     token = user.get_token(self.plex.machineIdentifier)
-                except Exception:
-                    logging.warning(f"Could not get token for {current_username}; skipping.")
+                except Exception as e:
+                    logging.warning(f"Could not get token for {current_username}; skipping. Error: {e}")
                     return
                 if token in skip_watchlist or current_username in skip_watchlist:
                     logging.info(f"Skipping {current_username} due to skip_watchlist")
@@ -247,8 +249,8 @@ class PlexManager:
                     # Try to switch to home user
                     try:
                         account = self.plex.myPlexAccount().switchHomeUser(user.title)
-                    except Exception:
-                        logging.warning(f"Could not switch to user {user.title}; skipping.")
+                    except Exception as e:
+                        logging.warning(f"Could not switch to user {user.title}; skipping. Error: {e}")
                         return
             except Exception as e:
                 logging.error(f"Failed to get Plex account for {current_username}: {e}")
@@ -273,6 +275,8 @@ class PlexManager:
                                     logging.debug(f"Ignoring item '{file.title}' of type '{file.TYPE}'")
                             except Exception as e:
                                 logging.warning(f"Error processing '{file.title}': {e}")
+                        else:
+                            logging.debug(f"Skipping RSS item '{file.title}' — section {file.librarySectionID} not in valid_sections {filtered_sections}")
                     else:
                         logging.warning(f"RSS title '{title}' (cleaned: '{cleaned_title}') not found in Plex — discarded")
                 return
@@ -293,6 +297,8 @@ class PlexManager:
                                 logging.debug(f"Ignoring item '{file.title}' of type '{file.TYPE}'")
                         except Exception as e:
                             logging.warning(f"Error processing '{file.title}': {e}")
+                    elif file:
+                        logging.debug(f"Skipping watchlist item '{file.title}' — section {file.librarySectionID} not in valid_sections {filtered_sections}")
             except Exception as e:
                 logging.error(f"Error fetching watchlist for {current_username}: {e}")
 
@@ -334,11 +340,11 @@ class PlexManager:
                         break
                     except Exception as e:
                         if "429" in str(e):
-                            logging.warning(f"Rate limit exceeded. Retrying in {self.delay} seconds...")
+                            logging.warning(f"Rate limit exceeded. Retrying in {self.delay} seconds... Error: {e}")
                             time.sleep(self.delay)
                             retries += 1
                         else:
-                            logging.error(f"Error fetching watchlist media: {str(e)}")
+                            logging.error(f"Error fetching watchlist media: {e}")
                             break
 
 
