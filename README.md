@@ -3,7 +3,8 @@
 
 ## Current Bugs / Todo List
 
-1. Some of the Episode/Show logic looks for 'Season X' as a folder marker, but with sonarr some episodes are also in 'Specials' so the logic needs to be updated to account for it. Maybe add 'Series X' as another option too. 
+1. Some of the Episode/Show logic looks for 'Season X' as a folder marker, but with sonarr some episodes are also in 'Specials' so the logic needs to be updated to account for it. Maybe add 'Series X' as another option too.
+2. Add in a setup protection so people don't use "/" as their root. Or fix the error that occurs if they do that. Either way. 
 
 
 ## Overview
