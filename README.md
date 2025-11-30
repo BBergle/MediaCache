@@ -9,6 +9,7 @@
    Two options:
    1. Have the exclude file be correct, including 'already cached files', and recommend that unraid users have the move-back-after-watched turned off and let Mover handle it.
    2. Have the exclude file be correct, but mark 'already cached files' differently in the file, so instead of being moved back after watched those specific files remain in cache until mover moves them.  
+
 I think 1 is the easiest and tbh probably the solution best for most people. 
 
 ## Overview
