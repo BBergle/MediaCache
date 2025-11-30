@@ -419,7 +419,7 @@ class CacheCleanup:
     # Directories that should never be cleaned (safety check)
     _PROTECTED_PATHS = {'/', '/mnt', '/mnt/user', '/mnt/user0', '/home', '/var', '/etc', '/usr'}
 
-    def __init__(self, cache_dir: str):
+    def __init__(self, cache_dir: str, library_folders: List[str] = None):
         if not cache_dir or not cache_dir.strip():
             raise ValueError("cache_dir cannot be empty")
 
@@ -428,14 +428,26 @@ class CacheCleanup:
             raise ValueError(f"cache_dir cannot be a protected system directory: {cache_dir}")
 
         self.cache_dir = cache_dir
-    
+        self.library_folders = library_folders or []
+
     def cleanup_empty_folders(self) -> None:
         """Remove empty folders from cache directories."""
         logging.info("Starting cache cleanup process...")
         cleaned_count = 0
-        
-        # Check both tv and movies directories
-        for subdir in ['tv', 'movies']:
+
+        # Use configured library folders, or fall back to scanning cache_dir subdirectories
+        if self.library_folders:
+            subdirs_to_clean = self.library_folders
+        else:
+            # Fallback: scan all subdirectories in cache_dir
+            try:
+                subdirs_to_clean = [d for d in os.listdir(self.cache_dir)
+                                   if os.path.isdir(os.path.join(self.cache_dir, d))]
+            except OSError as e:
+                logging.error(f"Could not list cache directory {self.cache_dir}: {type(e).__name__}: {e}")
+                subdirs_to_clean = []
+
+        for subdir in subdirs_to_clean:
             subdir_path = os.path.join(self.cache_dir, subdir)
             if os.path.exists(subdir_path):
                 logging.debug(f"Cleaning up {subdir} directory: {subdir_path}")
