@@ -189,8 +189,14 @@ def setup():
                 if auto_detect.lower() in ['y', 'yes']:
                     detected_token, plex_path = auto_detect_plex_token()
                     if detected_token:
+                        # Show partial token for security (first 8 and last 4 chars)
+                        if len(detected_token) > 12:
+                            masked_token = detected_token[:8] + '...' + detected_token[-4:]
+                        else:
+                            masked_token = detected_token[:4] + '...'
+                        print(f"Token found: {masked_token}")
                         while True:
-                            use_token = input(f'Token detected! Use this token? [Y/n] ') or 'yes'
+                            use_token = input(f'Use this token? [Y/n] ') or 'yes'
                             if use_token.lower() in ['y', 'yes']:
                                 token = detected_token
                                 break
