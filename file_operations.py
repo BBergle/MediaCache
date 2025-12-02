@@ -243,16 +243,19 @@ class PlexcachedMigration:
         # Perform migration with progress tracking using thread pool
         logging.info(f"Starting migration with {max_concurrent} concurrent copies...")
 
-        # Thread-safe counters
+        # Thread-safe counters and state
         self._migration_lock = threading.Lock()
         self._migrated = 0
         self._errors = 0
         self._completed_bytes = 0
         self._total_files = len(files_needing_migration)
         self._total_bytes = total_bytes
+        self._active_files = {}  # Thread ID -> (filename, size)
+        self._last_display_lines = 0
 
         def migrate_file(args):
             cache_file, array_file, plexcached_file = args
+            thread_id = threading.get_ident()
             try:
                 # Get file size for progress
                 try:
@@ -260,14 +263,19 @@ class PlexcachedMigration:
                 except OSError:
                     file_size = 0
 
+                filename = os.path.basename(cache_file)
+
+                # Register as active before starting copy
+                with self._migration_lock:
+                    self._active_files[thread_id] = (filename, file_size)
+                    self._print_progress()
+
                 # Ensure directory exists
                 array_dir = os.path.dirname(plexcached_file)
                 if not os.path.exists(array_dir):
                     os.makedirs(array_dir, exist_ok=True)
 
                 # Copy cache file to array as .plexcached
-                filename = os.path.basename(cache_file)
-                logging.info(f"Copying: {filename} ({self._format_bytes(file_size)})")
                 shutil.copy2(cache_file, plexcached_file)
 
                 # Verify copy succeeded
@@ -275,23 +283,32 @@ class PlexcachedMigration:
                     with self._migration_lock:
                         self._migrated += 1
                         self._completed_bytes += file_size
-                        self._print_progress(self._migrated, self._total_files,
-                                           self._completed_bytes, self._total_bytes, filename)
+                        if thread_id in self._active_files:
+                            del self._active_files[thread_id]
+                        self._print_progress()
                     return 0
                 else:
                     logging.error(f"Failed to verify: {plexcached_file}")
                     with self._migration_lock:
                         self._errors += 1
+                        if thread_id in self._active_files:
+                            del self._active_files[thread_id]
                     return 1
 
             except Exception as e:
                 logging.error(f"Error migrating {cache_file}: {type(e).__name__}: {e}")
                 with self._migration_lock:
                     self._errors += 1
+                    if thread_id in self._active_files:
+                        del self._active_files[thread_id]
                 return 1
 
         with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
             list(executor.map(migrate_file, files_needing_migration))
+
+        # Print final progress
+        with self._migration_lock:
+            self._print_progress(final=True)
 
         migrated = self._migrated
         errors = self._errors
@@ -329,29 +346,51 @@ class PlexcachedMigration:
         else:
             return f"{bytes_value / (1024 ** 3):.1f} GB"
 
-    def _print_progress(self, completed: int, total: int, completed_bytes: int,
-                       total_bytes: int, current_file: str) -> None:
-        """Print progress bar for migration."""
-        percentage = (completed / total) * 100
+    def _print_progress(self, final: bool = False) -> None:
+        """Print progress bar for migration with active file queue display."""
+        if self._total_files == 0:
+            return
+
+        completed = self._migrated
+        percentage = (completed / self._total_files) * 100
         bar_width = 30
-        filled = int(bar_width * completed / total)
+        filled = int(bar_width * completed / self._total_files)
         bar = '█' * filled + '░' * (bar_width - filled)
 
         # Format data progress
-        completed_str = self._format_bytes(completed_bytes)
-        total_str = self._format_bytes(total_bytes)
+        completed_str = self._format_bytes(self._completed_bytes)
+        total_str = self._format_bytes(self._total_bytes)
+        data_progress = f"{completed_str} / {total_str}"
 
-        # Truncate filename if too long
-        if len(current_file) > 50:
-            current_file = current_file[:47] + '...'
+        active_files = list(self._active_files.values())
 
-        # Print progress (use \r to overwrite same line, but also log for file output)
-        progress_line = f"[{bar}] {percentage:.0f}% ({completed}/{total}) - {completed_str} / {total_str}"
-        print(f"\r{progress_line} - {current_file}", end='', flush=True)
+        # Clear previous display first (move up and clear each line)
+        if self._last_display_lines > 0:
+            for _ in range(self._last_display_lines):
+                print('\033[A\033[2K', end='')
 
-        # Print newline on completion
-        if completed == total:
-            print()  # Newline after completion
+        if final:
+            # Print final summary
+            print(f"[{bar}] 100% ({completed}/{self._total_files}) - {data_progress} - Migration complete")
+            self._last_display_lines = 0
+        else:
+            # Build the display lines
+            lines = []
+            lines.append(f"[{bar}] {percentage:.0f}% ({completed}/{self._total_files}) - {data_progress} - Migrating...")
+
+            if active_files:
+                lines.append(f"  Currently copying ({len(active_files)} active):")
+                for filename, file_size in active_files[:5]:  # Limit to 5 active files shown
+                    display_name = filename[:50] + '...' if len(filename) > 50 else filename
+                    size_str = self._format_bytes(file_size)
+                    lines.append(f"    -> {display_name} ({size_str})")
+                if len(active_files) > 5:
+                    lines.append(f"    ... and {len(active_files) - 5} more")
+
+            # Print all lines and track count for next clear
+            for line in lines:
+                print(line)
+            self._last_display_lines = len(lines)
 
 
 class FilePathModifier:
