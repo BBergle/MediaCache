@@ -162,7 +162,7 @@ class PlexCacheApp:
         )
         if migration.needs_migration():
             logging.info("Running one-time migration for .plexcached backups...")
-            max_concurrent = self.config_manager.mover.max_concurrent_moves_array
+            max_concurrent = self.config_manager.performance.max_concurrent_moves_array
             migration.run_migration(dry_run=self.debug, max_concurrent=max_concurrent)
 
         # Initialize the cache timestamp tracker for retention period tracking
