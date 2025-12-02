@@ -1059,6 +1059,11 @@ class FileMover:
             if self.timestamp_tracker:
                 self.timestamp_tracker.record_cache_time(cache_file_name)
 
+            # Log successful move
+            file_size = os.path.getsize(cache_file_name)
+            size_str = self._format_bytes(file_size) if hasattr(self, '_format_bytes') else f"{file_size} bytes"
+            logging.info(f"Successfully cached: {os.path.basename(cache_file_name)} ({size_str})")
+
             return 0
         except Exception as e:
             logging.error(f"Error copying to cache: {type(e).__name__}: {e}")
@@ -1104,6 +1109,11 @@ class FileMover:
                 # Remove timestamp entry
                 if self.timestamp_tracker:
                     self.timestamp_tracker.remove_entry(cache_file)
+
+                # Log successful restore
+                file_size = os.path.getsize(array_file)
+                size_str = self._format_bytes(file_size) if hasattr(self, '_format_bytes') else f"{file_size} bytes"
+                logging.info(f"Successfully restored to array: {os.path.basename(array_file)} ({size_str})")
 
                 return 0
             else:
