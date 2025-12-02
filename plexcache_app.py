@@ -58,6 +58,10 @@ class PlexCacheApp:
             # Setup logging first before any log messages
             self._setup_logging()
             logging.info("Starting PlexCache application...")
+            if self.dry_run:
+                logging.warning("*** DRY-RUN MODE - No files will be moved ***")
+            if self.verbose:
+                logging.info("*** VERBOSE MODE - Showing DEBUG level logs ***")
             logging.info("Phase 1: Logging setup complete")
 
             # Load configuration
