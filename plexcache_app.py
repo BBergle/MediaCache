@@ -120,13 +120,18 @@ class PlexCacheApp:
         """Initialize components that depend on configuration."""
         logging.info("Initializing application components...")
         
-        # Initialize Plex manager
+        # Initialize Plex manager with token cache
         logging.debug("Initializing Plex manager...")
+        token_cache_file = os.path.join(
+            self.config_manager.paths.script_folder,
+            "plexcache_user_tokens.json"
+        )
         self.plex_manager = PlexManager(
             plex_url=self.config_manager.plex.plex_url,
             plex_token=self.config_manager.plex.plex_token,
             retry_limit=self.config_manager.performance.retry_limit,
-            delay=self.config_manager.performance.delay
+            delay=self.config_manager.performance.delay,
+            token_cache_file=token_cache_file
         )
         
         # Initialize file operation components
@@ -199,8 +204,17 @@ class PlexCacheApp:
             self.file_utils.check_path_exists(path)
     
     def _connect_to_plex(self) -> None:
-        """Connect to the Plex server."""
+        """Connect to the Plex server and load user tokens."""
         self.plex_manager.connect()
+
+        # Load user tokens once at startup (reduces plex.tv API calls)
+        if self.config_manager.users.users_toggle:
+            # Combine all skip lists for token loading
+            skip_users = list(set(
+                (self.config_manager.users.skip_ondeck or []) +
+                (self.config_manager.users.skip_watchlist or [])
+            ))
+            self.plex_manager.load_user_tokens(skip_users=skip_users)
     
     def _check_active_sessions(self) -> None:
         """Check for active Plex sessions."""
