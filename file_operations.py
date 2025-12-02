@@ -608,13 +608,15 @@ class FileFilter:
 
             logging.info(f"Found {len(cache_files)} files in exclude list")
 
-            # Get shows that are still needed (in OnDeck or watchlist)
-            needed_shows = set()
+            # Get media names that are still needed (in OnDeck or watchlist)
+            needed_media = set()
             for item in current_ondeck_items | current_watchlist_items:
-                # Extract show name from path (e.g., "House Hunters (1999)" from "/path/to/House Hunters (1999) {imdb-tt0369117}/Season 263/...")
-                show_name = self._extract_show_name(item)
-                if show_name is not None:
-                    needed_shows.add(show_name)
+                # Extract show/movie name from path
+                media_name = self._extract_media_name(item)
+                if media_name is not None:
+                    needed_media.add(media_name)
+
+            logging.debug(f"Needed media count: {len(needed_media)}")
 
             # Check each file in cache
             for cache_file in cache_files:
@@ -623,27 +625,28 @@ class FileFilter:
                     cache_paths_to_remove.append(cache_file)
                     continue
 
-                # Extract show name from cache file
-                show_name = self._extract_show_name(cache_file)
-                if show_name is None:
+                # Extract show/movie name from cache file
+                media_name = self._extract_media_name(cache_file)
+                if media_name is None:
+                    logging.warning(f"Could not extract media name from path: {cache_file}")
                     continue
 
-                # If show is still needed, keep this file in cache
-                if show_name in needed_shows:
-                    logging.debug(f"Show still needed, keeping in cache: {show_name}")
+                # If media is still needed, keep this file in cache
+                if media_name in needed_media:
+                    logging.debug(f"Media still needed, keeping in cache: {media_name}")
                     continue
 
                 # Check if file is within cache retention period
                 if self.timestamp_tracker and self.cache_retention_hours > 0:
                     if self.timestamp_tracker.is_within_retention_period(cache_file, self.cache_retention_hours):
-                        logging.info(f"File within retention period, keeping in cache: {cache_file}")
+                        logging.info(f"File within retention period ({self.cache_retention_hours}h), will move later: {media_name}")
                         retained_count += 1
                         continue
 
-                # Show is no longer needed and retention period has passed, move this file back to array
+                # Media is no longer needed and retention period has passed, move this file back to array
                 array_file = cache_file.replace(self.cache_dir, self.real_source, 1)
 
-                logging.info(f"Show no longer needed, will move back to array: {show_name} - {cache_file}")
+                logging.info(f"Media no longer needed, will move back to array: {media_name} - {cache_file}")
                 files_to_move_back.append(array_file)
                 cache_paths_to_remove.append(cache_file)
 
@@ -656,17 +659,30 @@ class FileFilter:
 
         return files_to_move_back, cache_paths_to_remove
 
-    def _extract_show_name(self, file_path: str) -> Optional[str]:
-        """Extract show name from file path. Returns None if not found."""
+    def _extract_media_name(self, file_path: str) -> Optional[str]:
+        """Extract show or movie name from file path.
+
+        For TV shows: Returns the folder before 'Season X' or 'Specials'
+        For movies: Returns the parent folder of the file (e.g., 'Argo (2012)')
+        """
         try:
             # Normalize path and split using OS separator
             normalized_path = os.path.normpath(file_path)
             path_parts = normalized_path.split(os.sep)
+
+            # For TV shows: find Season/Specials folder and return parent
             for i, part in enumerate(path_parts):
-                if part.startswith('Season') or part.isdigit():
+                if part.startswith('Season') or part == 'Specials' or part.isdigit():
                     if i > 0:
                         return path_parts[i-1]
                     break
+
+            # For movies: return the parent folder of the file
+            # e.g., /mnt/cache/Movies/Argo (2012)/Argo.mkv -> "Argo (2012)"
+            if len(path_parts) >= 2:
+                # The parent folder of the file (path_parts[-1] is the filename)
+                return path_parts[-2]
+
             return None
         except Exception:
             return None
