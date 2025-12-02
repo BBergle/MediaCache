@@ -11,6 +11,7 @@ import json
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Set, Optional, Tuple, Dict
+import re
 
 # Extension used to mark array files that have been cached
 PLEXCACHED_EXTENSION = ".plexcached"
@@ -694,21 +695,23 @@ class FileFilter:
         For movies: Returns the parent folder of the file (e.g., 'Argo (2012)')
         """
         try:
-            # Normalize path and split using OS separator
             normalized_path = os.path.normpath(file_path)
             path_parts = normalized_path.split(os.sep)
 
-            # For TV shows: find Season/Specials folder and return parent
+            # For TV shows: find Season/Series/Specials folder and return parent
             for i, part in enumerate(path_parts):
-                if part.startswith('Season') or part == 'Specials' or part.isdigit():
+                if (
+                    re.match(r'^(Season|Series)\s*\d+$', part, re.IGNORECASE)
+                    or re.match(r'^\d+$', part)
+                    or re.match(r'^Specials$', part, re.IGNORECASE)
+                ):
                     if i > 0:
-                        return path_parts[i-1]
+                        return path_parts[i - 1]
                     break
 
             # For movies: return the parent folder of the file
             # e.g., /mnt/cache/Movies/Argo (2012)/Argo.mkv -> "Argo (2012)"
             if len(path_parts) >= 2:
-                # The parent folder of the file (path_parts[-1] is the filename)
                 return path_parts[-2]
 
             return None
