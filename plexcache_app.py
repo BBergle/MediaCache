@@ -60,7 +60,10 @@ class PlexCacheApp:
             # Load configuration
             logging.info("Phase 2: Loading configuration")
             self.config_manager.load_config()
-                  
+
+            # Set up notification handlers now that config is loaded
+            self._setup_notification_handlers()
+
             # Initialize components that depend on config
             logging.info("Phase 3: Initializing components")
             self._initialize_components()
@@ -103,14 +106,17 @@ class PlexCacheApp:
             raise
     
     def _setup_logging(self) -> None:
-        """Set up logging system."""
+        """Set up logging system (basic logging only, notifications set up after config load)."""
         self.logging_manager = LoggingManager(
             logs_folder=self.config_manager.paths.logs_folder,
             log_level="",  # Will be set from config
             max_log_files=5
         )
         self.logging_manager.setup_logging()
+        logging.info("*** PlexCache ***")
 
+    def _setup_notification_handlers(self) -> None:
+        """Set up notification handlers after config is loaded."""
         # Override notification level if --quiet flag is used
         notification_config = self.config_manager.notification
         if self.quiet:
@@ -122,7 +128,6 @@ class PlexCacheApp:
             self.system_detector.is_unraid,
             self.system_detector.is_docker
         )
-        logging.info("*** PlexCache ***")
     
     def _initialize_components(self) -> None:
         """Initialize components that depend on configuration."""
