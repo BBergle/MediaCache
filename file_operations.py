@@ -683,41 +683,56 @@ class FileMover:
         self.mover_cache_exclude_file = mover_cache_exclude_file
         self.timestamp_tracker = timestamp_tracker
         self._exclude_file_lock = threading.Lock()
+        # Progress tracking
+        self._progress_lock = threading.Lock()
+        self._completed_count = 0
+        self._total_count = 0
+        self._completed_bytes = 0
+        self._total_bytes = 0
+        self._active_files = {}  # Thread ID -> (filename, size)
+        self._last_display_lines = 0
     
-    def move_media_files(self, files: List[str], destination: str, 
+    def move_media_files(self, files: List[str], destination: str,
                         max_concurrent_moves_array: int, max_concurrent_moves_cache: int) -> None:
         """Move media files to the specified destination."""
         logging.info(f"Moving media files to {destination}...")
         logging.debug(f"Total files to process: {len(files)}")
-        
+
         processed_files = set()
         move_commands = []
-        cache_file_names = []
+        total_bytes = 0
 
         # Iterate over each file to move
         for file_to_move in files:
             if file_to_move in processed_files:
                 continue
-            
+
             processed_files.add(file_to_move)
-            
+
             # Get the user path, cache path, cache file name, and user file name
             user_path, cache_path, cache_file_name, user_file_name = self._get_paths(file_to_move)
-            
+
             # Get the move command for the current file
             move = self._get_move_command(destination, cache_file_name, user_path, user_file_name, cache_path)
-            
+
             if move is not None:
-                move_commands.append((move, cache_file_name))
+                # Get file size for progress tracking
+                src_file = move[0]
+                try:
+                    file_size = os.path.getsize(src_file)
+                except OSError:
+                    file_size = 0
+                total_bytes += file_size
+                move_commands.append((move, cache_file_name, file_size))
                 logging.debug(f"Added move command for: {file_to_move}")
             else:
                 logging.debug(f"No move command generated for: {file_to_move}")
-        
+
         logging.info(f"Generated {len(move_commands)} move commands for {destination}")
-        
+
         # Execute the move commands
-        self._execute_move_commands(move_commands, max_concurrent_moves_array, 
-                                  max_concurrent_moves_cache, destination)
+        self._execute_move_commands(move_commands, max_concurrent_moves_array,
+                                  max_concurrent_moves_cache, destination, total_bytes)
     
     def _get_paths(self, file_to_move: str) -> Tuple[str, str, str, str]:
         """Get all necessary paths for file moving."""
@@ -791,12 +806,24 @@ class FileMover:
                     with open(self.mover_cache_exclude_file, "a") as f:
                         f.write(f"{cache_file_name}\n")
     
-    def _execute_move_commands(self, move_commands: List[Tuple[Tuple[str, str], str]],
+    def _execute_move_commands(self, move_commands: List[Tuple[Tuple[str, str], str, int]],
                              max_concurrent_moves_array: int, max_concurrent_moves_cache: int,
-                             destination: str) -> None:
-        """Execute the move commands."""
+                             destination: str, total_bytes: int) -> None:
+        """Execute the move commands with progress tracking."""
+        # Initialize progress tracking
+        self._completed_count = 0
+        self._total_count = len(move_commands)
+        self._completed_bytes = 0
+        self._total_bytes = total_bytes
+        self._active_files = {}
+        self._last_display_lines = 0
+
+        # Show initial progress bar
+        if self._total_count > 0:
+            self._print_move_progress(destination)
+
         if self.debug:
-            for move_cmd, cache_file_name in move_commands:
+            for i, (move_cmd, cache_file_name, file_size) in enumerate(move_commands, 1):
                 (src, dest) = move_cmd
                 if destination == 'cache':
                     plexcached_file = src + PLEXCACHED_EXTENSION
@@ -807,6 +834,11 @@ class FileMover:
                     plexcached_file = array_file + PLEXCACHED_EXTENSION
                     logging.info(f"[DEBUG] Would rename: {plexcached_file} -> {array_file}")
                     logging.info(f"[DEBUG] Would delete: {src}")
+                self._completed_count = i
+                self._completed_bytes += file_size
+                self._print_move_progress(destination)
+            if self._total_count > 0:
+                self._print_move_progress(destination, final=True)
         else:
             max_concurrent_moves = max_concurrent_moves_array if destination == 'array' else max_concurrent_moves_cache
             from functools import partial
@@ -814,12 +846,15 @@ class FileMover:
                 results = list(executor.map(partial(self._move_file, destination=destination), move_commands))
                 errors = [result for result in results if result == 1]
                 partial_successes = [result for result in results if result == 2]
+                # Print final progress
+                if self._total_count > 0:
+                    self._print_move_progress(destination, final=True)
                 if partial_successes:
                     logging.warning(f"Finished moving files: {len(errors)} errors, {len(partial_successes)} partial (missing .plexcached)")
                 else:
                     logging.info(f"Finished moving files with {len(errors)} errors.")
     
-    def _move_file(self, move_cmd_with_cache: Tuple[Tuple[str, str], str], destination: str) -> int:
+    def _move_file(self, move_cmd_with_cache: Tuple[Tuple[str, str], str, int], destination: str) -> int:
         """Move a single file using the .plexcached approach.
 
         For cache destination:
@@ -832,14 +867,37 @@ class FileMover:
         2. Delete cache copy
         3. (Exclude file update handled separately by caller)
         """
-        (src, dest), cache_file_name = move_cmd_with_cache
+        (src, dest), cache_file_name, file_size = move_cmd_with_cache
+        thread_id = threading.get_ident()
+        filename = os.path.basename(src)
+
         try:
+            # Register this file as actively being moved
+            with self._progress_lock:
+                self._active_files[thread_id] = (filename, file_size)
+                self._print_move_progress(destination)
+
             if destination == 'cache':
-                return self._move_to_cache(src, dest, cache_file_name)
+                result = self._move_to_cache(src, dest, cache_file_name)
             elif destination == 'array':
-                return self._move_to_array(src, dest, cache_file_name)
-            return 0
+                result = self._move_to_array(src, dest, cache_file_name)
+            else:
+                result = 0
+
+            # Update progress counter
+            with self._progress_lock:
+                self._completed_count += 1
+                self._completed_bytes += file_size
+                if thread_id in self._active_files:
+                    del self._active_files[thread_id]
+                self._print_move_progress(destination)
+
+            return result
         except Exception as e:
+            # Remove from active files on error
+            with self._progress_lock:
+                if thread_id in self._active_files:
+                    del self._active_files[thread_id]
             logging.error(f"Error moving file: {type(e).__name__}: {e}")
             return 1
 
@@ -953,6 +1011,62 @@ class FileMover:
                 logging.info(f"Cleanup: Removed partial cache file")
         except Exception as e:
             logging.error(f"Error during cleanup: {type(e).__name__}: {e}")
+
+    def _format_bytes(self, bytes_value: int) -> str:
+        """Format bytes into human-readable string (e.g., '1.5 GB')."""
+        if bytes_value < 1024:
+            return f"{bytes_value} B"
+        elif bytes_value < 1024 ** 2:
+            return f"{bytes_value / 1024:.1f} KB"
+        elif bytes_value < 1024 ** 3:
+            return f"{bytes_value / (1024 ** 2):.1f} MB"
+        else:
+            return f"{bytes_value / (1024 ** 3):.1f} GB"
+
+    def _print_move_progress(self, destination: str, final: bool = False) -> None:
+        """Print progress update with visual progress bar and active file queue."""
+        if self._total_count == 0:
+            return
+
+        completed = self._completed_count
+        percentage = (completed / self._total_count) * 100
+        bar_width = 30
+        filled = int(bar_width * completed / self._total_count)
+        bar = '█' * filled + '░' * (bar_width - filled)
+
+        # Format data progress
+        completed_str = self._format_bytes(self._completed_bytes)
+        total_str = self._format_bytes(self._total_bytes)
+        data_progress = f"{completed_str} / {total_str}"
+
+        active_files = list(self._active_files.values())
+
+        # Clear previous display first (move up and clear each line)
+        if self._last_display_lines > 0:
+            for _ in range(self._last_display_lines):
+                print('\033[A\033[2K', end='')
+
+        if final:
+            # Print final summary
+            print(f"[{bar}] 100% ({completed}/{self._total_count}) - {data_progress} - Moved to {destination}")
+            self._last_display_lines = 0
+        else:
+            # Build the display lines
+            lines = []
+            lines.append(f"[{bar}] {percentage:.0f}% ({completed}/{self._total_count}) - {data_progress} - Moving to {destination}...")
+
+            if active_files:
+                lines.append(f"  Currently moving ({len(active_files)} active):")
+                for filename, _ in active_files[:5]:  # Limit to 5 active files shown
+                    display_name = filename[:50] + '...' if len(filename) > 50 else filename
+                    lines.append(f"    -> {display_name}")
+                if len(active_files) > 5:
+                    lines.append(f"    ... and {len(active_files) - 5} more")
+
+            # Print all lines and track count for next clear
+            for line in lines:
+                print(line)
+            self._last_display_lines = len(lines)
 
 
 class PlexcachedRestorer:
