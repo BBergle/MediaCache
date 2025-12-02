@@ -22,11 +22,14 @@ from file_operations import FilePathModifier, SubtitleFinder, FileFilter, FileMo
 class PlexCacheApp:
     """Main PlexCache application class."""
 
-    def __init__(self, config_file: str, skip_cache: bool = False, debug: bool = False, quiet: bool = False):
+    def __init__(self, config_file: str, skip_cache: bool = False, dry_run: bool = False,
+                 quiet: bool = False, verbose: bool = False):
         self.config_file = config_file
         self.skip_cache = skip_cache
-        self.debug = debug
+        self.dry_run = dry_run  # Don't move files, just simulate
+        self.debug = dry_run  # Alias for backwards compatibility in code
         self.quiet = quiet  # Override notification level to errors-only
+        self.verbose = verbose  # Enable DEBUG level logging
         self.start_time = time.time()
         
         # Initialize components
@@ -305,12 +308,17 @@ class PlexCacheApp:
             return True
 
     def _set_debug_mode(self) -> None:
-        """Set debug mode if enabled."""
-        if self.debug:
+        """Set logging level and dry-run mode."""
+        # Set logging level based on verbose flag
+        if self.verbose:
             logging.getLogger().setLevel(logging.DEBUG)
-            logging.warning("Debug mode is active, NO FILE WILL BE MOVED.")
+            logging.info("Verbose mode enabled - showing DEBUG level logs")
         else:
             logging.getLogger().setLevel(logging.INFO)
+
+        # Warn if dry-run mode is active
+        if self.dry_run:
+            logging.warning("Dry-run mode is active, NO FILES WILL BE MOVED.")
     
     def _process_media(self) -> None:
         """Process all media types (onDeck, watchlist, watched)."""
@@ -734,9 +742,10 @@ class PlexCacheApp:
 def main():
     """Main entry point."""
     skip_cache = "--skip-cache" in sys.argv
-    debug = "--debug" in sys.argv
+    dry_run = "--dry-run" in sys.argv or "--debug" in sys.argv  # --debug is alias for backwards compatibility
     restore_plexcached = "--restore-plexcached" in sys.argv
     quiet = "--quiet" in sys.argv or "--notify-errors-only" in sys.argv
+    verbose = "--verbose" in sys.argv or "-v" in sys.argv
 
     # Derive config path from the script's actual location (matches plexcache_setup.py behavior)
     script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -744,18 +753,18 @@ def main():
 
     # Handle emergency restore mode
     if restore_plexcached:
-        _run_plexcached_restore(config_file, debug)
+        _run_plexcached_restore(config_file, dry_run, verbose)
         return
 
-    app = PlexCacheApp(config_file, skip_cache, debug, quiet)
+    app = PlexCacheApp(config_file, skip_cache, dry_run, quiet, verbose)
     app.run()
 
 
-def _run_plexcached_restore(config_file: str, debug: bool) -> None:
+def _run_plexcached_restore(config_file: str, dry_run: bool, verbose: bool = False) -> None:
     """Run the emergency .plexcached restore process."""
     import logging
     logging.basicConfig(
-        level=logging.DEBUG if debug else logging.INFO,
+        level=logging.DEBUG if verbose else logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
 
@@ -786,8 +795,8 @@ def _run_plexcached_restore(config_file: str, debug: bool) -> None:
         print(f"  {f}")
         print(f"    -> {original}")
 
-    if debug:
-        print("\nDebug mode: No files will be restored.")
+    if dry_run:
+        print("\nDry-run mode: No files will be restored.")
         return
 
     # Prompt for confirmation
