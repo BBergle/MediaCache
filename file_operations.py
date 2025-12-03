@@ -820,8 +820,8 @@ class FileFilter:
         self.timestamp_tracker = timestamp_tracker
         self.cache_retention_hours = cache_retention_hours
     
-    def filter_files(self, files: List[str], destination: str, 
-                    media_to_cache: Optional[List[str]] = None, 
+    def filter_files(self, files: List[str], destination: str,
+                    media_to_cache: Optional[List[str]] = None,
                     files_to_skip: Optional[Set[str]] = None) -> List[str]:
         """Filter files based on destination and conditions."""
         if media_to_cache is None:
@@ -830,6 +830,7 @@ class FileFilter:
         processed_files = set()
         media_to = []
         cache_files_to_exclude = []
+        cache_files_removed = []  # Track cache files removed during filtering
 
         if not files:
             return []
@@ -838,12 +839,15 @@ class FileFilter:
             if file in processed_files or (files_to_skip and file in files_to_skip):
                 continue
             processed_files.add(file)
-            
+
             cache_file_name = self._get_cache_paths(file)[1]
             cache_files_to_exclude.append(cache_file_name)
-            
+
             if destination == 'array':
-                if self._should_add_to_array(file, cache_file_name, media_to_cache):
+                should_add, was_removed = self._should_add_to_array(file, cache_file_name, media_to_cache)
+                if was_removed:
+                    cache_files_removed.append(cache_file_name)
+                if should_add:
                     media_to.append(file)
                     logging.info(f"Adding file to array: {file}")
 
@@ -852,13 +856,23 @@ class FileFilter:
                     media_to.append(file)
                     logging.info(f"Adding file to cache: {file}")
 
+        # Remove any cache files that were deleted during filtering from the exclude list
+        if cache_files_removed:
+            self.remove_files_from_exclude_list(cache_files_removed)
+
         return media_to
     
-    def _should_add_to_array(self, file: str, cache_file_name: str, media_to_cache: List[str]) -> bool:
-        """Determine if a file should be added to the array."""
+    def _should_add_to_array(self, file: str, cache_file_name: str, media_to_cache: List[str]) -> Tuple[bool, bool]:
+        """Determine if a file should be added to the array.
+
+        Returns:
+            Tuple of (should_add, cache_was_removed):
+            - should_add: True if file should be added to array move queue
+            - cache_was_removed: True if cache file was removed (needs exclude list update)
+        """
         if file in media_to_cache:
             logging.debug(f"Skipping array move - file in media_to_cache: {file}")
-            return False
+            return False, False
 
         # Note: Retention period check is handled upstream in get_files_to_move_back_to_array()
         # which correctly distinguishes between TV shows (retention applies) and movies (no retention)
@@ -868,15 +882,17 @@ class FileFilter:
         if os.path.isfile(array_file):
             # File already exists in the array, try to remove cache version
             logging.debug(f"File already exists on array, removing cache version: {array_file}")
+            cache_removed = False
             try:
                 os.remove(cache_file_name)
                 logging.info(f"Removed cache version of file: {cache_file_name}")
+                cache_removed = True
             except FileNotFoundError:
                 pass  # File already removed or never existed
             except OSError as e:
                 logging.error(f"Failed to remove cache file {cache_file_name}: {type(e).__name__}: {e}")
-            return False  # No need to add to array
-        return True  # Otherwise, the file should be added to the array
+            return False, cache_removed  # No need to add to array
+        return True, False  # Otherwise, the file should be added to the array
 
     def _should_add_to_cache(self, file: str, cache_file_name: str) -> bool:
         """Determine if a file should be added to the cache."""
