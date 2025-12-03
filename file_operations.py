@@ -722,7 +722,7 @@ class FilePathModifier:
         if files is None:
             return []
 
-        logging.info("Editing file paths...")
+        logging.debug("Editing file paths...")
 
         result = []
         for file_path in files:
@@ -731,7 +731,7 @@ class FilePathModifier:
                 result.append(file_path)
                 continue
 
-            logging.info(f"Original path: {file_path}")
+            logging.debug(f"Original path: {file_path}")
 
             # Replace the plex_source with the real_source in the file path
             file_path = file_path.replace(self.plex_source, self.real_source, 1)
@@ -749,7 +749,7 @@ class FilePathModifier:
                 logging.warning(f"Path conversion: No matching library folder found for: {file_path}")
 
             result.append(file_path)
-            logging.info(f"Edited path: {file_path}")
+            logging.debug(f"Edited path: {file_path}")
 
         return result
 
