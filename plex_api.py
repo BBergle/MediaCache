@@ -166,14 +166,17 @@ class PlexManager:
         with self._api_lock:
             time.sleep(PLEX_API_DELAY)
 
-    def load_user_tokens(self, skip_users: Optional[List[str]] = None) -> Dict[str, str]:
-        """Load and cache tokens for all home users at startup.
+    def load_user_tokens(self, skip_users: Optional[List[str]] = None,
+                         settings_users: Optional[List[dict]] = None) -> Dict[str, str]:
+        """Load and cache tokens for all users at startup.
 
-        This method fetches tokens for all home users once, reducing repeated
-        API calls to plex.tv during OnDeck/Watchlist fetching.
+        Hybrid approach:
+        1. First load tokens from settings file (includes all users: local AND remote)
+        2. Then check Plex API for any new users not in settings
 
         Args:
             skip_users: List of usernames or tokens to skip
+            settings_users: List of user dicts from settings file with tokens
 
         Returns:
             Dict mapping username -> token
@@ -183,30 +186,54 @@ class PlexManager:
             return self._user_tokens
 
         skip_users = skip_users or []
+        settings_users = settings_users or []
         machine_id = self.plex.machineIdentifier
         logging.info("[PLEX API] Loading user tokens (one-time startup operation)...")
 
         try:
+            # Add main account token
             self._rate_limited_api_call()
             account = self.plex.myPlexAccount()
             main_username = account.title
             self._user_tokens[main_username] = self.plex_token
             logging.info(f"[PLEX API] Main account: {main_username}")
 
+            # Step 1: Load tokens from settings file (includes remote users)
+            settings_loaded = 0
+            settings_usernames = set()
+            for user_entry in settings_users:
+                username = user_entry.get("title")
+                token = user_entry.get("token")
+                is_local = user_entry.get("is_local", False)
+
+                if not username or not token:
+                    continue
+
+                settings_usernames.add(username)
+
+                # Check skip list
+                if username in skip_users or token in skip_users:
+                    logging.info(f"[PLEX API] Skipping {username} (in skip list)")
+                    continue
+
+                self._user_tokens[username] = token
+                self._token_cache.set_token(username, token, machine_id)
+                user_type = "home" if is_local else "remote"
+                logging.info(f"[PLEX API] Loaded {user_type} user from settings: {username}")
+                settings_loaded += 1
+
+            logging.info(f"[PLEX API] Loaded {settings_loaded} users from settings file")
+
+            # Step 2: Check Plex API for new users not in settings
             self._rate_limited_api_call()
             users = account.users()
-            logging.info(f"[PLEX API] Found {len(users)} additional users")
+            new_users = 0
 
-            # Count remote vs home users for logging
-            remote_users = 0
             for user in users:
                 username = user.title
 
-                # Skip remote users (they have a username attribute set)
-                # Remote users must use RSS for watchlist - API won't work
-                if getattr(user, "username", None) is not None:
-                    remote_users += 1
-                    logging.debug(f"[PLEX API] Skipping remote user: {username}")
+                # Skip if already loaded from settings
+                if username in settings_usernames:
                     continue
 
                 # Check skip list
@@ -214,15 +241,15 @@ class PlexManager:
                     logging.info(f"[PLEX API] Skipping user (in skip list): {username}")
                     continue
 
-                # Try to get token from cache first
+                # Try to get token from disk cache first
                 cached_token = self._token_cache.get_token(username, machine_id)
                 if cached_token:
-                    # Verify cached token still works
                     if cached_token in skip_users:
                         logging.info(f"[PLEX API] Skipping {username} (token in skip list)")
                         continue
                     self._user_tokens[username] = cached_token
-                    logging.info(f"[PLEX API] Using cached token for: {username}")
+                    logging.info(f"[PLEX API] Using cached token for new user: {username}")
+                    new_users += 1
                     continue
 
                 # Fetch fresh token from plex.tv
@@ -235,15 +262,19 @@ class PlexManager:
                             continue
                         self._user_tokens[username] = token
                         self._token_cache.set_token(username, token, machine_id)
-                        logging.info(f"[PLEX API] Fetched and cached token for: {username}")
+                        logging.info(f"[PLEX API] Fetched token for new user: {username}")
+                        new_users += 1
                     else:
                         logging.warning(f"[PLEX API] No token available for: {username}")
                 except Exception as e:
                     _log_api_error(f"get token for {username}", e)
 
+            if new_users > 0:
+                logging.info(f"[PLEX API] Found {new_users} new users not in settings (consider re-running setup)")
+
             self._users_loaded = True
-            home_users = len(self._user_tokens) - 1  # Subtract main account
-            logging.info(f"[PLEX API] Loaded tokens for {len(self._user_tokens)} users ({home_users} home users, {remote_users} remote users skipped)")
+            total_users = len(self._user_tokens) - 1  # Subtract main account
+            logging.info(f"[PLEX API] Loaded tokens for {len(self._user_tokens)} users total ({total_users} additional users)")
             return self._user_tokens
 
         except Exception as e:

@@ -57,6 +57,7 @@ class PlexConfig:
     users_toggle: bool = True
     skip_ondeck: Optional[List[str]] = None
     skip_watchlist: Optional[List[str]] = None
+    users: Optional[List[dict]] = None  # User list from settings file
 
     def __post_init__(self):
         if self.valid_sections is None:
@@ -65,6 +66,8 @@ class PlexConfig:
             self.skip_ondeck = []
         if self.skip_watchlist is None:
             self.skip_watchlist = []
+        if self.users is None:
+            self.users = []
 
 
 @dataclass
@@ -181,6 +184,9 @@ class ConfigManager:
         else:
             self.plex.skip_ondeck = self.settings_data.get('skip_ondeck', [])
             self.plex.skip_watchlist = self.settings_data.get('skip_watchlist', [])
+
+        # Load users list (contains tokens for all users including remote)
+        self.plex.users = self.settings_data.get('users', [])
     
     def _load_cache_config(self) -> None:
         """Load cache-related configuration."""

@@ -236,7 +236,11 @@ class PlexCacheApp:
                 (self.config_manager.plex.skip_ondeck or []) +
                 (self.config_manager.plex.skip_watchlist or [])
             ))
-            self.plex_manager.load_user_tokens(skip_users=skip_users)
+            # Pass users from settings file (includes remote users with tokens)
+            self.plex_manager.load_user_tokens(
+                skip_users=skip_users,
+                settings_users=self.config_manager.plex.users
+            )
     
     def _check_active_sessions(self) -> None:
         """Check for active Plex sessions."""
