@@ -394,19 +394,19 @@ class WatchlistTracker:
             return len(stale)
 
     def cleanup_missing_files(self) -> int:
-        """Remove entries for files that no longer exist on cache.
+        """Remove entries for files that no longer exist.
+
+        Note: Currently disabled because tracker stores Plex paths (/data/...)
+        which are internal to the Plex Docker container and don't map directly
+        to filesystem paths. The cleanup_stale_entries() method handles cleanup
+        based on last_seen timestamp instead.
 
         Returns:
-            Number of entries removed.
+            Number of entries removed (always 0 for now).
         """
-        with self._lock:
-            missing = [path for path in self._data if not os.path.exists(path)]
-            for path in missing:
-                del self._data[path]
-            if missing:
-                self._save()
-                logging.info(f"Cleaned up {len(missing)} watchlist entries for missing files")
-            return len(missing)
+        # Disabled: Plex paths are internal to Docker, not filesystem paths
+        # Cleanup is handled by cleanup_stale_entries() based on last_seen
+        return 0
 
 
 class PlexcachedMigration:

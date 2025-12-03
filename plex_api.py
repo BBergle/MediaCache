@@ -590,6 +590,8 @@ class PlexManager:
             if rss_url:
                 rss_items = fetch_rss_titles(rss_url)
                 logging.info(f"RSS feed contains {len(rss_items)} items")
+                # RSS feed is friends' combined watchlist - we can't identify individual users
+                rss_username = "Friends"
                 for title, category, pub_date in rss_items:
                     cleaned_title = self.clean_rss_title(title)
                     file = self.search_plex(cleaned_title)
@@ -598,9 +600,9 @@ class PlexManager:
                         if not filtered_sections or file.librarySectionID in filtered_sections:
                             try:
                                 if category == 'show' or file.TYPE == 'show':
-                                    yield from process_show(file, watchlist_episodes, current_username, pub_date)
+                                    yield from process_show(file, watchlist_episodes, rss_username, pub_date)
                                 elif file.TYPE == 'movie':
-                                    yield from process_movie(file, current_username, pub_date)
+                                    yield from process_movie(file, rss_username, pub_date)
                                 else:
                                     logging.debug(f"Ignoring item '{file.title}' of type '{file.TYPE}'")
                             except Exception as e:
