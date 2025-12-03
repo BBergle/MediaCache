@@ -477,13 +477,20 @@ class PlexManager:
 
 
     def get_watchlist_media(self, valid_sections: List[int], watchlist_episodes: int,
-                            users_toggle: bool, skip_watchlist: List[str], rss_url: Optional[str] = None) -> Generator[Tuple[str, str, Optional[datetime]], None, None]:
+                            users_toggle: bool, skip_watchlist: List[str], rss_url: Optional[str] = None,
+                            home_users: Optional[List[str]] = None) -> Generator[Tuple[str, str, Optional[datetime]], None, None]:
         """Get watchlist media files, optionally via RSS, with proper user filtering.
+
+        Args:
+            home_users: List of usernames that are home/managed users (can access watchlist).
+                       Remote users (friends) cannot have their watchlists accessed.
 
         Yields:
             Tuples of (file_path, username, watchlisted_at) where watchlisted_at is the
             datetime when the item was added to the user's watchlist (None for RSS items).
         """
+        if home_users is None:
+            home_users = []
 
         def fetch_rss_titles(url: str) -> List[Tuple[str, str]]:
             """Fetch titles and categories from a Plex RSS feed."""
@@ -549,23 +556,22 @@ class PlexManager:
                     logging.info(f"Skipping {current_username} due to skip_watchlist")
                     return
 
-            # --- Obtain Plex account instance using cached token (no plex.tv API call) ---
+            # --- Obtain Plex account instance ---
+            # Note: Only the main account and home/managed users have accessible watchlists
+            # Remote users (friends) have their own separate Plex accounts we can't access
             try:
                 if user is None:
                     # Use already authenticated main account
                     account = self.plex.myPlexAccount()
                 else:
-                    # Use cached token directly instead of switchHomeUser (avoids plex.tv rate limits)
-                    token = self._user_tokens.get(current_username)
-                    if not token:
-                        logging.warning(f"[PLEX API] No cached token for {current_username}; skipping watchlist")
-                        return
+                    # For home users, we must use switchHomeUser() to access their watchlist
+                    # This hits plex.tv but is the only way to access home user watchlists
                     try:
-                        from plexapi.myplex import MyPlexAccount
-                        account = MyPlexAccount(token=token)
-                        logging.debug(f"[PLEX API] Using cached token for {current_username} watchlist")
+                        self._rate_limited_api_call()
+                        account = self.plex.myPlexAccount().switchHomeUser(user.title)
+                        logging.debug(f"[PLEX API] Switched to home user {current_username} for watchlist")
                     except Exception as e:
-                        _log_api_error(f"authenticate with cached token for {current_username}", e)
+                        _log_api_error(f"switch to user {user.title}", e)
                         return
             except Exception as e:
                 _log_api_error(f"get Plex account for {current_username}", e)
@@ -628,11 +634,12 @@ class PlexManager:
                 logging.error(f"Error fetching watchlist for {current_username}: {e}")
 
 
-        # --- Prepare users to fetch using cached tokens (no plex.tv API calls) ---
+        # --- Prepare users to fetch ---
+        # Only the main account and home/managed users have accessible watchlists
+        # Remote users (friends) have their own separate Plex accounts we can't access
         users_to_fetch = [None]  # always include the main local account
 
         if users_toggle:
-            # Use cached tokens - no API calls to plex.tv here
             for username, token in self._user_tokens.items():
                 # Skip main account (already added as None)
                 if token == self.plex_token:
@@ -641,13 +648,17 @@ class PlexManager:
                 if username in skip_watchlist or token in skip_watchlist:
                     logging.info(f"Skipping {username} for watchlist — in skip list")
                     continue
+                # Only include home/managed users - remote users' watchlists can't be accessed
+                if username not in home_users:
+                    logging.debug(f"Skipping {username} for watchlist — remote user (watchlist not accessible)")
+                    continue
                 # Create a simple object to pass username
                 class UserProxy:
                     def __init__(self, title):
                         self.title = title
                 users_to_fetch.append(UserProxy(username))
 
-        logging.info(f"Processing {len(users_to_fetch)} users for local Plex watchlist (using cached tokens)")
+        logging.info(f"Processing {len(users_to_fetch)} users for watchlist (main + {len(users_to_fetch)-1} home users)")
 
         # --- Fetch concurrently ---
         with ThreadPoolExecutor(max_workers=10) as executor:

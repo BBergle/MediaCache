@@ -458,11 +458,17 @@ class PlexCacheApp:
 
                     # --- Local Plex users ---
                     # API now returns (file_path, username, watchlisted_at) tuples
+                    # Build list of home users from settings (only home users have accessible watchlists)
+                    home_users = [
+                        u.get("title") for u in self.config_manager.plex.users
+                        if u.get("is_local", False)
+                    ]
                     fetched_watchlist = list(self.plex_manager.get_watchlist_media(
                         self.config_manager.plex.valid_sections,
                         self.config_manager.cache.watchlist_episodes,
                         self.config_manager.plex.users_toggle,
-                        self.config_manager.plex.skip_watchlist
+                        self.config_manager.plex.skip_watchlist,
+                        home_users=home_users
                     ))
 
                     for item in fetched_watchlist:
