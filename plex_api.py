@@ -219,7 +219,7 @@ class PlexManager:
                 self._user_tokens[username] = token
                 self._token_cache.set_token(username, token, machine_id)
                 user_type = "home" if is_local else "remote"
-                logging.info(f"[PLEX API] Loaded {user_type} user from settings: {username}")
+                logging.debug(f"[PLEX API] Loaded {user_type} user from settings: {username}")
                 settings_loaded += 1
 
             logging.info(f"[PLEX API] Loaded {settings_loaded} users from settings file")
@@ -445,14 +445,14 @@ class PlexManager:
             for media in episode.media:
                 on_deck_files.extend(part.file for part in media.parts)
                 for part in media.parts:
-                    logging.info(f"OnDeck found: {part.file}")
+                    logging.debug(f"OnDeck found: {part.file}")
     
     def _process_movie_ondeck(self, video: Movie, on_deck_files: List[str]) -> None:
         """Process a movie from onDeck."""
         for media in video.media:
             on_deck_files.extend(part.file for part in media.parts)
             for part in media.parts:
-                logging.info(f"OnDeck found: {part.file}")
+                logging.debug(f"OnDeck found: {part.file}")
     
     def _get_next_episodes(self, episodes: List[Episode], current_season: int,
                           current_episode_index: int, number_episodes: int) -> List[Episode]:
