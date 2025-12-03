@@ -86,6 +86,39 @@ def prompt_user_for_duration(prompt_message, default_value, data_key):
         except ValueError:
             print("Invalid input. Enter a number, optionally with 'h' for hours or 'd' for days (e.g., 12, 12h, 2d)")
 
+def prompt_user_for_duration_days(prompt_message, default_value, data_key):
+    """Prompt for a duration value that accepts days (default) or hours.
+
+    Accepts formats: 30, 30d, 12h (defaults to days if no suffix)
+    Stores the value in days (as float to support fractional days from hours).
+    """
+    while True:
+        user_input = (input(prompt_message) or default_value).strip().lower()
+        try:
+            # Check for hour suffix
+            if user_input.endswith('h'):
+                hours = float(user_input[:-1])
+                if hours < 0:
+                    print("Please enter a non-negative number")
+                    continue
+                days = hours / 24
+                settings_data[data_key] = days
+                print(f"  Set to {days:.2f} days ({hours} hours)")
+                break
+            # Check for day suffix (or no suffix - default to days)
+            elif user_input.endswith('d'):
+                days = float(user_input[:-1])
+            else:
+                days = float(user_input)
+
+            if days < 0:
+                print("Please enter a non-negative number")
+                continue
+            settings_data[data_key] = days
+            break
+        except ValueError:
+            print("Invalid input. Enter a number, optionally with 'd' for days or 'h' for hours (e.g., 30, 30d, 12h)")
+
 def is_valid_plex_url(url):
     try:
         result = urlparse(url)
@@ -493,7 +526,8 @@ def setup():
         print('This prevents watchlist items from sitting on cache indefinitely.')
         print('Multi-user: If another user adds the same item, the retention timer resets.')
         print('Enter 0 to disable (files stay cached as long as they are on any watchlist).')
-        prompt_user_for_number('Watchlist retention in days (0 to disable, default: 0): ', '0', 'watchlist_retention_days')
+        print('Enter a number in days (default) or use "h" suffix for hours (e.g., 30, 30d, 12h)')
+        prompt_user_for_duration_days('Watchlist retention (0 to disable, default: 0): ', '0', 'watchlist_retention_days')
 
     # ---------------- Cache Size Limit ----------------
     if 'cache_limit' not in settings_data:

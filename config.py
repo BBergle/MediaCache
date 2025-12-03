@@ -91,7 +91,8 @@ class CacheConfig:
     # Watchlist retention: auto-expire watchlist items after X days
     # Files are removed from cache X days after being added to watchlist, even if still on watchlist
     # 0 = disabled (files stay as long as they're on any user's watchlist)
-    watchlist_retention_days: int = 0
+    # Supports fractional days (e.g., 0.5 = 12 hours) for testing
+    watchlist_retention_days: float = 0
 
     # Cache size limit: maximum space PlexCache can use on the cache drive
     # Supports formats: "250GB", "500MB", "50%", or just "250" (defaults to GB)
