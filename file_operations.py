@@ -257,12 +257,16 @@ class WatchlistTracker:
 
                 # Update watchlisted_at if the new timestamp is more recent
                 if watchlisted_at:
-                    new_ts_iso = watchlisted_at.isoformat()
+                    # Normalize to naive datetime for comparison (strip timezone info)
+                    new_ts_naive = watchlisted_at.replace(tzinfo=None) if watchlisted_at.tzinfo else watchlisted_at
+                    new_ts_iso = new_ts_naive.isoformat()
                     existing_ts = entry.get('watchlisted_at')
                     if existing_ts:
                         try:
                             existing_dt = datetime.fromisoformat(existing_ts)
-                            if watchlisted_at > existing_dt:
+                            # Also strip timezone from existing if present
+                            existing_dt_naive = existing_dt.replace(tzinfo=None) if existing_dt.tzinfo else existing_dt
+                            if new_ts_naive > existing_dt_naive:
                                 entry['watchlisted_at'] = new_ts_iso
                                 logging.debug(f"Updated watchlist timestamp for {file_path} (user {username} added later)")
                         except ValueError:
@@ -273,9 +277,14 @@ class WatchlistTracker:
                 # Always update last_seen
                 entry['last_seen'] = now_iso
             else:
-                # New entry
+                # New entry - normalize timezone-aware datetimes to naive
+                if watchlisted_at:
+                    watchlisted_at_naive = watchlisted_at.replace(tzinfo=None) if watchlisted_at.tzinfo else watchlisted_at
+                    watchlisted_at_iso = watchlisted_at_naive.isoformat()
+                else:
+                    watchlisted_at_iso = now_iso
                 self._data[file_path] = {
-                    'watchlisted_at': watchlisted_at.isoformat() if watchlisted_at else now_iso,
+                    'watchlisted_at': watchlisted_at_iso,
                     'users': [username],
                     'last_seen': now_iso
                 }
