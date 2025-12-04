@@ -1411,9 +1411,14 @@ class FileMover:
         elif destination == 'cache':
             # Check if file is already on cache
             if os.path.isfile(cache_file_name):
-                # File already on cache - just ensure it's in exclude file
+                # File already on cache - ensure it's in exclude file
                 self._add_to_exclude_file(cache_file_name)
-                logging.info(f"File already on cache, added to exclude: {cache_file_name}")
+
+                # Check for stale exclude entries from upgrades (e.g., Radarr replaced the file)
+                # Same media identity but different filename = old entry is stale
+                self._cleanup_stale_exclude_entries(cache_file_name)
+
+                logging.debug(f"File already on cache, ensured in exclude list: {os.path.basename(cache_file_name)}")
                 return None
 
             # Check if file exists on array to copy
@@ -1457,6 +1462,51 @@ class FileMover:
                         logging.debug(f"Removed from exclude file: {cache_file_name}")
                 except Exception as e:
                     logging.warning(f"Failed to remove from exclude file: {e}")
+
+    def _cleanup_stale_exclude_entries(self, current_cache_file: str) -> None:
+        """Remove stale exclude entries for the same media with different filenames.
+
+        When Radarr/Sonarr upgrades a file on the cache, the old filename becomes stale
+        in the exclude list. This finds and removes those entries.
+        """
+        if not self.mover_cache_exclude_file or not os.path.exists(self.mover_cache_exclude_file):
+            return
+
+        current_identity = get_media_identity(current_cache_file)
+        current_dir = os.path.dirname(current_cache_file)
+
+        with self._exclude_file_lock:
+            try:
+                with open(self.mover_cache_exclude_file, "r") as f:
+                    lines = [line.strip() for line in f if line.strip()]
+
+                stale_entries = []
+                for entry in lines:
+                    # Skip if it's the current file
+                    if entry == current_cache_file:
+                        continue
+
+                    # Only check entries in the same directory (same media folder)
+                    if os.path.dirname(entry) != current_dir:
+                        continue
+
+                    # Check if same media identity but file no longer exists
+                    entry_identity = get_media_identity(entry)
+                    if entry_identity == current_identity and not os.path.exists(entry):
+                        stale_entries.append(entry)
+
+                if stale_entries:
+                    updated_lines = [line for line in lines if line not in stale_entries]
+                    with open(self.mover_cache_exclude_file, "w") as f:
+                        for line in updated_lines:
+                            f.write(f"{line}\n")
+                    for entry in stale_entries:
+                        old_name = os.path.basename(entry)
+                        new_name = os.path.basename(current_cache_file)
+                        logging.info(f"Cleaned up stale exclude entry from upgrade: {old_name} -> {new_name}")
+
+            except Exception as e:
+                logging.warning(f"Failed to cleanup stale exclude entries: {e}")
 
     def _execute_move_commands(self, move_commands: List[Tuple[Tuple[str, str], str, int]],
                              max_concurrent_moves_array: int, max_concurrent_moves_cache: int,
