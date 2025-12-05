@@ -518,8 +518,8 @@ def setup():
     # ---------------- Cache Retention Period ----------------
     if 'cache_retention_hours' not in settings_data:
         print('\nCache retention prevents files from being moved back to array immediately after caching.')
-        print('This protects against accidental unwatching or Plex glitches.')
-        print('Note: This only applies to OnDeck items. Watchlist items are moved back immediately when removed.')
+        print('This protects against accidental unwatching, watchlist removal, or Plex glitches.')
+        print('Applies to all cached files (OnDeck, Watchlist, etc.).')
         print('Enter a number in hours (default) or use "d" suffix for days (e.g., 12, 12h, 2d)')
         prompt_user_for_duration('Cache retention period (default: 12h): ', '12', 'cache_retention_hours')
 

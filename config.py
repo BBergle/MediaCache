@@ -85,7 +85,7 @@ class CacheConfig:
 
     # Cache retention: how long files stay on cache before being moved back to array
     # Files cached less than this many hours ago will not be restored to array
-    # Note: This only applies to OnDeck items, not watchlist items
+    # Applies to all cached files (OnDeck, Watchlist, etc.) to protect against accidental changes
     cache_retention_hours: int = 12
 
     # Watchlist retention: auto-expire watchlist items after X days
