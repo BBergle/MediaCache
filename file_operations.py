@@ -1513,54 +1513,59 @@ class FileMover:
     def _execute_move_commands(self, move_commands: List[Tuple[Tuple[str, str], str, int]],
                              max_concurrent_moves_array: int, max_concurrent_moves_cache: int,
                              destination: str, total_bytes: int) -> None:
-        """Execute the move commands with progress tracking."""
-        import time
-        # Initialize progress tracking
-        self._completed_count = 0
-        self._total_count = len(move_commands)
+        """Execute the move commands with progress tracking using tqdm."""
+        from tqdm import tqdm
+
+        total_count = len(move_commands)
+        if total_count == 0:
+            return
+
+        # Initialize shared progress state for tqdm
+        self._tqdm_pbar = None
         self._completed_bytes = 0
         self._total_bytes = total_bytes
-        self._active_files = {}
-        self._last_display_lines = 0
-        self._last_progress_time = 0  # Rate limit progress updates
-        self._progress_update_interval = 2  # Seconds between updates
-
-        # Show initial progress bar
-        if self._total_count > 0:
-            self._print_move_progress(destination)
-            self._last_progress_time = time.time()
 
         if self.debug:
-            for i, (move_cmd, cache_file_name, file_size) in enumerate(move_commands, 1):
-                (src, dest) = move_cmd
-                if destination == 'cache':
-                    plexcached_file = src + PLEXCACHED_EXTENSION
-                    logging.info(f"[DEBUG] Would copy: {src} -> {cache_file_name}")
-                    logging.info(f"[DEBUG] Would rename: {src} -> {plexcached_file}")
-                elif destination == 'array':
-                    array_file = os.path.join(dest, os.path.basename(src))
-                    plexcached_file = array_file + PLEXCACHED_EXTENSION
-                    logging.info(f"[DEBUG] Would rename: {plexcached_file} -> {array_file}")
-                    logging.info(f"[DEBUG] Would delete: {src}")
-                self._completed_count = i
-                self._completed_bytes += file_size
-                self._print_move_progress(destination)
-            if self._total_count > 0:
-                self._print_move_progress(destination, final=True)
+            # Debug mode - no actual moves, just log what would happen
+            with tqdm(total=total_count, desc=f"Moving to {destination}", unit="file",
+                      bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]") as pbar:
+                for move_cmd, cache_file_name, file_size, original_path in move_commands:
+                    (src, dest) = move_cmd
+                    if destination == 'cache':
+                        plexcached_file = src + PLEXCACHED_EXTENSION
+                        tqdm.write(f"[DEBUG] Would copy: {src} -> {cache_file_name}")
+                        tqdm.write(f"[DEBUG] Would rename: {src} -> {plexcached_file}")
+                    elif destination == 'array':
+                        array_file = os.path.join(dest, os.path.basename(src))
+                        plexcached_file = array_file + PLEXCACHED_EXTENSION
+                        tqdm.write(f"[DEBUG] Would rename: {plexcached_file} -> {array_file}")
+                        tqdm.write(f"[DEBUG] Would delete: {src}")
+                    pbar.update(1)
         else:
+            # Real move with thread pool
             max_concurrent_moves = max_concurrent_moves_array if destination == 'array' else max_concurrent_moves_cache
-            from functools import partial
-            with ThreadPoolExecutor(max_workers=max_concurrent_moves) as executor:
-                results = list(executor.map(partial(self._move_file, destination=destination), move_commands))
+
+            # Create tqdm progress bar with data size info
+            total_size_str = self._format_bytes(total_bytes)
+            with tqdm(total=total_count, desc=f"Moving to {destination} (0 B / {total_size_str})",
+                      unit="file", bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]") as pbar:
+                self._tqdm_pbar = pbar
+
+                from functools import partial
+                with ThreadPoolExecutor(max_workers=max_concurrent_moves) as executor:
+                    results = list(executor.map(partial(self._move_file, destination=destination), move_commands))
+
                 errors = [result for result in results if result == 1]
                 partial_successes = [result for result in results if result == 2]
-                # Print final progress
-                if self._total_count > 0:
-                    self._print_move_progress(destination, final=True)
-                if partial_successes:
-                    logging.warning(f"Finished moving files: {len(errors)} errors, {len(partial_successes)} partial (missing .plexcached)")
-                else:
-                    logging.info(f"Finished moving files with {len(errors)} errors.")
+
+            self._tqdm_pbar = None
+
+            if partial_successes:
+                logging.warning(f"Finished moving files: {len(errors)} errors, {len(partial_successes)} partial (missing .plexcached)")
+            elif errors:
+                logging.warning(f"Finished moving files with {len(errors)} errors.")
+            else:
+                logging.info(f"Finished moving {total_count} files successfully.")
     
     def _move_file(self, move_cmd_with_cache: Tuple[Tuple[str, str], str, int, str], destination: str) -> int:
         """Move a single file using the .plexcached approach.
@@ -1575,20 +1580,12 @@ class FileMover:
         2. Delete cache copy
         3. (Exclude file update handled separately by caller)
         """
+        from tqdm import tqdm
+
         (src, dest), cache_file_name, file_size, original_path = move_cmd_with_cache
-        thread_id = threading.get_ident()
         filename = os.path.basename(src)
 
         try:
-            import time
-            # Register this file as actively being moved
-            with self._progress_lock:
-                self._active_files[thread_id] = (filename, file_size)
-                # Rate-limit progress updates
-                if time.time() - self._last_progress_time >= self._progress_update_interval:
-                    self._print_move_progress(destination)
-                    self._last_progress_time = time.time()
-
             if destination == 'cache':
                 result = self._move_to_cache(src, dest, cache_file_name, original_path)
             elif destination == 'array':
@@ -1596,24 +1593,23 @@ class FileMover:
             else:
                 result = 0
 
-            # Update progress counter
+            # Update tqdm progress bar
             with self._progress_lock:
-                self._completed_count += 1
                 self._completed_bytes += file_size
-                if thread_id in self._active_files:
-                    del self._active_files[thread_id]
-                # Rate-limit progress updates
-                if time.time() - self._last_progress_time >= self._progress_update_interval:
-                    self._print_move_progress(destination)
-                    self._last_progress_time = time.time()
+                if self._tqdm_pbar:
+                    # Update description to show data progress
+                    completed_str = self._format_bytes(self._completed_bytes)
+                    total_str = self._format_bytes(self._total_bytes)
+                    self._tqdm_pbar.set_description(f"Moving to {destination} ({completed_str} / {total_str})")
+                    self._tqdm_pbar.update(1)
 
             return result
         except Exception as e:
-            # Remove from active files on error
+            # Still update progress on error
             with self._progress_lock:
-                if thread_id in self._active_files:
-                    del self._active_files[thread_id]
-            logging.error(f"Error moving file: {type(e).__name__}: {e}")
+                if self._tqdm_pbar:
+                    self._tqdm_pbar.update(1)
+            tqdm.write(f"Error moving {filename}: {type(e).__name__}: {e}")
             return 1
 
     def _move_to_cache(self, array_file: str, cache_path: str, cache_file_name: str,
@@ -1680,10 +1676,11 @@ class FileMover:
                 source = self._source_map.get(original_path, "unknown") if original_path else "unknown"
                 self.timestamp_tracker.record_cache_time(cache_file_name, source)
 
-            # Log successful move (use _log_file_only during progress bar display)
+            # Log successful move using tqdm.write to avoid progress bar interference
+            from tqdm import tqdm
             file_size = os.path.getsize(cache_file_name)
             size_str = self._format_bytes(file_size) if hasattr(self, '_format_bytes') else f"{file_size} bytes"
-            self._log_file_only(f"Successfully cached: {os.path.basename(cache_file_name)} ({size_str})")
+            tqdm.write(f"Successfully cached: {os.path.basename(cache_file_name)} ({size_str})")
 
             return 0
         except Exception as e:
@@ -1770,10 +1767,11 @@ class FileMover:
                 if self.timestamp_tracker:
                     self.timestamp_tracker.remove_entry(cache_file)
 
-                # Log successful restore (use _log_file_only during progress bar display)
+                # Log successful restore using tqdm.write to avoid progress bar interference
+                from tqdm import tqdm
                 file_size = os.path.getsize(array_file)
                 size_str = self._format_bytes(file_size) if hasattr(self, '_format_bytes') else f"{file_size} bytes"
-                self._log_file_only(f"Successfully restored to array: {os.path.basename(array_file)} ({size_str})")
+                tqdm.write(f"Successfully restored to array: {os.path.basename(array_file)} ({size_str})")
 
                 return 0
             else:
@@ -1810,74 +1808,6 @@ class FileMover:
             return f"{bytes_value / (1024 ** 2):.1f} MB"
         else:
             return f"{bytes_value / (1024 ** 3):.1f} GB"
-
-    def _print_move_progress(self, destination: str, final: bool = False) -> None:
-        """Print progress update with visual progress bar and active file queue."""
-        if self._total_count == 0:
-            return
-
-        completed = self._completed_count
-        percentage = (completed / self._total_count) * 100
-        bar_width = 30
-        filled = int(bar_width * completed / self._total_count)
-        bar = '█' * filled + '░' * (bar_width - filled)
-
-        # Format data progress
-        completed_str = self._format_bytes(self._completed_bytes)
-        total_str = self._format_bytes(self._total_bytes)
-        data_progress = f"{completed_str} / {total_str}"
-
-        active_files = list(self._active_files.values())
-
-        # Clear previous display first (move up and clear each line)
-        if self._last_display_lines > 0:
-            for _ in range(self._last_display_lines):
-                print('\033[A\033[2K', end='')
-
-        if final:
-            # Print final summary
-            print(f"[{bar}] 100% ({completed}/{self._total_count}) - {data_progress} - Moved to {destination}")
-            self._last_display_lines = 0
-        else:
-            # Build the display lines
-            lines = []
-            lines.append(f"[{bar}] {percentage:.0f}% ({completed}/{self._total_count}) - {data_progress} - Moving to {destination}...")
-
-            if active_files:
-                lines.append(f"  Currently moving ({len(active_files)} active):")
-                for filename, _ in active_files[:5]:  # Limit to 5 active files shown
-                    display_name = filename[:50] + '...' if len(filename) > 50 else filename
-                    lines.append(f"    -> {display_name}")
-                if len(active_files) > 5:
-                    lines.append(f"    ... and {len(active_files) - 5} more")
-
-            # Print all lines and track count for next clear
-            for line in lines:
-                print(line)
-            self._last_display_lines = len(lines)
-
-    def _log_file_only(self, message: str, level: int = logging.INFO) -> None:
-        """Log a message to file only, suppressing console output.
-
-        This is used during progress bar display to avoid cluttering the screen
-        while still recording completion messages in the log file.
-        """
-        logger = logging.getLogger()
-
-        # Temporarily disable console handlers
-        console_handlers = []
-        for handler in logger.handlers:
-            if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
-                console_handlers.append((handler, handler.level))
-                handler.setLevel(logging.CRITICAL + 1)  # Effectively disable
-
-        # Log the message (will only go to file handlers)
-        logger.log(level, message)
-
-        # Re-enable console handlers
-        for handler, original_level in console_handlers:
-            handler.setLevel(original_level)
-
 
 class PlexcachedRestorer:
     """Emergency restore utility to rename all .plexcached files back to originals."""
