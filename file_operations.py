@@ -1680,10 +1680,10 @@ class FileMover:
                 source = self._source_map.get(original_path, "unknown") if original_path else "unknown"
                 self.timestamp_tracker.record_cache_time(cache_file_name, source)
 
-            # Log successful move
+            # Log successful move (use _log_file_only during progress bar display)
             file_size = os.path.getsize(cache_file_name)
             size_str = self._format_bytes(file_size) if hasattr(self, '_format_bytes') else f"{file_size} bytes"
-            logging.info(f"Successfully cached: {os.path.basename(cache_file_name)} ({size_str})")
+            self._log_file_only(f"Successfully cached: {os.path.basename(cache_file_name)} ({size_str})")
 
             return 0
         except Exception as e:
@@ -1770,10 +1770,10 @@ class FileMover:
                 if self.timestamp_tracker:
                     self.timestamp_tracker.remove_entry(cache_file)
 
-                # Log successful restore
+                # Log successful restore (use _log_file_only during progress bar display)
                 file_size = os.path.getsize(array_file)
                 size_str = self._format_bytes(file_size) if hasattr(self, '_format_bytes') else f"{file_size} bytes"
-                logging.info(f"Successfully restored to array: {os.path.basename(array_file)} ({size_str})")
+                self._log_file_only(f"Successfully restored to array: {os.path.basename(array_file)} ({size_str})")
 
                 return 0
             else:
@@ -1855,6 +1855,28 @@ class FileMover:
             for line in lines:
                 print(line)
             self._last_display_lines = len(lines)
+
+    def _log_file_only(self, message: str, level: int = logging.INFO) -> None:
+        """Log a message to file only, suppressing console output.
+
+        This is used during progress bar display to avoid cluttering the screen
+        while still recording completion messages in the log file.
+        """
+        logger = logging.getLogger()
+
+        # Temporarily disable console handlers
+        console_handlers = []
+        for handler in logger.handlers:
+            if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+                console_handlers.append((handler, handler.level))
+                handler.setLevel(logging.CRITICAL + 1)  # Effectively disable
+
+        # Log the message (will only go to file handlers)
+        logger.log(level, message)
+
+        # Re-enable console handlers
+        for handler, original_level in console_handlers:
+            handler.setLevel(original_level)
 
 
 class PlexcachedRestorer:
