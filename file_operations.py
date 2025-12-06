@@ -1546,12 +1546,12 @@ class FileMover:
             max_concurrent_moves = max_concurrent_moves_array if destination == 'array' else max_concurrent_moves_cache
 
             # Create tqdm progress bar with data size info
-            # mininterval=0.5 forces more frequent updates, dynamic_ncols adapts to terminal width
+            # ncols=80 keeps bar compact, mininterval=0.5 forces more frequent updates
             import sys
             total_size_str = self._format_bytes(total_bytes)
             with tqdm(total=total_count, desc=f"Moving to {destination} (0 B / {total_size_str})",
-                      unit="file", bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
-                      mininterval=0.5, dynamic_ncols=True, file=sys.stdout) as pbar:
+                      unit="file", bar_format="{l_bar}{bar:20}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
+                      mininterval=0.5, ncols=80, file=sys.stdout) as pbar:
                 self._tqdm_pbar = pbar
 
                 from functools import partial
