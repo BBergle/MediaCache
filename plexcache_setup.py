@@ -1,4 +1,4 @@
-import json, os, requests, ntpath, posixpath, subprocess, re
+import json, os, requests, ntpath, posixpath, re, uuid, time, webbrowser
 from urllib.parse import urlparse
 from plexapi.server import PlexServer
 from plexapi.exceptions import BadRequest
@@ -156,76 +156,131 @@ def is_unraid():
     return os.path.exists('/etc/unraid-version')
 
 
-def auto_detect_plex_token():
-    """
-    Auto-detect Plex token from Preferences.xml on Unraid.
-    Uses optimized search: finds appdata/apps folders first, then searches within.
-    Returns tuple of (token, preferences_path) or (None, None) if not found.
-    """
-    if not is_unraid():
-        return None, None
+# ----------------  Plex OAuth PIN Authentication ----------------
 
-    print("Searching for Plex installation...")
+# PlexCache-R client identifier - stored in settings for consistency
+PLEXCACHE_CLIENT_ID_KEY = 'plexcache_client_id'
+PLEXCACHE_PRODUCT_NAME = 'PlexCache-R'
+PLEXCACHE_PRODUCT_VERSION = '1.0'
 
-    # Step 1: Find appdata/apps folders first (fast, limited scope)
+
+def get_or_create_client_id(settings: dict) -> str:
+    """Get existing client ID from settings or create a new one."""
+    if PLEXCACHE_CLIENT_ID_KEY in settings:
+        return settings[PLEXCACHE_CLIENT_ID_KEY]
+    # Generate new UUID for this installation
+    client_id = str(uuid.uuid4())
+    settings[PLEXCACHE_CLIENT_ID_KEY] = client_id
+    return client_id
+
+
+def plex_oauth_authenticate(settings: dict, timeout_seconds: int = 300):
+    """
+    Authenticate with Plex using the PIN-based OAuth flow.
+
+    This is the official Plex authentication method that provides a user-scoped token.
+
+    Workflow:
+    1. Generate a PIN via POST to plex.tv/api/v2/pins
+    2. User opens URL in browser and logs in
+    3. Script polls until token is returned or timeout
+    4. Returns the authentication token
+
+    Args:
+        settings: The settings dict (used to get/store client ID)
+        timeout_seconds: How long to wait for user to authenticate (default 5 min)
+
+    Returns:
+        Authentication token string, or None if failed/cancelled
+    """
+    client_id = get_or_create_client_id(settings)
+
+    headers = {
+        'Accept': 'application/json',
+        'X-Plex-Product': PLEXCACHE_PRODUCT_NAME,
+        'X-Plex-Version': PLEXCACHE_PRODUCT_VERSION,
+        'X-Plex-Client-Identifier': client_id,
+    }
+
+    # Step 1: Request a PIN
+    print("\nRequesting authentication PIN from Plex...")
     try:
-        result = subprocess.run(
-            ['find', '/mnt', '-maxdepth', '4', '-type', 'd', '(', '-name', 'appdata', '-o', '-name', 'apps', ')'],
-            capture_output=True, text=True, timeout=30
+        response = requests.post(
+            'https://plex.tv/api/v2/pins',
+            headers=headers,
+            data={'strong': 'true'},  # Request a strong (long-lived) token
+            timeout=30
         )
-        app_folders = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
-    except (subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
-        print(f"Error searching for app folders: {e}")
-        return None, None
+        response.raise_for_status()
+        pin_data = response.json()
+    except requests.RequestException as e:
+        print(f"Error requesting PIN from Plex: {e}")
+        return None
 
-    # Step 2: Search for Plex Preferences.xml within those folders
-    # Use */Plex Media Server/Preferences.xml to match both native installs and Docker variants
-    preferences_path = None
-    for folder in app_folders:
-        try:
-            result = subprocess.run(
-                ['find', folder, '-maxdepth', '8', '-path', '*/Plex Media Server/Preferences.xml'],
-                capture_output=True, text=True, timeout=30
-            )
-            if result.stdout.strip():
-                preferences_path = result.stdout.strip().split('\n')[0]
-                break
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-            continue
+    pin_id = pin_data.get('id')
+    pin_code = pin_data.get('code')
 
-    # Step 3: Fallback to broader search if not found in appdata/apps folders
-    if not preferences_path:
-        print("Not found in appdata/apps folders, searching /mnt (this may take a moment)...")
-        try:
-            result = subprocess.run(
-                ['find', '/mnt', '-maxdepth', '10', '-path', '*/Plex Media Server/Preferences.xml'],
-                capture_output=True, text=True, timeout=60
-            )
-            if result.stdout.strip():
-                preferences_path = result.stdout.strip().split('\n')[0]
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
-            print(f"Error during fallback search: {e}")
-            return None, None
+    if not pin_id or not pin_code:
+        print("Error: Invalid response from Plex PIN endpoint")
+        return None
 
-    if not preferences_path:
-        print("Could not find Plex Preferences.xml")
-        return None, None
+    # Step 2: Build the auth URL and prompt user
+    auth_url = f"https://app.plex.tv/auth#?clientID={client_id}&code={pin_code}&context%5Bdevice%5D%5Bproduct%5D={PLEXCACHE_PRODUCT_NAME}"
 
-    print(f"Found: {preferences_path}")
+    print("\n" + "=" * 70)
+    print("PLEX AUTHENTICATION")
+    print("=" * 70)
+    print("\nPlease open the following URL in your browser to authenticate:")
+    print(f"\n  {auth_url}\n")
 
-    # Step 4: Extract token from Preferences.xml
+    # Try to open browser automatically
     try:
-        with open(preferences_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        match = re.search(r'PlexOnlineToken="([^"]+)"', content)
-        if match:
-            return match.group(1), preferences_path
-        else:
-            print("Could not find PlexOnlineToken in Preferences.xml")
-            return None, None
-    except (IOError, OSError) as e:
-        print(f"Error reading Preferences.xml: {e}")
-        return None, None
+        webbrowser.open(auth_url)
+        print("(A browser window should have opened automatically)")
+    except Exception:
+        print("(Could not open browser automatically - please copy the URL above)")
+
+    print("\nAfter logging in and clicking 'Allow', return here.")
+    print(f"Waiting for authentication (timeout: {timeout_seconds // 60} minutes)...")
+    print("=" * 70)
+
+    # Step 3: Poll for the token
+    poll_interval = 2  # seconds between polls
+    start_time = time.time()
+
+    while time.time() - start_time < timeout_seconds:
+        try:
+            response = requests.get(
+                f'https://plex.tv/api/v2/pins/{pin_id}',
+                headers=headers,
+                timeout=30
+            )
+            response.raise_for_status()
+            pin_status = response.json()
+
+            auth_token = pin_status.get('authToken')
+            if auth_token:
+                print("\nAuthentication successful!")
+                return auth_token
+
+            # Check if PIN expired
+            if pin_status.get('expiresAt'):
+                # PIN is still valid, keep polling
+                pass
+
+        except requests.RequestException as e:
+            print(f"\nWarning: Error checking PIN status: {e}")
+            # Continue polling despite transient errors
+
+        # Show progress indicator
+        elapsed = int(time.time() - start_time)
+        remaining = timeout_seconds - elapsed
+        print(f"\r  Waiting... ({remaining}s remaining)    ", end='', flush=True)
+
+        time.sleep(poll_interval)
+
+    print("\n\nAuthentication timed out. Please try again.")
+    return None
 
 
 # ---------------- Setup Function ----------------
@@ -249,38 +304,42 @@ def setup():
     while 'PLEX_TOKEN' not in settings_data:
         token = None
 
-        # Offer auto-detection on Unraid
-        if is_unraid():
-            while True:
-                auto_detect = input('\nWould you like to auto-detect your Plex token? [Y/n] ') or 'yes'
-                if auto_detect.lower() in ['y', 'yes']:
-                    detected_token, plex_path = auto_detect_plex_token()
-                    if detected_token:
-                        # Show partial token for security (first 8 and last 4 chars)
-                        if len(detected_token) > 12:
-                            masked_token = detected_token[:8] + '...' + detected_token[-4:]
-                        else:
-                            masked_token = detected_token[:4] + '...'
-                        print(f"Token found: {masked_token}")
-                        while True:
-                            use_token = input(f'Use this token? [Y/n] ') or 'yes'
-                            if use_token.lower() in ['y', 'yes']:
-                                token = detected_token
-                                break
-                            elif use_token.lower() in ['n', 'no']:
-                                print("Token not used. Please enter manually.")
-                                break
-                            else:
-                                print("Invalid choice. Please enter either yes or no")
-                    break
-                elif auto_detect.lower() in ['n', 'no']:
-                    break
-                else:
-                    print("Invalid choice. Please enter either yes or no")
+        # Offer authentication options
+        print("\n" + "-" * 60)
+        print("PLEX AUTHENTICATION")
+        print("-" * 60)
+        print("\nHow would you like to authenticate with Plex?")
+        print("  1. Authenticate via Plex.tv (recommended - opens browser)")
+        print("  2. Enter token manually (from browser inspection)")
+        print("")
 
-        # Manual entry if no token yet
-        if not token:
-            token = input('\nEnter your plex token: ')
+        while token is None:
+            auth_choice = input("Select option [1/2]: ").strip()
+
+            if auth_choice == '1':
+                # OAuth PIN-based authentication
+                token = plex_oauth_authenticate(settings_data)
+                if token is None:
+                    print("\nOAuth authentication failed or was cancelled.")
+                    retry = input("Would you like to try again or enter token manually? [retry/manual] ").strip().lower()
+                    if retry == 'manual':
+                        token = input('\nEnter your plex token: ')
+                    # else loop continues for retry
+                break
+
+            elif auth_choice == '2':
+                # Manual token entry
+                print("\nTo get your token manually:")
+                print("  1. Open Plex Web App in your browser")
+                print("  2. Open Developer Tools (F12) -> Network tab")
+                print("  3. Refresh the page and look for any request to plex.tv")
+                print("  4. Find 'X-Plex-Token' in the request headers")
+                print("")
+                token = input('Enter your plex token: ')
+                break
+
+            else:
+                print("Invalid choice. Please enter 1 or 2")
 
         if not token.strip():
             print("Token is not valid. It cannot be empty.")
@@ -786,6 +845,18 @@ if os.path.exists(settings_filename):
                     print("Skipping new settings. You can configure them later or edit the settings file directly.\n")
             else:
                 print("Configuration exists and appears to be valid.")
+
+            # Offer to re-authenticate (useful for switching from auto-detected to OAuth token)
+            reauth = input("\nWould you like to re-authenticate with Plex? [y/N] ") or 'no'
+            if reauth.lower() in ['y', 'yes']:
+                print("\nRe-authenticating will replace your current Plex token.")
+                del settings_data['PLEX_TOKEN']
+                if 'plexcache_client_id' in settings_data:
+                    # Keep the client ID for consistency
+                    pass
+                setup()
+                # Reload settings after setup modifies them
+                settings_data = read_existing_settings(settings_filename)
 
             # Always offer to refresh users (fixes is_local detection for existing configs)
             if settings_data.get('users_toggle') and settings_data.get('users'):
