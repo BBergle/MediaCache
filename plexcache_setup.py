@@ -850,13 +850,56 @@ if os.path.exists(settings_filename):
             reauth = input("\nWould you like to re-authenticate with Plex? [y/N] ") or 'no'
             if reauth.lower() in ['y', 'yes']:
                 print("\nRe-authenticating will replace your current Plex token.")
-                del settings_data['PLEX_TOKEN']
-                if 'plexcache_client_id' in settings_data:
-                    # Keep the client ID for consistency
-                    pass
-                setup()
-                # Reload settings after setup modifies them
-                settings_data = read_existing_settings(settings_filename)
+                new_token = None
+
+                # Run OAuth flow directly (not full setup)
+                print("\n" + "-" * 60)
+                print("PLEX AUTHENTICATION")
+                print("-" * 60)
+                print("\nHow would you like to authenticate with Plex?")
+                print("  1. Authenticate via Plex.tv (recommended - opens browser)")
+                print("  2. Enter token manually (from browser inspection)")
+                print("")
+
+                while new_token is None:
+                    auth_choice = input("Select option [1/2]: ").strip()
+
+                    if auth_choice == '1':
+                        new_token = plex_oauth_authenticate(settings_data)
+                        if new_token is None:
+                            print("\nOAuth authentication failed or was cancelled.")
+                            retry = input("Would you like to try again or enter token manually? [retry/manual] ").strip().lower()
+                            if retry == 'manual':
+                                new_token = input('\nEnter your plex token: ')
+                        break
+
+                    elif auth_choice == '2':
+                        print("\nTo get your token manually:")
+                        print("  1. Open Plex Web App in your browser")
+                        print("  2. Open Developer Tools (F12) -> Network tab")
+                        print("  3. Refresh the page and look for any request to plex.tv")
+                        print("  4. Find 'X-Plex-Token' in the request headers")
+                        print("")
+                        new_token = input('Enter your plex token: ')
+                        break
+
+                    else:
+                        print("Invalid choice. Please enter 1 or 2")
+
+                if new_token and new_token.strip():
+                    # Validate the new token
+                    try:
+                        plex = PlexServer(settings_data['PLEX_URL'], new_token)
+                        user = plex.myPlexAccount().username
+                        print(f"Connection successful! Currently connected as {user}")
+                        settings_data['PLEX_TOKEN'] = new_token
+                        write_settings(settings_filename, settings_data)
+                        print("New token saved!")
+                    except Exception as e:
+                        print(f"Error: Could not connect with new token: {e}")
+                        print("Keeping existing token.")
+                else:
+                    print("No valid token provided. Keeping existing token.")
 
             # Always offer to refresh users (fixes is_local detection for existing configs)
             if settings_data.get('users_toggle') and settings_data.get('users'):
