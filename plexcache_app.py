@@ -582,7 +582,7 @@ class PlexCacheApp:
 
         # Calculate current PlexCache usage from exclude file
         current_usage = 0
-        _, _, exclude_file = self.config_manager.get_cache_files()
+        exclude_file = self.config_manager.get_mover_exclude_file()
         if exclude_file.exists():
             try:
                 with open(exclude_file, 'r') as f:
