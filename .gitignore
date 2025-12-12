@@ -15,3 +15,6 @@ plexcache_user_tokens.json
 # Old cache files (deprecated in v2.0)
 plexcache_watchlist_cache.json
 plexcache_watched_cache.json
+
+# Local documentation
+FUTURE_ENHANCEMENTS.md

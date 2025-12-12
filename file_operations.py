@@ -804,6 +804,13 @@ class FilePathModifier:
 
         result = []
         for file_path in files:
+            # Skip paths already in real_source format (prevents double-conversion)
+            # This is critical when plex_source is "/" - all paths start with "/"
+            if file_path.startswith(self.real_source):
+                logging.debug(f"Path already converted, skipping: {file_path}")
+                result.append(file_path)
+                continue
+
             # Pass through paths that are already converted (don't start with plex_source)
             if not file_path.startswith(self.plex_source):
                 result.append(file_path)

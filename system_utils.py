@@ -196,7 +196,19 @@ class FileUtils:
     
     def get_total_size_of_files(self, files: list) -> Tuple[float, str]:
         """Calculate total size of files in human-readable format."""
-        total_size_bytes = sum(os.path.getsize(file) for file in files)
+        total_size_bytes = 0
+        skipped_files = []
+        for file in files:
+            try:
+                total_size_bytes += os.path.getsize(file)
+            except (OSError, FileNotFoundError):
+                skipped_files.append(file)
+
+        if skipped_files:
+            logging.warning(f"Could not get size for {len(skipped_files)} files (will skip during move)")
+            for f in skipped_files:
+                logging.debug(f"  Skipping inaccessible file: {f}")
+
         return self._convert_bytes_to_readable_size(total_size_bytes)
     
     def _convert_bytes_to_readable_size(self, size_bytes: int) -> Tuple[float, str]:
