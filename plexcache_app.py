@@ -74,6 +74,9 @@ class PlexCacheApp:
             logging.debug("Initializing components...")
             self._initialize_components()
 
+            # Clean up stale exclude list entries (self-healing)
+            self.file_filter.clean_stale_exclude_entries()
+
             # Check paths
             logging.debug("Validating paths...")
             self._check_paths()

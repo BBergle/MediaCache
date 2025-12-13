@@ -1305,6 +1305,53 @@ class FileFilter:
             logging.exception(f"Error removing files from exclude list: {type(e).__name__}: {e}")
             return False
 
+    def clean_stale_exclude_entries(self) -> int:
+        """
+        Remove exclude list entries for files that no longer exist on cache.
+
+        This is a self-healing mechanism: if files are manually deleted from cache,
+        or if the cache drive has issues, stale entries are automatically cleaned up.
+
+        Does NOT add new files - only removes entries where the file no longer exists.
+        This ensures we don't interfere with Mover Tuning's management of other files.
+
+        Returns:
+            Number of stale entries removed.
+        """
+        if not self.mover_cache_exclude_file or not os.path.exists(self.mover_cache_exclude_file):
+            return 0
+
+        try:
+            with open(self.mover_cache_exclude_file, 'r') as f:
+                current_entries = [line.strip() for line in f if line.strip()]
+
+            if not current_entries:
+                return 0
+
+            # Keep only entries where file still exists
+            valid_entries = []
+            stale_entries = []
+
+            for entry in current_entries:
+                if os.path.exists(entry):
+                    valid_entries.append(entry)
+                else:
+                    stale_entries.append(entry)
+                    logging.debug(f"Removing stale exclude entry: {entry}")
+
+            # Only rewrite file if we found stale entries
+            if stale_entries:
+                with open(self.mover_cache_exclude_file, 'w') as f:
+                    for entry in valid_entries:
+                        f.write(entry + '\n')
+                logging.info(f"Cleaned {len(stale_entries)} stale entries from exclude list")
+
+            return len(stale_entries)
+
+        except Exception as e:
+            logging.warning(f"Error cleaning stale exclude entries: {type(e).__name__}: {e}")
+            return 0
+
 
 class FileMover:
     """Handles file moving operations.
