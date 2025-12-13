@@ -95,10 +95,10 @@ class PlexCacheApp:
 
 
             # Update Unraid mover exclusion file
-            logging.info("Updating Unraid mover exclusions...")
+            logging.debug("Updating Unraid mover exclusions...")
             try:
                 self._update_unraid_mover_exclusions()
-                logging.info("Unraid mover exclusions updated.")
+                logging.debug("Unraid mover exclusions updated.")
             except Exception as e:
                 logging.error(f"Failed to update Unraid mover exclusions: {e}")
 
@@ -796,9 +796,6 @@ class PlexCacheApp:
 
         return result_str.rstrip(", ") or "less than 1 second"
     
-
-
-
 def main():
     """Main entry point."""
     dry_run = "--dry-run" in sys.argv or "--debug" in sys.argv  # --debug is alias for backwards compatibility
