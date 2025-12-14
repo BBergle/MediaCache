@@ -17,7 +17,7 @@ from config import ConfigManager
 from logging_config import LoggingManager
 from system_utils import SystemDetector, PathConverter, FileUtils, SingleInstanceLock
 from plex_api import PlexManager, OnDeckItem
-from file_operations import FilePathModifier, SubtitleFinder, FileFilter, FileMover, CacheCleanup, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration
+from file_operations import FilePathModifier, MultiPathModifier, SubtitleFinder, FileFilter, FileMover, CacheCleanup, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration
 
 
 class PlexCacheApp:
@@ -218,12 +218,21 @@ class PlexCacheApp:
         
         # Initialize file operation components
         logging.debug("Initializing file operation components...")
-        self.file_path_modifier = FilePathModifier(
-            plex_source=self.config_manager.paths.plex_source,
-            real_source=self.config_manager.paths.real_source,
-            plex_library_folders=self.config_manager.paths.plex_library_folders or [],
-            nas_library_folders=self.config_manager.paths.nas_library_folders or []
-        )
+
+        # Use MultiPathModifier if path_mappings is configured, otherwise legacy FilePathModifier
+        if self.config_manager.paths.path_mappings:
+            logging.info(f"Using multi-path mode with {len(self.config_manager.paths.path_mappings)} mappings")
+            self.file_path_modifier = MultiPathModifier(
+                mappings=self.config_manager.paths.path_mappings
+            )
+        else:
+            logging.debug("Using legacy single-path mode")
+            self.file_path_modifier = FilePathModifier(
+                plex_source=self.config_manager.paths.plex_source,
+                real_source=self.config_manager.paths.real_source,
+                plex_library_folders=self.config_manager.paths.plex_library_folders or [],
+                nas_library_folders=self.config_manager.paths.nas_library_folders or []
+            )
         
         self.subtitle_finder = SubtitleFinder()
         
@@ -266,6 +275,9 @@ class PlexCacheApp:
         )
         self.ondeck_tracker = OnDeckTracker(ondeck_tracker_file)
 
+        # Pass path_modifier for multi-path support (None for legacy single-path mode)
+        path_modifier = self.file_path_modifier if isinstance(self.file_path_modifier, MultiPathModifier) else None
+
         self.file_filter = FileFilter(
             real_source=self.config_manager.paths.real_source,
             cache_dir=self.config_manager.paths.cache_dir,
@@ -274,7 +286,8 @@ class PlexCacheApp:
             timestamp_tracker=self.timestamp_tracker,
             cache_retention_hours=self.config_manager.cache.cache_retention_hours,
             ondeck_tracker=self.ondeck_tracker,
-            watchlist_tracker=self.watchlist_tracker
+            watchlist_tracker=self.watchlist_tracker,
+            path_modifier=path_modifier
         )
 
         self.file_mover = FileMover(
@@ -284,7 +297,8 @@ class PlexCacheApp:
             file_utils=self.file_utils,
             debug=self.debug,
             mover_cache_exclude_file=str(mover_exclude),
-            timestamp_tracker=self.timestamp_tracker
+            timestamp_tracker=self.timestamp_tracker,
+            path_modifier=path_modifier
         )
         
         self.cache_cleanup = CacheCleanup(

@@ -1794,7 +1794,8 @@ class FileFilter:
                  timestamp_tracker: Optional['CacheTimestampTracker'] = None,
                  cache_retention_hours: int = 12,
                  ondeck_tracker: Optional['OnDeckTracker'] = None,
-                 watchlist_tracker: Optional['WatchlistTracker'] = None):
+                 watchlist_tracker: Optional['WatchlistTracker'] = None,
+                 path_modifier: Optional['MultiPathModifier'] = None):
         self.real_source = real_source
         self.cache_dir = cache_dir
         self.is_unraid = is_unraid
@@ -1803,6 +1804,7 @@ class FileFilter:
         self.cache_retention_hours = cache_retention_hours
         self.ondeck_tracker = ondeck_tracker
         self.watchlist_tracker = watchlist_tracker
+        self.path_modifier = path_modifier  # For multi-path support
 
     def _add_to_exclude_file(self, cache_file_name: str) -> None:
         """Add a file to the exclude list."""
@@ -1832,12 +1834,20 @@ class FileFilter:
         if not files:
             return []
 
+        non_cacheable_count = 0
         for file in files:
             if file in processed_files or (files_to_skip and file in files_to_skip):
                 continue
             processed_files.add(file)
 
-            cache_file_name = self._get_cache_paths(file)[1]
+            cache_path, cache_file_name = self._get_cache_paths(file)
+
+            # Skip non-cacheable files (e.g., remote NAS in multi-path mode)
+            if cache_file_name is None:
+                non_cacheable_count += 1
+                logging.debug(f"Skipping non-cacheable path: {file}")
+                continue
+
             cache_files_to_exclude.append(cache_file_name)
 
             if destination == 'array':
@@ -1856,6 +1866,10 @@ class FileFilter:
         # Remove any cache files that were deleted during filtering from the exclude list
         if cache_files_removed:
             self.remove_files_from_exclude_list(cache_files_removed)
+
+        # Log non-cacheable files summary
+        if non_cacheable_count > 0:
+            logging.info(f"Skipped {non_cacheable_count} files from non-cacheable paths (remote storage)")
 
         return media_to
     
@@ -1955,14 +1969,25 @@ class FileFilter:
 
         return True
     
-    def _get_cache_paths(self, file: str) -> Tuple[str, str]:
-        """Get cache path and filename for a given file."""
-        # Get the cache path by replacing the real source directory with the cache directory
+    def _get_cache_paths(self, file: str) -> Tuple[str, Optional[str]]:
+        """Get cache path and filename for a given file.
+
+        Returns:
+            Tuple of (cache_path, cache_file_name).
+            cache_file_name is None if the file is not cacheable (multi-path mode).
+        """
+        # Use multi-path modifier if available
+        if self.path_modifier:
+            cache_file_name, mapping = self.path_modifier.convert_real_to_cache(file)
+            if cache_file_name is None:
+                # File is not cacheable (e.g., remote NAS)
+                return "", None
+            cache_path = os.path.dirname(cache_file_name)
+            return cache_path, cache_file_name
+
+        # Legacy single-path mode
         cache_path = os.path.dirname(file).replace(self.real_source, self.cache_dir, 1)
-        
-        # Get the cache file name by joining the cache path with the base name of the file
         cache_file_name = os.path.join(cache_path, os.path.basename(file))
-        
         return cache_path, cache_file_name
 
     def get_files_to_move_back_to_array(self, current_ondeck_items: Set[str],
@@ -2295,7 +2320,8 @@ class FileMover:
 
     def __init__(self, real_source: str, cache_dir: str, is_unraid: bool,
                  file_utils, debug: bool = False, mover_cache_exclude_file: Optional[str] = None,
-                 timestamp_tracker: Optional['CacheTimestampTracker'] = None):
+                 timestamp_tracker: Optional['CacheTimestampTracker'] = None,
+                 path_modifier: Optional['MultiPathModifier'] = None):
         self.real_source = real_source
         self.cache_dir = cache_dir
         self.is_unraid = is_unraid
@@ -2303,6 +2329,7 @@ class FileMover:
         self.debug = debug
         self.mover_cache_exclude_file = mover_cache_exclude_file
         self.timestamp_tracker = timestamp_tracker
+        self.path_modifier = path_modifier  # For multi-path support
         self._exclude_file_lock = threading.Lock()
         # Progress tracking
         self._progress_lock = threading.Lock()
@@ -2380,26 +2407,39 @@ class FileMover:
                                   max_concurrent_moves_cache, destination, total_bytes)
     
     def _get_paths(self, file_to_move: str) -> Tuple[str, str, str, str]:
-        """Get all necessary paths for file moving."""
+        """Get all necessary paths for file moving.
+
+        Returns:
+            Tuple of (user_path, cache_path, cache_file_name, user_file_name).
+        """
         # Get the user path
         user_path = os.path.dirname(file_to_move)
-        
-        # Get the relative path from the real source directory
-        relative_path = os.path.relpath(user_path, self.real_source)
-        
-        # Get the cache path by joining the cache directory with the relative path
-        cache_path = os.path.join(self.cache_dir, relative_path)
-        
-        # Get the cache file name by joining the cache path with the base name of the file to move
-        cache_file_name = os.path.join(cache_path, os.path.basename(file_to_move))
-        
+
+        # Use multi-path modifier if available
+        if self.path_modifier:
+            cache_file_name, mapping = self.path_modifier.convert_real_to_cache(file_to_move)
+            if cache_file_name is None:
+                # This shouldn't happen - non-cacheable files should be filtered earlier
+                logging.warning(f"Non-cacheable file reached FileMover: {file_to_move}")
+                # Fall back to legacy behavior
+                relative_path = os.path.relpath(user_path, self.real_source)
+                cache_path = os.path.join(self.cache_dir, relative_path)
+                cache_file_name = os.path.join(cache_path, os.path.basename(file_to_move))
+            else:
+                cache_path = os.path.dirname(cache_file_name)
+        else:
+            # Legacy single-path mode
+            relative_path = os.path.relpath(user_path, self.real_source)
+            cache_path = os.path.join(self.cache_dir, relative_path)
+            cache_file_name = os.path.join(cache_path, os.path.basename(file_to_move))
+
         # Modify the user path if unraid is True
         if self.is_unraid:
             user_path = user_path.replace("/mnt/user/", "/mnt/user0/", 1)
 
         # Get the user file name by joining the user path with the base name of the file to move
         user_file_name = os.path.join(user_path, os.path.basename(file_to_move))
-        
+
         return user_path, cache_path, cache_file_name, user_file_name
     
     def _get_move_command(self, destination: str, cache_file_name: str,
