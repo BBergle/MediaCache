@@ -470,23 +470,18 @@ class PlexCacheApp:
                     if item not in self.source_map:
                         self.source_map[item] = "watchlist"
 
-        # Process watched media
-        watched_count = 0
-        if self.config_manager.cache.watched_move:
-            logging.debug("Processing watched media...")
-            self._process_watched_media()
-            watched_count = len(self.media_to_array)
-
         # Run modify_file_paths on all collected paths to ensure consistent path format
         logging.debug("Finalizing media to cache list...")
         self.media_to_cache = self.file_path_modifier.modify_file_paths(list(modified_paths_set))
 
         # Log consolidated summary
-        logging.info(f"OnDeck: {len(ondeck_items_list)} items, Watchlist: {watchlist_count} items, Watched: {watched_count} items")
+        logging.info(f"OnDeck: {len(ondeck_items_list)} items, Watchlist: {watchlist_count} items")
 
         # Check for files that should be moved back to array (no longer needed in cache)
-        logging.debug("Checking for files to move back to array...")
-        self._check_files_to_move_back_to_array()
+        # Only check if watched_move is enabled - otherwise files stay on cache indefinitely
+        if self.config_manager.cache.watched_move:
+            logging.debug("Checking for files to move back to array...")
+            self._check_files_to_move_back_to_array()
 
     def _process_watchlist(self) -> set:
         """Process watchlist media (local API + remote RSS) and return a set of modified file paths and subtitles.
@@ -580,56 +575,6 @@ class PlexCacheApp:
 
         return result_set
 
-    
-    def _process_watched_media(self) -> None:
-        """Process watched media and identify files to move back to array."""
-        try:
-            logging.debug("Fetching watched media...")
-
-            # Get watched media from Plex server
-            fetched_media = list(self.plex_manager.get_watched_media(
-                self.config_manager.plex.valid_sections,
-                None,  # No last_updated filter - always fetch fresh
-                self.config_manager.plex.users_toggle
-            ))
-
-            retention_hours = self.config_manager.cache.cache_retention_hours
-
-            for file_path in fetched_media:
-                # Convert Plex path to real path, then to cache path
-                # file_path is raw Plex path like /data/Movies/...
-                modified_paths = self.file_path_modifier.modify_file_paths([file_path])
-                if not modified_paths:
-                    continue
-                real_path = modified_paths[0]  # /mnt/user/Movies/...
-                cache_path = real_path.replace(
-                    self.config_manager.paths.real_source,
-                    self.config_manager.paths.cache_dir, 1
-                )
-
-                # Only process files that are actually on the cache drive
-                if not os.path.isfile(cache_path):
-                    continue
-
-                # Check retention period before adding to move queue
-                if retention_hours > 0 and self.timestamp_tracker:
-                    logging.debug(f"Checking retention for watched file: {cache_path}")
-                    if self.timestamp_tracker.is_within_retention_period(cache_path, retention_hours):
-                        remaining = self.timestamp_tracker.get_retention_remaining(cache_path, retention_hours)
-                        remaining_str = f"{remaining:.0f}h" if remaining >= 1 else f"{remaining * 60:.0f}m"
-                        logging.info(f"Retention hold ({remaining_str} left): {os.path.basename(file_path)}")
-                        continue
-
-                self.media_to_array.append(file_path)
-
-            # Modify file paths and add subtitles
-            self.media_to_array = self.file_path_modifier.modify_file_paths(self.media_to_array)
-            self.media_to_array.extend(
-                self.subtitle_finder.get_media_subtitles(self.media_to_array, files_to_skip=set(self.files_to_skip))
-            )
-
-        except Exception as e:
-            logging.exception(f"An error occurred while processing the watched media: {type(e).__name__}: {e}")
     
     def _move_files(self) -> None:
         """Move files to their destinations."""
