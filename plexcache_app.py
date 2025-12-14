@@ -272,7 +272,9 @@ class PlexCacheApp:
             is_unraid=self.system_detector.is_unraid,
             mover_cache_exclude_file=str(mover_exclude),
             timestamp_tracker=self.timestamp_tracker,
-            cache_retention_hours=self.config_manager.cache.cache_retention_hours
+            cache_retention_hours=self.config_manager.cache.cache_retention_hours,
+            ondeck_tracker=self.ondeck_tracker,
+            watchlist_tracker=self.watchlist_tracker
         )
 
         self.file_mover = FileMover(

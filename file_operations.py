@@ -1579,13 +1579,17 @@ class FileFilter:
     def __init__(self, real_source: str, cache_dir: str, is_unraid: bool,
                  mover_cache_exclude_file: str,
                  timestamp_tracker: Optional['CacheTimestampTracker'] = None,
-                 cache_retention_hours: int = 12):
+                 cache_retention_hours: int = 12,
+                 ondeck_tracker: Optional['OnDeckTracker'] = None,
+                 watchlist_tracker: Optional['WatchlistTracker'] = None):
         self.real_source = real_source
         self.cache_dir = cache_dir
         self.is_unraid = is_unraid
         self.mover_cache_exclude_file = mover_cache_exclude_file or ""
         self.timestamp_tracker = timestamp_tracker
         self.cache_retention_hours = cache_retention_hours
+        self.ondeck_tracker = ondeck_tracker
+        self.watchlist_tracker = watchlist_tracker
 
     def _add_to_exclude_file(self, cache_file_name: str) -> None:
         """Add a file to the exclude list."""
@@ -1655,7 +1659,25 @@ class FileFilter:
             - cache_was_removed: True if cache file was removed (needs exclude list update)
         """
         if file in media_to_cache:
-            logging.debug(f"Skipping array move - file in media_to_cache: {file}")
+            # Look up which users still need this file
+            users = []
+            if self.ondeck_tracker:
+                entry = self.ondeck_tracker.get_entry(file)
+                if entry:
+                    users.extend(entry.get('users', []))
+            if self.watchlist_tracker and not users:
+                entry = self.watchlist_tracker.get_entry(file)
+                if entry:
+                    users.extend(entry.get('users', []))
+
+            filename = os.path.basename(file)
+            if users:
+                user_list = ', '.join(users[:3])  # Show first 3 users
+                if len(users) > 3:
+                    user_list += f" +{len(users) - 3} more"
+                logging.debug(f"Keeping in cache (OnDeck/Watchlist for {user_list}): {filename}")
+            else:
+                logging.debug(f"Keeping in cache (still needed): {filename}")
             return False, False
 
         # Note: Retention period check is handled upstream in get_files_to_move_back_to_array()
