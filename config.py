@@ -172,8 +172,8 @@ def migrate_path_settings(settings: Dict[str, Any]) -> Tuple[Dict[str, Any], boo
     real_source = settings.get("real_source", "")
     cache_dir = settings.get("cache_dir", "")
 
-    # No legacy settings to migrate
-    if not plex_source and not real_source:
+    # No legacy settings to migrate - need both plex_source and real_source
+    if not plex_source or not real_source:
         return settings, False
 
     logging.info("Migrating legacy path settings to multi-path format...")
