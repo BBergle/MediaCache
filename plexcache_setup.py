@@ -967,11 +967,21 @@ def setup(advanced_mode: bool = False):
 
         if eviction_mode in ['smart', 'fifo']:
             threshold = input('Eviction threshold % [90]: ').strip() or '90'
-            settings_data['cache_eviction_threshold_percent'] = int(threshold)
+            # Strip % sign if user included it
+            threshold = threshold.rstrip('%').strip()
+            try:
+                settings_data['cache_eviction_threshold_percent'] = int(threshold)
+            except ValueError:
+                print(f"Invalid number '{threshold}', using default 90")
+                settings_data['cache_eviction_threshold_percent'] = 90
 
             if eviction_mode == 'smart':
                 min_pri = input('Min priority to evict (0-100) [60]: ').strip() or '60'
-                settings_data['eviction_min_priority'] = int(min_pri)
+                try:
+                    settings_data['eviction_min_priority'] = int(min_pri)
+                except ValueError:
+                    print(f"Invalid number '{min_pri}', using default 60")
+                    settings_data['eviction_min_priority'] = 60
 
     # Notification Level
     if 'unraid_level' not in settings_data:
