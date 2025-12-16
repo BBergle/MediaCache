@@ -246,13 +246,13 @@ class PlexManager:
 
             # Check skip list
             if username in skip_users or token in skip_users:
-                logging.debug(f"[PLEX API] Skipping {username} (in skip list)")
+                logging.debug(f"[USER:{username}] Skipping (in skip list)")
                 continue
 
             self._user_tokens[username] = token
             self._token_cache.set_token(username, token, machine_id)
             user_type = "home" if is_local else "remote"
-            logging.debug(f"[PLEX API] Loaded {user_type} user from settings: {username}")
+            logging.debug(f"[USER:{username}] Loaded from settings ({user_type})")
             settings_loaded += 1
 
         logging.debug(f"[PLEX API] Loaded {settings_loaded} users from settings file")
@@ -310,17 +310,17 @@ class PlexManager:
 
                     # Check skip list
                     if username in skip_users:
-                        logging.debug(f"[PLEX API] Skipping user (in skip list): {username}")
+                        logging.debug(f"[USER:{username}] Skipping (in skip list)")
                         continue
 
                     # Try to get token from disk cache first
                     cached_token = self._token_cache.get_token(username, machine_id)
                     if cached_token:
                         if cached_token in skip_users:
-                            logging.debug(f"[PLEX API] Skipping {username} (token in skip list)")
+                            logging.debug(f"[USER:{username}] Skipping (token in skip list)")
                             continue
                         self._user_tokens[username] = cached_token
-                        logging.debug(f"[PLEX API] Using cached token for new user: {username}")
+                        logging.debug(f"[USER:{username}] Using cached token")
                         new_users += 1
                         continue
 
@@ -330,14 +330,14 @@ class PlexManager:
                         token = user.get_token(machine_id)
                         if token:
                             if token in skip_users:
-                                logging.debug(f"[PLEX API] Skipping {username} (token in skip list)")
+                                logging.debug(f"[USER:{username}] Skipping (token in skip list)")
                                 continue
                             self._user_tokens[username] = token
                             self._token_cache.set_token(username, token, machine_id)
-                            logging.debug(f"[PLEX API] Fetched token for new user: {username}")
+                            logging.debug(f"[USER:{username}] Fetched fresh token")
                             new_users += 1
                         else:
-                            logging.debug(f"[PLEX API] No token available for: {username}")
+                            logging.debug(f"[USER:{username}] No token available")
                     except Exception as e:
                         _log_api_error(f"get token for {username}", e)
 
@@ -349,6 +349,10 @@ class PlexManager:
         self._users_loaded = True
         total_users = len(self._user_tokens)
         logging.info(f"Connected to Plex ({total_users} users)")
+        # Log all active users for easy filtering in Log Analyzer
+        if self._user_tokens:
+            user_names = sorted(self._user_tokens.keys(), key=str.lower)
+            logging.info(f"USERS: {', '.join(user_names)}")
         return self._user_tokens
 
     def get_user_token(self, username: str) -> Optional[str]:
@@ -491,7 +495,7 @@ class PlexManager:
                     continue
                 # Check skip list
                 if username in skip_ondeck or token in skip_ondeck:
-                    logging.info(f"Skipping {username} for OnDeck — in skip list")
+                    logging.info(f"[USER:{username}] Skipping for OnDeck — in skip list")
                     continue
                 # Create a simple object to pass username to get_plex_instance
                 class UserProxy:
@@ -527,8 +531,8 @@ class PlexManager:
         for username in sorted(items_by_user.keys()):
             items = items_by_user[username]
             for item in items:
-                logging.debug(f"OnDeck found ({username}): {item.file_path}")
-            logging.debug(f"{username}: Found {len(items)} OnDeck items")
+                logging.debug(f"[USER:{username}] OnDeck found: {item.file_path}")
+            logging.debug(f"[USER:{username}] Found {len(items)} OnDeck items")
 
         return on_deck_files
 
@@ -544,10 +548,10 @@ class PlexManager:
         try:
             username, plex_instance = self.get_plex_instance(user)
             if not plex_instance:
-                logging.info(f"Skipping OnDeck fetch for {username} — no Plex instance available")
+                logging.info(f"[USER:{username}] Skipping OnDeck fetch — no Plex instance available")
                 return []
 
-            logging.debug(f"Fetching {username}'s onDeck media...")
+            logging.debug(f"[USER:{username}] Fetching onDeck media...")
 
             on_deck_files: List[OnDeckItem] = []
             # Get all sections available for the user
@@ -795,7 +799,9 @@ class PlexManager:
             for episode in episodes_to_process:
                 if len(episode.media) > 0 and len(episode.media[0].parts) > 0:
                     if not episode.isPlayed:
-                        yield (episode.media[0].parts[0].file, username, watchlisted_at)
+                        file_path = episode.media[0].parts[0].file
+                        logging.debug(f"[USER:{username}] Watchlist found: {file_path}")
+                        yield (file_path, username, watchlisted_at)
                         yielded_count += 1
                     else:
                         skipped_watched += 1
@@ -811,7 +817,9 @@ class PlexManager:
         def process_movie(file, username: str, watchlisted_at: Optional[datetime]) -> Generator[Tuple[str, str, Optional[datetime]], None, None]:
             """Process a movie and yield file path with metadata."""
             if len(file.media) > 0 and len(file.media[0].parts) > 0:
-                yield (file.media[0].parts[0].file, username, watchlisted_at)
+                file_path = file.media[0].parts[0].file
+                logging.debug(f"[USER:{username}] Watchlist found: {file_path}")
+                yield (file_path, username, watchlisted_at)
 
 
         def fetch_user_watchlist(user) -> Generator[Tuple[str, str, Optional[datetime]], None, None]:
@@ -834,7 +842,7 @@ class PlexManager:
             else:
                 current_username = user.title
 
-            logging.debug(f"Fetching watchlist media for {current_username}")
+            logging.debug(f"[USER:{current_username}] Fetching watchlist media")
 
             # Build list of valid sections for filtering
             available_sections = [section.key for section in self.plex.library.sections()]
@@ -844,10 +852,10 @@ class PlexManager:
             if user:
                 token = self._user_tokens.get(current_username)
                 if not token:
-                    logging.warning(f"[PLEX API] No cached token for {current_username}; skipping watchlist")
+                    logging.warning(f"[USER:{current_username}] No cached token; skipping watchlist")
                     return
                 if token in skip_watchlist or current_username in skip_watchlist:
-                    logging.info(f"Skipping {current_username} due to skip_watchlist")
+                    logging.info(f"[USER:{current_username}] Skipping — in watchlist skip list")
                     return
 
             # --- Obtain Plex account instance ---
@@ -866,7 +874,7 @@ class PlexManager:
                     # Main account - use the main token with a fresh session
                     self._rate_limited_api_call()
                     account = MyPlexAccount(token=self.plex_token, session=fresh_session)
-                    logging.debug(f"[PLEX API] Created fresh MyPlexAccount for main user {current_username} (fresh session)")
+                    logging.debug(f"[USER:{current_username}] Created fresh MyPlexAccount (main user)")
                 else:
                     # Home/managed user - create fresh admin account then switch to home user
                     # This isolates each request while still allowing access to home user watchlists
@@ -875,7 +883,7 @@ class PlexManager:
                         fresh_admin_account = MyPlexAccount(token=self.plex_token, session=fresh_session)
                         self._rate_limited_api_call()
                         account = fresh_admin_account.switchHomeUser(current_username)
-                        logging.debug(f"[PLEX API] Switched to home user {current_username} via fresh admin account (fresh session)")
+                        logging.debug(f"[USER:{current_username}] Switched to home user via fresh admin account")
                     except Exception as e:
                         _log_api_error(f"switch to home user {current_username}", e)
                         self.mark_watchlist_incomplete()
@@ -943,7 +951,7 @@ class PlexManager:
                 self._rate_limited_api_call()
                 # Sort by watchlistedAt descending to get most recent add date first
                 watchlist = account.watchlist(filter='released', sort='watchlistedAt:desc')
-                logging.debug(f"{current_username}: Found {len(watchlist)} watchlist items from Plex")
+                logging.debug(f"[USER:{current_username}] Found {len(watchlist)} watchlist items")
                 for item in watchlist:
                     # Get watchlistedAt timestamp from userState (addedAt is the media release date, not when added to watchlist)
                     watchlisted_at = None
@@ -966,7 +974,7 @@ class PlexManager:
                     elif file:
                         logging.debug(f"Skipping watchlist item '{file.title}' — section {file.librarySectionID} not in valid_sections {filtered_sections}")
             except Exception as e:
-                logging.error(f"Error fetching watchlist for {current_username}: {e}")
+                logging.error(f"[USER:{current_username}] Error fetching watchlist: {e}")
                 self.mark_watchlist_incomplete()
 
 
@@ -982,7 +990,7 @@ class PlexManager:
                     continue
                 # Check skip list
                 if username in skip_watchlist or token in skip_watchlist:
-                    logging.info(f"Skipping {username} for watchlist — in skip list")
+                    logging.info(f"[USER:{username}] Skipping for watchlist — in skip list")
                     continue
                 # Only include home/managed users - remote users' watchlists are handled via RSS feed
                 if username not in home_users:
