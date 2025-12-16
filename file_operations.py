@@ -646,7 +646,7 @@ class OnDeckTracker:
                         'is_current_ondeck': is_current_ondeck
                     }
                 self._data[file_path] = new_entry
-                logging.debug(f"Added new OnDeck entry: {file_path} (user: {username})")
+                logging.debug(f"Added new OnDeck entry ({username}): {file_path}")
 
             self._save()
 
@@ -1601,6 +1601,9 @@ class MultiPathModifier:
         # Filter to enabled mappings for actual path conversion
         self.mappings = [m for m in self.all_mappings if m.enabled]
 
+        # Track disabled skips across calls for consolidated logging
+        self._accumulated_disabled_skips = {}
+
         if not self.mappings:
             logging.warning("No enabled path mappings configured!")
         else:
@@ -1750,10 +1753,36 @@ class MultiPathModifier:
 
         logging.debug("Converting file paths using multi-path mappings...")
         result = []
+        disabled_skips = {}  # mapping_name -> count
+
         for file_path in files:
             converted, mapping = self.convert_plex_to_real(file_path)
             result.append(converted)
+
+            # Track files skipped due to disabled mappings
+            if mapping is None:
+                # Check if it matched a disabled mapping
+                for m in self.all_mappings:
+                    if not m.enabled and file_path.startswith(m.plex_path):
+                        disabled_skips[m.name] = disabled_skips.get(m.name, 0) + 1
+                        break
+
+        # Accumulate disabled skips for consolidated logging later
+        for name, count in disabled_skips.items():
+            self._accumulated_disabled_skips[name] = self._accumulated_disabled_skips.get(name, 0) + count
+
         return result
+
+    def log_disabled_skips_summary(self) -> None:
+        """Log a summary of all accumulated disabled library skips and reset the counter.
+
+        Call this once after all path processing is complete (e.g., end of _process_media).
+        """
+        if self._accumulated_disabled_skips:
+            total_skipped = sum(self._accumulated_disabled_skips.values())
+            mapping_names = ', '.join(sorted(self._accumulated_disabled_skips.keys()))
+            logging.info(f"Skipped {total_skipped} files from disabled libraries ({mapping_names})")
+            self._accumulated_disabled_skips = {}
 
     def get_mapping_stats(self) -> Dict[str, Dict[str, any]]:
         """Get statistics about path mappings.
@@ -1895,12 +1924,12 @@ class FileFilter:
                     cache_files_removed.append(cache_file_name)
                 if should_add:
                     media_to.append(file)
-                    logging.info(f"Adding file to array: {file}")
+                    logging.debug(f"Adding file to array: {file}")
 
             elif destination == 'cache':
                 if self._should_add_to_cache(file, cache_file_name):
                     media_to.append(file)
-                    logging.info(f"Adding file to cache: {file}")
+                    logging.debug(f"Adding file to cache: {file}")
 
         # Remove any cache files that were deleted during filtering from the exclude list
         if cache_files_removed:
@@ -2042,7 +2071,7 @@ class FileFilter:
         """
         files_to_move_back = []
         cache_paths_to_remove = []
-        retained_count = 0
+        retention_holds = []  # Collect (media_name, hours_remaining, display_name) tuples
 
         try:
             # Read the exclude file to get all files currently in cache
@@ -2138,9 +2167,11 @@ class FileFilter:
                 if self.timestamp_tracker and self.cache_retention_hours > 0:
                     if self.timestamp_tracker.is_within_retention_period(cache_file, self.cache_retention_hours):
                         remaining = self.timestamp_tracker.get_retention_remaining(cache_file, self.cache_retention_hours)
+                        display_name = self._extract_display_name(cache_file)
+                        retention_holds.append((media_name, remaining, display_name))
+                        # Log individual hold at DEBUG level with episode details
                         remaining_str = f"{remaining:.0f}h" if remaining >= 1 else f"{remaining * 60:.0f}m"
-                        logging.info(f"Retention hold ({remaining_str} left): {media_name}")
-                        retained_count += 1
+                        logging.debug(f"Retention hold ({remaining_str} left): {display_name}")
                         continue
 
                 # Media is no longer needed and retention doesn't apply, move this file back to array
@@ -2152,14 +2183,19 @@ class FileFilter:
                 else:
                     array_file = cache_file.replace(self.cache_dir, self.real_source, 1)
 
-                logging.info(f"Media no longer needed, will move back to array: {media_name} - {cache_file}")
+                display_name = self._extract_display_name(cache_file)
+                logging.debug(f"Media no longer needed, will move back to array: {display_name} - {cache_file}")
                 files_to_move_back.append(array_file)
                 cache_paths_to_remove.append(cache_file)
 
-            if retained_count > 0:
-                logging.info(f"Retained {retained_count} files due to cache retention period ({self.cache_retention_hours}h)")
+            # Log grouped retention holds summary at INFO level
+            if retention_holds:
+                grouped = self._group_retention_holds(retention_holds)
+                summary_lines = self._format_retention_summary(grouped)
+                for line in summary_lines:
+                    logging.info(line)
             if files_to_move_back:
-                logging.info(f"Found {len(files_to_move_back)} files to move back to array")
+                logging.debug(f"Found {len(files_to_move_back)} files to move back to array")
 
         except Exception as e:
             logging.exception(f"Error getting files to move back to array: {type(e).__name__}: {e}")
@@ -2265,6 +2301,96 @@ class FileFilter:
 
         except Exception:
             return None
+
+    def _extract_display_name(self, file_path: str) -> str:
+        """Extract a human-readable display name from a file path.
+
+        For TV shows: Returns "Show - S##E## - Title" format
+        For movies: Returns "Movie Title (Year)" format
+
+        Args:
+            file_path: Full path to the media file
+
+        Returns:
+            Human-readable display name
+        """
+        try:
+            filename = os.path.basename(file_path)
+            name = os.path.splitext(filename)[0]
+
+            # Remove quality/codec info in brackets
+            if '[' in name:
+                name = name[:name.index('[')].strip()
+
+            # Clean up trailing dashes
+            name = name.rstrip(' -').rstrip('-').strip()
+
+            return name if name else os.path.basename(file_path)
+        except Exception:
+            return os.path.basename(file_path)
+
+    def _group_retention_holds(self, holds: List[Tuple[str, float, str]]) -> Dict[str, List[Tuple[float, str]]]:
+        """Group retention holds by media title.
+
+        Args:
+            holds: List of (media_name, hours_remaining, display_name) tuples
+
+        Returns:
+            Dict mapping media_name to list of (hours_remaining, display_name) tuples
+        """
+        from collections import defaultdict
+        grouped = defaultdict(list)
+        for media_name, hours, display_name in holds:
+            grouped[media_name].append((hours, display_name))
+        return grouped
+
+    def _format_retention_summary(self, grouped: Dict[str, List[Tuple[float, str]]], max_titles: int = 6) -> List[str]:
+        """Format grouped retention holds for logging.
+
+        Args:
+            grouped: Dict from _group_retention_holds()
+            max_titles: Maximum titles to show before summarizing
+
+        Returns:
+            List of formatted log lines
+        """
+        lines = []
+        total_count = sum(len(v) for v in grouped.values())
+
+        if total_count == 0:
+            return lines
+
+        # Use "episodes" for TV shows (majority of cached content)
+        unit = "episode" if total_count == 1 else "episodes"
+        lines.append(f"Retention holds ({total_count} {unit}):")
+
+        # Sort by count descending
+        sorted_titles = sorted(grouped.items(), key=lambda x: len(x[1]), reverse=True)
+
+        shown_count = 0
+        for i, (title, entries) in enumerate(sorted_titles):
+            if i >= max_titles:
+                remaining_titles = len(sorted_titles) - max_titles
+                remaining_count = total_count - shown_count
+                unit = "episode" if remaining_count == 1 else "episodes"
+                lines.append(f"  ...and {remaining_titles} more titles ({remaining_count} {unit})")
+                break
+
+            hours_list = [h for h, _ in entries]
+            min_h, max_h = min(hours_list), max(hours_list)
+            # Compare rounded values to avoid "3-3h" when values like 3.2 and 3.8 round to same
+            min_rounded, max_rounded = round(min_h), round(max_h)
+            if min_rounded == max_rounded:
+                time_str = f"{min_rounded}h" if min_rounded >= 1 else f"{round(min_h * 60)}m"
+            else:
+                time_str = f"{min_rounded}-{max_rounded}h"
+
+            count = len(entries)
+            unit = "episode" if count == 1 else "episodes"
+            lines.append(f"  {title}: {count} {unit} ({time_str} remaining)")
+            shown_count += count
+
+        return lines
 
     def remove_files_from_exclude_list(self, cache_paths_to_remove: List[str]) -> bool:
         """Remove specified files from the exclude list. Returns True on success."""
@@ -2411,7 +2537,7 @@ class FileMover:
         """
         # Store source map for use during moves
         self._source_map = source_map or {}
-        logging.info(f"Moving media files to {destination}...")
+        logging.debug(f"Moving media files to {destination}...")
         logging.debug(f"Total files to process: {len(files)}")
 
         processed_files = set()
@@ -2445,7 +2571,7 @@ class FileMover:
             else:
                 logging.debug(f"No move command generated for: {file_to_move}")
 
-        logging.info(f"Generated {len(move_commands)} move commands for {destination}")
+        logging.debug(f"Generated {len(move_commands)} move commands for {destination}")
 
         # Execute the move commands
         self._execute_move_commands(move_commands, max_concurrent_moves_array,
@@ -2680,7 +2806,7 @@ class FileMover:
             elif errors:
                 logging.warning(f"Finished moving files with {len(errors)} errors.")
             else:
-                logging.info(f"Finished moving {total_count} files successfully.")
+                logging.debug(f"Finished moving {total_count} files successfully.")
     
     def _move_file(self, move_cmd_with_cache: Tuple[Tuple[str, str], str, int, str], destination: str) -> int:
         """Move a single file using the .plexcached approach.
@@ -2905,11 +3031,8 @@ class FileMover:
                 if self.timestamp_tracker:
                     self.timestamp_tracker.remove_entry(cache_file)
 
-                # Log successful restore using tqdm.write to avoid progress bar interference
-                from tqdm import tqdm
-                file_size = os.path.getsize(array_file)
-                size_str = self._format_bytes(file_size) if hasattr(self, '_format_bytes') else f"{file_size} bytes"
-                tqdm.write(f"Successfully restored to array: {os.path.basename(array_file)} ({size_str})")
+                # Log successful restore at DEBUG level (summary already shown at INFO)
+                logging.debug(f"Restored to array: {os.path.basename(array_file)}")
 
                 return 0
             else:

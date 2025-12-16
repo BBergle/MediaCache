@@ -517,6 +517,19 @@ class PlexManager:
                 except Exception as e:
                     logging.error(f"An error occurred while fetching OnDeck media for a user: {e}")
 
+        # Log OnDeck items grouped by user (sequential output after parallel fetch)
+        items_by_user: Dict[str, List[OnDeckItem]] = {}
+        for item in on_deck_files:
+            if item.username not in items_by_user:
+                items_by_user[item.username] = []
+            items_by_user[item.username].append(item)
+
+        for username in sorted(items_by_user.keys()):
+            items = items_by_user[username]
+            for item in items:
+                logging.debug(f"OnDeck found ({username}): {item.file_path}")
+            logging.debug(f"{username}: Found {len(items)} OnDeck items")
+
         return on_deck_files
 
     
@@ -555,7 +568,6 @@ class PlexManager:
                 else:
                     logging.debug(f"Skipping OnDeck item '{video.title}' — section {section_key} not in valid_sections {filtered_sections}")
 
-            logging.info(f"{username}: Found {len(on_deck_files)} OnDeck items")
             return on_deck_files
 
         except Exception as e:
@@ -596,7 +608,6 @@ class PlexManager:
                     episode_info=episode_info,
                     is_current_ondeck=True  # This is the actual OnDeck episode
                 ))
-                logging.debug(f"OnDeck found ({username}): {part.file}")
 
         # Skip fetching next episodes if current episode has missing index data
         if current_season is None or current_episode is None:
@@ -622,7 +633,6 @@ class PlexManager:
                         episode_info=next_ep_info,
                         is_current_ondeck=False  # This is a prefetched next episode
                     ))
-                    logging.debug(f"OnDeck found ({username}): {part.file}")
     
     def _process_movie_ondeck(self, video: Movie, on_deck_files: List[OnDeckItem], username: str = "unknown") -> None:
         """Process a movie from onDeck.
@@ -640,7 +650,6 @@ class PlexManager:
                     episode_info=None,  # Movies don't have episode info
                     is_current_ondeck=True
                 ))
-                logging.debug(f"OnDeck found ({username}): {part.file}")
     
     def _get_next_episodes(self, episodes: List[Episode], current_season: int,
                           current_episode_index: int, number_episodes: int) -> List[Episode]:
@@ -825,7 +834,7 @@ class PlexManager:
             else:
                 current_username = user.title
 
-            logging.info(f"Fetching watchlist media for {current_username}")
+            logging.debug(f"Fetching watchlist media for {current_username}")
 
             # Build list of valid sections for filtering
             available_sections = [section.key for section in self.plex.library.sections()]
@@ -879,8 +888,9 @@ class PlexManager:
             # --- RSS feed processing (pubDate = when added to watchlist) ---
             if rss_url:
                 rss_items = fetch_rss_titles(rss_url)
-                logging.info(f"RSS feed contains {len(rss_items)} items")
+                logging.debug(f"RSS feed contains {len(rss_items)} items")
                 unknown_user_ids = set()  # Track unknown IDs to log once
+                rss_not_found = []  # Track items not found in library for summary
                 for title, category, pub_date, author_id in rss_items:
                     # Look up username from author ID, fall back to ID or "Unknown"
                     if author_id and author_id in self._user_id_to_name:
@@ -912,7 +922,16 @@ class PlexManager:
                         else:
                             logging.debug(f"Skipping RSS item '{file.title}' — section {file.librarySectionID} not in valid_sections {filtered_sections}")
                     else:
-                        logging.warning(f"RSS title '{title}' (added by {rss_username}) not found in Plex — discarded")
+                        # Collect not-found items for summary instead of individual warnings
+                        rss_not_found.append((title, rss_username))
+                        logging.debug(f"RSS title '{title}' (added by {rss_username}) not found in Plex — discarded")
+                # Log summary of not-found items (INFO level - expected behavior)
+                if rss_not_found:
+                    # Don't show "--verbose" hint if already in verbose/debug mode
+                    if logging.getLogger().getEffectiveLevel() <= logging.DEBUG:
+                        logging.info(f"RSS: Skipped {len(rss_not_found)} items not in library")
+                    else:
+                        logging.info(f"RSS: Skipped {len(rss_not_found)} items not in library (use --verbose for details)")
                 # Log unknown user IDs once at the end
                 if unknown_user_ids:
                     logging.debug(f"[PLEX API] {len(unknown_user_ids)} unknown user ID(s) in RSS feed: {', '.join(sorted(unknown_user_ids))}. Run 'python3 plexcache_setup.py' and refresh users to resolve.")
@@ -924,7 +943,7 @@ class PlexManager:
                 self._rate_limited_api_call()
                 # Sort by watchlistedAt descending to get most recent add date first
                 watchlist = account.watchlist(filter='released', sort='watchlistedAt:desc')
-                logging.info(f"{current_username}: Found {len(watchlist)} watchlist items from Plex")
+                logging.debug(f"{current_username}: Found {len(watchlist)} watchlist items from Plex")
                 for item in watchlist:
                     # Get watchlistedAt timestamp from userState (addedAt is the media release date, not when added to watchlist)
                     watchlisted_at = None
@@ -974,7 +993,7 @@ class PlexManager:
                         self.title = title
                 users_to_fetch.append(UserProxy(username))
 
-        logging.info(f"Processing {len(users_to_fetch)} users for watchlist (main + {len(users_to_fetch)-1} home users)")
+        logging.debug(f"Processing {len(users_to_fetch)} users for watchlist (main + {len(users_to_fetch)-1} home users)")
 
         # --- Fetch concurrently ---
         with ThreadPoolExecutor(max_workers=10) as executor:

@@ -10,7 +10,7 @@ import re
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import List, Set, Optional
+from typing import List, Set, Optional, Tuple
 import os
 
 from config import ConfigManager
@@ -53,6 +53,12 @@ class PlexCacheApp:
         self.ondeck_items = set()
         self.watchlist_items = set()
         self.source_map = {}  # Maps file paths to source ('ondeck' or 'watchlist')
+        # Tracking for restore vs move operations (for summary)
+        self.restored_count = 0
+        self.restored_bytes = 0
+        self.moved_to_array_count = 0
+        self.moved_to_array_bytes = 0
+        self.cached_bytes = 0
         
     def run(self) -> None:
         """Run the main application."""
@@ -449,6 +455,13 @@ class PlexCacheApp:
         # Extract just the file paths for path modification
         ondeck_files = [item.file_path for item in ondeck_items_list]
 
+        # Log OnDeck summary (count users with items)
+        ondeck_users = set(item.username for item in ondeck_items_list)
+        if ondeck_items_list:
+            logging.info(f"OnDeck: {len(ondeck_items_list)} items from {len(ondeck_users)} users")
+        else:
+            logging.info("OnDeck: 0 items")
+
         # Edit file paths for OnDeck media (convert plex paths to real paths)
         logging.debug("Modifying file paths for OnDeck media...")
         modified_ondeck = self.file_path_modifier.modify_file_paths(ondeck_files)
@@ -506,8 +519,11 @@ class PlexCacheApp:
         logging.debug("Finalizing media to cache list...")
         self.media_to_cache = self.file_path_modifier.modify_file_paths(list(modified_paths_set))
 
-        # Log consolidated summary
-        logging.info(f"OnDeck: {len(ondeck_items_list)} items, Watchlist: {watchlist_count} items")
+        # Log consolidated summary of skipped disabled libraries
+        self.file_path_modifier.log_disabled_skips_summary()
+
+        # Log total media to cache
+        logging.info(f"Total media to cache: {len(self.media_to_cache)} files")
 
         # Check for files that should be moved back to array (no longer needed in cache)
         # Only check if watched_move is enabled - otherwise files stay on cache indefinitely
@@ -601,6 +617,12 @@ class PlexCacheApp:
             if expired_count > 0:
                 logging.debug(f"Skipped {expired_count} watchlist items due to retention expiry ({retention_days} days)")
 
+            # Log watchlist summary (show unique item count - raw counts include duplicates across users)
+            total_watchlist = len(result_set)
+            has_remote = 'remote_items' in locals() and len(remote_items) > 0
+            source_info = " (local + remote)" if has_remote else ""
+            logging.info(f"Watchlist: {total_watchlist} items{source_info}")
+
             # Modify file paths and fetch subtitles
             modified_items = self.file_path_modifier.modify_file_paths(list(result_set))
             result_set.update(modified_items)
@@ -613,13 +635,115 @@ class PlexCacheApp:
         return result_set
 
     
+    def _extract_display_name(self, file_path: str) -> str:
+        """Extract a human-readable display name from a file path.
+
+        Returns clean filename without quality/codec info.
+        """
+        try:
+            filename = os.path.basename(file_path)
+            name = os.path.splitext(filename)[0]
+            # Remove quality/codec info in brackets
+            if '[' in name:
+                name = name[:name.index('[')].strip()
+            # Clean up trailing dashes
+            name = name.rstrip(' -').rstrip('-').strip()
+            return name if name else filename
+        except Exception:
+            return os.path.basename(file_path)
+
+    def _separate_restore_and_move(self, files_to_array: List[str]) -> Tuple[List[str], List[str]]:
+        """Separate files into restore (.plexcached exists) vs actual move.
+
+        Args:
+            files_to_array: List of array paths to process
+
+        Returns:
+            Tuple of (files_to_restore, files_to_move)
+        """
+        to_restore = []
+        to_move = []
+
+        for array_path in files_to_array:
+            plexcached_path = array_path + ".plexcached"
+            if os.path.exists(plexcached_path):
+                to_restore.append(array_path)
+            else:
+                to_move.append(array_path)
+
+        return to_restore, to_move
+
+    def _log_restore_and_move_summary(self, files_to_restore: List[str], files_to_move: List[str]) -> None:
+        """Log summary of restore vs move operations at INFO level.
+
+        Also tracks counts and bytes for the final summary message.
+        """
+        # Track counts and bytes for summary
+        self.restored_count = len(files_to_restore)
+        self.restored_bytes = 0
+
+        if files_to_restore:
+            # Calculate total size for restores (from .plexcached files)
+            for f in files_to_restore:
+                plexcached_path = f + ".plexcached"
+                if os.path.exists(plexcached_path):
+                    try:
+                        self.restored_bytes += os.path.getsize(plexcached_path)
+                    except OSError:
+                        pass
+
+            # These files have .plexcached backups on array - instant restore via rename
+            count = len(files_to_restore)
+            unit = "episode" if count == 1 else "episodes"
+            logging.info(f"Returning to array ({count} {unit}, instant via .plexcached):")
+            for f in files_to_restore[:6]:  # Show first 6
+                display_name = self._extract_display_name(f)
+                logging.info(f"  {display_name}")
+            if len(files_to_restore) > 6:
+                logging.info(f"  ...and {len(files_to_restore) - 6} more")
+
+        if files_to_move:
+            # Calculate total size for actual moves
+            total_size = 0
+            for f in files_to_move:
+                # For moves, the file is on cache - need to get cache path
+                cache_path = f.replace(
+                    self.config_manager.paths.real_source,
+                    self.config_manager.paths.cache_dir, 1
+                )
+                if os.path.exists(cache_path):
+                    try:
+                        total_size += os.path.getsize(cache_path)
+                    except OSError:
+                        pass
+
+            # Track for summary
+            self.moved_to_array_count = len(files_to_move)
+            self.moved_to_array_bytes = total_size
+
+            # These files need actual data transfer from cache to array
+            count = len(files_to_move)
+            unit = "episode" if count == 1 else "episodes"
+            size_str = f"{total_size / (1024**3):.2f} GB" if total_size > 0 else ""
+            size_part = f", {size_str}" if size_str else ""
+            logging.info(f"Copying to array ({count} {unit}{size_part}):")
+            for f in files_to_move[:6]:  # Show first 6
+                display_name = self._extract_display_name(f)
+                logging.info(f"  {display_name}")
+            if len(files_to_move) > 6:
+                logging.info(f"  ...and {len(files_to_move) - 6} more")
+
     def _move_files(self) -> None:
         """Move files to their destinations."""
         logging.info("")
         logging.info("--- Moving Files ---")
 
         # Move watched files to array
-        if self.config_manager.cache.watched_move:
+        if self.config_manager.cache.watched_move and self.media_to_array:
+            # Log restore vs move summary before processing
+            files_to_restore, files_to_move = self._separate_restore_and_move(self.media_to_array)
+            if files_to_restore or files_to_move:
+                self._log_restore_and_move_summary(files_to_restore, files_to_move)
             self._safe_move_files(self.media_to_array, 'array')
 
         # Move files to cache
@@ -915,10 +1039,31 @@ class PlexCacheApp:
         total_size, total_size_unit = self.file_utils.get_total_size_of_files(media_files_filtered)
         
         if total_size > 0:
-            logging.info(f"Moving {total_size:.2f} {total_size_unit} to {destination}")
-            self.logging_manager.add_summary_message(
-                f"Total size of media files moved to {destination}: {total_size:.2f} {total_size_unit}"
-            )
+            logging.debug(f"Moving {total_size:.2f} {total_size_unit} to {destination}")
+            # Generate summary message with restore vs move separation for array moves
+            if destination == 'array':
+                parts = []
+                if self.restored_count > 0:
+                    unit = "episode" if self.restored_count == 1 else "episodes"
+                    size_gb = self.restored_bytes / (1024**3)
+                    parts.append(f"Returned {self.restored_count} {unit} ({size_gb:.2f} GB) to array")
+                if self.moved_to_array_count > 0:
+                    unit = "episode" if self.moved_to_array_count == 1 else "episodes"
+                    size_gb = self.moved_to_array_bytes / (1024**3)
+                    parts.append(f"Copied {self.moved_to_array_count} {unit} ({size_gb:.2f} GB) to array")
+                if parts:
+                    self.logging_manager.add_summary_message(', '.join(parts))
+                else:
+                    self.logging_manager.add_summary_message(
+                        f"Moved {total_size:.2f} {total_size_unit} to {destination}"
+                    )
+            else:
+                # Track cached bytes for summary
+                size_multipliers = {'KB': 1024, 'MB': 1024**2, 'GB': 1024**3, 'TB': 1024**4}
+                self.cached_bytes = int(total_size * size_multipliers.get(total_size_unit, 1))
+                self.logging_manager.add_summary_message(
+                    f"Cached {total_size:.2f} {total_size_unit}"
+                )
             
             free_space, free_space_unit = self.file_utils.get_free_space(
                 cache_dir if destination == 'cache' else real_source
