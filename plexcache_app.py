@@ -68,7 +68,7 @@ class PlexCacheApp:
             if self.dry_run:
                 logging.warning("DRY-RUN MODE - No files will be moved")
             if self.verbose:
-                logging.debug("VERBOSE MODE - Showing DEBUG level logs")
+                logging.info("VERBOSE MODE enabled")
 
             # Prevent multiple instances from running simultaneously
             script_folder = os.path.dirname(os.path.abspath(__file__))
@@ -340,8 +340,19 @@ class PlexCacheApp:
     
     def _check_paths(self) -> None:
         """Check that required paths exist and are accessible."""
-        for path in [self.config_manager.paths.real_source, self.config_manager.paths.cache_dir]:
-            self.file_utils.check_path_exists(path)
+        if self.config_manager.paths.path_mappings:
+            # Multi-path mode: check paths from enabled mappings
+            for mapping in self.config_manager.paths.path_mappings:
+                if mapping.enabled:
+                    if mapping.real_path:
+                        self.file_utils.check_path_exists(mapping.real_path)
+                    if mapping.cacheable and mapping.cache_path:
+                        self.file_utils.check_path_exists(mapping.cache_path)
+        else:
+            # Legacy single-path mode
+            for path in [self.config_manager.paths.real_source, self.config_manager.paths.cache_dir]:
+                if path:  # Skip empty paths
+                    self.file_utils.check_path_exists(path)
     
     def _connect_to_plex(self) -> None:
         """Connect to the Plex server and load user tokens."""
