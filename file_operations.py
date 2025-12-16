@@ -1584,17 +1584,22 @@ class MultiPathModifier:
         # Import here to avoid circular imports
         from config import PathMapping
 
-        # Filter to enabled mappings and sort by plex_path length (longest first)
-        self.mappings = sorted(
-            [m for m in mappings if m.enabled],
+        # Keep all mappings for disabled path checking, sorted by plex_path length (longest first)
+        self.all_mappings = sorted(
+            mappings,
             key=lambda m: len(m.plex_path),
             reverse=True
         )
 
+        # Filter to enabled mappings for actual path conversion
+        self.mappings = [m for m in self.all_mappings if m.enabled]
+
         if not self.mappings:
             logging.warning("No enabled path mappings configured!")
         else:
-            logging.debug(f"MultiPathModifier initialized with {len(self.mappings)} mappings")
+            enabled_count = len(self.mappings)
+            total_count = len(self.all_mappings)
+            logging.debug(f"MultiPathModifier initialized with {total_count} mappings ({enabled_count} enabled)")
             for m in self.mappings:
                 cacheable_str = "cacheable" if m.cacheable else "NOT cacheable"
                 logging.debug(f"  {m.name}: {m.plex_path} -> {m.real_path} ({cacheable_str})")
@@ -1622,7 +1627,22 @@ class MultiPathModifier:
                 logging.debug(f"Converted path using '{mapping.name}': {plex_path} -> {converted}")
                 return (converted, mapping)
 
-        logging.warning(f"No path mapping found for: {plex_path}")
+        # Check if path matches a disabled mapping (skip silently)
+        for mapping in self.all_mappings:
+            if not mapping.enabled and plex_path.startswith(mapping.plex_path):
+                logging.debug(f"Skipping disabled mapping '{mapping.name}': {plex_path}")
+                return (plex_path, None)
+
+        # Extract library folder for cleaner message (e.g., /nas/TV Shows UHD/)
+        path_parts = plex_path.lstrip('/').split('/')
+        if len(path_parts) >= 2:
+            library_hint = f"/{path_parts[0]}/{path_parts[1]}/"
+        elif path_parts:
+            library_hint = f"/{path_parts[0]}/"
+        else:
+            library_hint = plex_path
+        logging.info(f"Skipping unmapped path {library_hint} - add to path_mappings with enabled:false to silence")
+        logging.debug(f"Full unmapped path: {plex_path}")
         return (plex_path, None)
 
     def convert_real_to_cache(self, real_path: str) -> Tuple[Optional[str], Optional['PathMapping']]:
@@ -1644,7 +1664,13 @@ class MultiPathModifier:
                 cache = real_path.replace(mapping.real_path, mapping.cache_path, 1)
                 return (cache, mapping)
 
-        logging.warning(f"No mapping found for real path: {real_path}")
+        # Check if path matches a disabled mapping (skip silently)
+        for mapping in self.all_mappings:
+            if not mapping.enabled and real_path.startswith(mapping.real_path):
+                logging.debug(f"Skipping disabled mapping '{mapping.name}': {real_path}")
+                return (None, None)
+
+        logging.debug(f"No mapping found for real path: {real_path}")
         return (None, None)
 
     def convert_cache_to_real(self, cache_path: str) -> Tuple[Optional[str], Optional['PathMapping']]:
@@ -1662,7 +1688,13 @@ class MultiPathModifier:
                 real = cache_path.replace(mapping.cache_path, mapping.real_path, 1)
                 return (real, mapping)
 
-        logging.warning(f"No mapping found for cache path: {cache_path}")
+        # Check if path matches a disabled mapping (skip silently)
+        for mapping in self.all_mappings:
+            if not mapping.enabled and mapping.cache_path and cache_path.startswith(mapping.cache_path):
+                logging.debug(f"Skipping disabled mapping '{mapping.name}': {cache_path}")
+                return (None, None)
+
+        logging.debug(f"No mapping found for cache path: {cache_path}")
         return (None, None)
 
     def is_cacheable(self, real_path: str) -> bool:

@@ -221,9 +221,11 @@ class PlexCacheApp:
 
         # Use MultiPathModifier if path_mappings is configured, otherwise legacy FilePathModifier
         if self.config_manager.paths.path_mappings:
-            logging.info(f"Using multi-path mode with {len(self.config_manager.paths.path_mappings)} mappings")
+            all_mappings = self.config_manager.paths.path_mappings
+            enabled_mappings = [m for m in all_mappings if m.enabled]
+            logging.info(f"Using multi-path mode with {len(all_mappings)} mappings ({len(enabled_mappings)} enabled)")
             self.file_path_modifier = MultiPathModifier(
-                mappings=self.config_manager.paths.path_mappings
+                mappings=all_mappings
             )
         else:
             logging.debug("Using legacy single-path mode")
