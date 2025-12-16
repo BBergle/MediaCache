@@ -13,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Set, Optional, Tuple, Dict, TYPE_CHECKING
 import re
 
+from logging_config import get_console_lock
+
 if TYPE_CHECKING:
     from config import PathMapping
 
@@ -373,7 +375,7 @@ class WatchlistTracker:
                             existing_dt_naive = existing_dt.replace(tzinfo=None) if existing_dt.tzinfo else existing_dt
                             if new_ts_naive > existing_dt_naive:
                                 entry['watchlisted_at'] = new_ts_iso
-                                logging.debug(f"Updated watchlist timestamp for {file_path} (user {username} added later)")
+                                logging.debug(f"[USER:{username}] Updated watchlist timestamp: {file_path}")
                         except ValueError:
                             entry['watchlisted_at'] = new_ts_iso
                     else:
@@ -393,7 +395,7 @@ class WatchlistTracker:
                     'users': [username],
                     'last_seen': now_iso
                 }
-                logging.debug(f"Added new watchlist entry: {file_path} (user: {username})")
+                logging.debug(f"[USER:{username}] Added new watchlist entry: {file_path}")
 
             self._save()
 
@@ -470,10 +472,11 @@ class WatchlistTracker:
 
                 if age_days > retention_days:
                     users = entry.get('users', ['unknown'])
-                    logging.debug(
-                        f"Watchlist retention expired ({age_days:.1f} days > {retention_days} days): "
-                        f"{os.path.basename(file_path)} (users: {', '.join(users)})"
-                    )
+                    filename = os.path.basename(file_path)
+                    for user in users:
+                        logging.debug(
+                            f"[USER:{user}] Watchlist retention expired ({age_days:.1f} days > {retention_days} days): {filename}"
+                        )
                     return True
                 return False
             except (ValueError, TypeError) as e:
@@ -646,7 +649,7 @@ class OnDeckTracker:
                         'is_current_ondeck': is_current_ondeck
                     }
                 self._data[file_path] = new_entry
-                logging.debug(f"Added new OnDeck entry ({username}): {file_path}")
+                logging.debug(f"[USER:{username}] Added new OnDeck entry: {file_path}")
 
             self._save()
 
@@ -1476,33 +1479,35 @@ class PlexcachedMigration:
 
         active_files = list(self._active_files.values())
 
-        # Clear previous display first (move up and clear each line)
-        if self._last_display_lines > 0:
-            for _ in range(self._last_display_lines):
-                print('\033[A\033[2K', end='')
+        # Use console lock to prevent interleaving with logging
+        with get_console_lock():
+            # Clear previous display first (move up and clear each line)
+            if self._last_display_lines > 0:
+                for _ in range(self._last_display_lines):
+                    print('\033[A\033[2K', end='')
 
-        if final:
-            # Print final summary
-            print(f"[{bar}] 100% ({completed}/{self._total_files}) - {data_progress} - Migration complete")
-            self._last_display_lines = 0
-        else:
-            # Build the display lines
-            lines = []
-            lines.append(f"[{bar}] {percentage:.0f}% ({completed}/{self._total_files}) - {data_progress} - Migrating...")
+            if final:
+                # Print final summary
+                print(f"[{bar}] 100% ({completed}/{self._total_files}) - {data_progress} - Migration complete")
+                self._last_display_lines = 0
+            else:
+                # Build the display lines
+                lines = []
+                lines.append(f"[{bar}] {percentage:.0f}% ({completed}/{self._total_files}) - {data_progress} - Migrating...")
 
-            if active_files:
-                lines.append(f"  Currently copying ({len(active_files)} active):")
-                for filename, file_size in active_files[:5]:  # Limit to 5 active files shown
-                    display_name = filename[:50] + '...' if len(filename) > 50 else filename
-                    size_str = self._format_bytes(file_size)
-                    lines.append(f"    -> {display_name} ({size_str})")
-                if len(active_files) > 5:
-                    lines.append(f"    ... and {len(active_files) - 5} more")
+                if active_files:
+                    lines.append(f"  Currently copying ({len(active_files)} active):")
+                    for filename, file_size in active_files[:5]:  # Limit to 5 active files shown
+                        display_name = filename[:50] + '...' if len(filename) > 50 else filename
+                        size_str = self._format_bytes(file_size)
+                        lines.append(f"    -> {display_name} ({size_str})")
+                    if len(active_files) > 5:
+                        lines.append(f"    ... and {len(active_files) - 5} more")
 
-            # Print all lines and track count for next clear
-            for line in lines:
-                print(line)
-            self._last_display_lines = len(lines)
+                # Print all lines and track count for next clear
+                for line in lines:
+                    print(line)
+                self._last_display_lines = len(lines)
 
 
 class FilePathModifier:
@@ -2763,6 +2768,9 @@ class FileMover:
         self._completed_bytes = 0
         self._total_bytes = total_bytes
 
+        # Get console lock for thread-safe tqdm output
+        console_lock = get_console_lock()
+
         if self.debug:
             # Debug mode - no actual moves, just log what would happen
             with tqdm(total=total_count, desc=f"Moving to {destination}", unit="file",
@@ -2771,13 +2779,15 @@ class FileMover:
                     (src, dest) = move_cmd
                     if destination == 'cache':
                         plexcached_file = src + PLEXCACHED_EXTENSION
-                        tqdm.write(f"[DEBUG] Would copy: {src} -> {cache_file_name}")
-                        tqdm.write(f"[DEBUG] Would rename: {src} -> {plexcached_file}")
+                        with console_lock:
+                            tqdm.write(f"[DEBUG] Would copy: {src} -> {cache_file_name}")
+                            tqdm.write(f"[DEBUG] Would rename: {src} -> {plexcached_file}")
                     elif destination == 'array':
                         array_file = os.path.join(dest, os.path.basename(src))
                         plexcached_file = array_file + PLEXCACHED_EXTENSION
-                        tqdm.write(f"[DEBUG] Would rename: {plexcached_file} -> {array_file}")
-                        tqdm.write(f"[DEBUG] Would delete: {src}")
+                        with console_lock:
+                            tqdm.write(f"[DEBUG] Would rename: {plexcached_file} -> {array_file}")
+                            tqdm.write(f"[DEBUG] Would delete: {src}")
                     pbar.update(1)
         else:
             # Real move with thread pool
@@ -2851,7 +2861,8 @@ class FileMover:
             with self._progress_lock:
                 if self._tqdm_pbar:
                     self._tqdm_pbar.update(1)
-            tqdm.write(f"Error moving {filename}: {type(e).__name__}: {e}")
+            with get_console_lock():
+                tqdm.write(f"Error moving {filename}: {type(e).__name__}: {e}")
             return 1
 
     def _move_to_cache(self, array_file: str, cache_path: str, cache_file_name: str,
@@ -2922,7 +2933,8 @@ class FileMover:
             from tqdm import tqdm
             file_size = os.path.getsize(cache_file_name)
             size_str = self._format_bytes(file_size) if hasattr(self, '_format_bytes') else f"{file_size} bytes"
-            tqdm.write(f"Successfully cached: {os.path.basename(cache_file_name)} ({size_str})")
+            with get_console_lock():
+                tqdm.write(f"Successfully cached: {os.path.basename(cache_file_name)} ({size_str})")
 
             return 0
         except Exception as e:

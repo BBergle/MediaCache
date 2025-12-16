@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import subprocess
+import sys
+import threading
 import time
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -14,6 +16,27 @@ from pathlib import Path
 from typing import Optional
 
 import requests
+
+# Global lock for thread-safe console output (shared with tqdm)
+_console_lock = threading.RLock()
+
+
+def get_console_lock() -> threading.RLock:
+    """Get the global console output lock for use with tqdm."""
+    return _console_lock
+
+
+class ThreadSafeStreamHandler(logging.StreamHandler):
+    """A StreamHandler that uses a global lock for thread-safe console output.
+
+    This prevents interleaving of log messages with tqdm progress bars
+    when multiple threads are logging simultaneously.
+    """
+
+    def emit(self, record):
+        """Emit a record with thread-safe locking."""
+        with _console_lock:
+            super().emit(record)
 
 
 # Define a new level called SUMMARY that is equivalent to INFO level
@@ -184,8 +207,8 @@ class LoggingManager:
         file_handler.addFilter(VerboseMessageFilter())  # Apply filter to handler
         self.logger.addHandler(file_handler)
 
-        # Add console handler for stdout output
-        console_handler = logging.StreamHandler()
+        # Add console handler for stdout output (thread-safe to prevent tqdm interleaving)
+        console_handler = ThreadSafeStreamHandler()
         console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
         console_handler.addFilter(VerboseMessageFilter())  # Apply filter to handler
         self.logger.addHandler(console_handler)
