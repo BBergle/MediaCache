@@ -1234,7 +1234,19 @@ def _run_plexcached_restore(config_file: str, dry_run: bool, verbose: bool = Fal
     config_manager.load_config()
 
     # Search in the real_source directory (where array files live)
-    search_paths = [config_manager.paths.real_source]
+    # In multi-path mode, get paths from all enabled mappings
+    search_paths = []
+    if config_manager.paths.real_source:
+        search_paths.append(config_manager.paths.real_source)
+    elif config_manager.paths.path_mappings:
+        for mapping in config_manager.paths.path_mappings:
+            if mapping.enabled and mapping.real_path:
+                search_paths.append(mapping.real_path)
+
+    if not search_paths:
+        logging.error("No search paths configured. Check your settings.")
+        return
+
     logging.info(f"Searching for .plexcached files in: {search_paths}")
 
     restorer = PlexcachedRestorer(search_paths)
