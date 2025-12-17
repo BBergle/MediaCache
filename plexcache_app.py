@@ -766,10 +766,27 @@ class PlexCacheApp:
         try:
             # Pass source map only when moving to cache
             source_map = self.source_map if destination == 'cache' else None
+
+            # Get real_source - in multi-path mode, use first enabled mapping's real_path
+            real_source = self.config_manager.paths.real_source
+            if not real_source and self.config_manager.paths.path_mappings:
+                for mapping in self.config_manager.paths.path_mappings:
+                    if mapping.enabled and mapping.real_path:
+                        real_source = mapping.real_path
+                        break
+
+            # Get cache_dir - in multi-path mode, use first cacheable mapping's cache_path
+            cache_dir = self.config_manager.paths.cache_dir
+            if not cache_dir and self.config_manager.paths.path_mappings:
+                for mapping in self.config_manager.paths.path_mappings:
+                    if mapping.enabled and mapping.cacheable and mapping.cache_path:
+                        cache_dir = mapping.cache_path
+                        break
+
             self._check_free_space_and_move_files(
                 files, destination,
-                self.config_manager.paths.real_source,
-                self.config_manager.paths.cache_dir,
+                real_source,
+                cache_dir,
                 source_map
             )
         except Exception as e:
