@@ -1236,7 +1236,7 @@ def _run_plexcached_restore(config_file: str, dry_run: bool, verbose: bool = Fal
     # Search in the real_source directory (where array files live)
     # In multi-path mode, get paths from all enabled mappings
     search_paths = []
-    if config_manager.paths.real_source:
+    if config_manager.paths.real_source and config_manager.paths.real_source.strip():
         search_paths.append(config_manager.paths.real_source)
     elif config_manager.paths.path_mappings:
         for mapping in config_manager.paths.path_mappings:
