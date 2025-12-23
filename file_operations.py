@@ -2094,14 +2094,35 @@ class CacheCleanup:
                         # Check if directory is empty
                         contents = os.listdir(dir_path)
                         if contents:
-                            # Log ALL contents including hidden files for debugging
-                            hidden = [f for f in contents if f.startswith('.')]
-                            visible = [f for f in contents if not f.startswith('.')]
+                            # Separate files from subdirectories for clearer logging
+                            files = []
+                            subdirs = []
+                            hidden = []
+                            for item in contents:
+                                item_path = os.path.join(dir_path, item)
+                                if item.startswith('.'):
+                                    hidden.append(item)
+                                elif os.path.isdir(item_path):
+                                    subdirs.append(item)
+                                else:
+                                    files.append(item)
+
                             logging.debug(f"Folder not empty, skipping: {dir_path}")
-                            if visible:
-                                logging.debug(f"  Visible files ({len(visible)}): {visible[:5]}{'...' if len(visible) > 5 else ''}")
+                            if subdirs:
+                                logging.debug(f"  Subdirectories ({len(subdirs)}): {subdirs[:5]}{'...' if len(subdirs) > 5 else ''}")
+                                # Show files inside each subdirectory for debugging
+                                for subdir in subdirs[:3]:  # Limit to first 3 subdirs
+                                    subdir_path = os.path.join(dir_path, subdir)
+                                    try:
+                                        subdir_files = [f for f in os.listdir(subdir_path) if not os.path.isdir(os.path.join(subdir_path, f))]
+                                        if subdir_files:
+                                            logging.debug(f"    {subdir}/ contains ({len(subdir_files)}): {subdir_files[:3]}{'...' if len(subdir_files) > 3 else ''}")
+                                    except Exception:
+                                        pass
+                            if files:
+                                logging.debug(f"  Files ({len(files)}): {files[:5]}{'...' if len(files) > 5 else ''}")
                             if hidden:
-                                logging.debug(f"  Hidden files ({len(hidden)}): {hidden[:5]}{'...' if len(hidden) > 5 else ''}")
+                                logging.debug(f"  Hidden ({len(hidden)}): {hidden[:5]}{'...' if len(hidden) > 5 else ''}")
                             continue
 
                         # Attempt deletion
