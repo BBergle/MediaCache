@@ -102,6 +102,139 @@ def find_matching_plexcached(array_path: str, media_identity: str) -> Optional[s
     return None
 
 
+class JSONTracker:
+    """Base class for thread-safe JSON file trackers.
+
+    Provides common functionality for loading, saving, and accessing
+    JSON-based tracking data with thread safety.
+
+    Subclasses should:
+    - Call super().__init__(tracker_file, tracker_name) in their __init__
+    - Override _post_load() for any migration or post-load processing
+    - Use self._data dict for storage
+    """
+
+    def __init__(self, tracker_file: str, tracker_name: str = "tracker"):
+        """Initialize the tracker.
+
+        Args:
+            tracker_file: Path to the JSON file storing tracker data.
+            tracker_name: Human-readable name for logging (e.g., "watchlist", "OnDeck").
+        """
+        self.tracker_file = tracker_file
+        self._tracker_name = tracker_name
+        self._lock = threading.Lock()
+        self._data: Dict[str, dict] = {}
+        self._load()
+
+    def _load(self) -> None:
+        """Load tracker data from file."""
+        try:
+            if os.path.exists(self.tracker_file):
+                with open(self.tracker_file, 'r', encoding='utf-8') as f:
+                    self._data = json.load(f)
+                self._post_load()
+                logging.debug(f"Loaded {len(self._data)} {self._tracker_name} entries from {self.tracker_file}")
+        except (json.JSONDecodeError, IOError) as e:
+            logging.warning(f"Could not load {self._tracker_name} file: {type(e).__name__}: {e}")
+            self._data = {}
+
+    def _post_load(self) -> None:
+        """Hook for subclasses to perform post-load processing (e.g., migration)."""
+        pass
+
+    def _save(self) -> None:
+        """Save tracker data to file."""
+        try:
+            with open(self.tracker_file, 'w', encoding='utf-8') as f:
+                json.dump(self._data, f, indent=2)
+        except IOError as e:
+            logging.error(f"Could not save {self._tracker_name} file: {type(e).__name__}: {e}")
+
+    def _find_entry_by_filename(self, file_path: str) -> Optional[Tuple[str, dict]]:
+        """Find a tracker entry by matching filename when full path doesn't match.
+
+        This handles cases where the cache file has modified paths (/mnt/cache_downloads/...)
+        but the tracker stores original paths (/mnt/user/...).
+
+        Args:
+            file_path: The file path to search for.
+
+        Returns:
+            Tuple of (matched_path, entry) if found, None otherwise.
+        """
+        target_filename = os.path.basename(file_path)
+        for stored_path, entry in self._data.items():
+            if os.path.basename(stored_path) == target_filename:
+                return (stored_path, entry)
+        return None
+
+    def get_entry(self, file_path: str) -> Optional[dict]:
+        """Get the tracker entry for a file.
+
+        Args:
+            file_path: The path to the media file.
+
+        Returns:
+            The entry dict or None if not found.
+        """
+        with self._lock:
+            if file_path in self._data:
+                return self._data[file_path]
+            result = self._find_entry_by_filename(file_path)
+            if result:
+                return result[1]
+            return None
+
+    def remove_entry(self, file_path: str) -> None:
+        """Remove a file's tracker entry.
+
+        Args:
+            file_path: The path to the file.
+        """
+        with self._lock:
+            if file_path in self._data:
+                del self._data[file_path]
+                self._save()
+                logging.debug(f"Removed {self._tracker_name} entry for: {file_path}")
+
+    def cleanup_stale_entries(self, max_days_since_seen: int = 7) -> int:
+        """Remove entries that haven't been seen recently.
+
+        Args:
+            max_days_since_seen: Remove entries not seen in this many days.
+
+        Returns:
+            Number of entries removed.
+        """
+        with self._lock:
+            stale = []
+            now = datetime.now()
+            for path, entry in self._data.items():
+                last_seen_str = entry.get('last_seen')
+                if last_seen_str:
+                    try:
+                        last_seen = datetime.fromisoformat(last_seen_str)
+                        days_since = (now - last_seen).total_seconds() / 86400
+                        if days_since > max_days_since_seen:
+                            stale.append(path)
+                    except ValueError:
+                        stale.append(path)
+                else:
+                    # No last_seen field - keep if it has other valid timestamps
+                    if not entry.get('watchlisted_at') and not entry.get('cached_at'):
+                        stale.append(path)
+
+            for path in stale:
+                del self._data[path]
+
+            if stale:
+                self._save()
+                logging.info(f"Cleaned up {len(stale)} stale {self._tracker_name} entries")
+
+            return len(stale)
+
+
 class CacheTimestampTracker:
     """Thread-safe tracker for when files were cached and their source.
 
@@ -316,7 +449,7 @@ class CacheTimestampTracker:
             return len(missing)
 
 
-class WatchlistTracker:
+class WatchlistTracker(JSONTracker):
     """Thread-safe tracker for watchlist retention.
 
     Tracks when files were added to watchlists and by which users.
@@ -339,29 +472,7 @@ class WatchlistTracker:
         Args:
             tracker_file: Path to the JSON file storing watchlist data.
         """
-        self.tracker_file = tracker_file
-        self._lock = threading.Lock()
-        self._data: Dict[str, dict] = {}
-        self._load()
-
-    def _load(self) -> None:
-        """Load tracker data from file."""
-        try:
-            if os.path.exists(self.tracker_file):
-                with open(self.tracker_file, 'r', encoding='utf-8') as f:
-                    self._data = json.load(f)
-                logging.debug(f"Loaded {len(self._data)} watchlist entries from {self.tracker_file}")
-        except (json.JSONDecodeError, IOError) as e:
-            logging.warning(f"Could not load watchlist tracker file: {type(e).__name__}: {e}")
-            self._data = {}
-
-    def _save(self) -> None:
-        """Save tracker data to file."""
-        try:
-            with open(self.tracker_file, 'w', encoding='utf-8') as f:
-                json.dump(self._data, f, indent=2)
-        except IOError as e:
-            logging.error(f"Could not save watchlist tracker file: {type(e).__name__}: {e}")
+        super().__init__(tracker_file, "watchlist")
 
     def update_entry(self, file_path: str, username: str, watchlisted_at: Optional[datetime]) -> None:
         """Update or create an entry for a watchlist item.
@@ -420,39 +531,6 @@ class WatchlistTracker:
 
             self._save()
 
-    def _find_entry_by_filename(self, file_path: str) -> Optional[Tuple[str, dict]]:
-        """Find a tracker entry by matching filename when full path doesn't match.
-
-        This handles cases where the cache file has modified paths (/mnt/user/...)
-        but the tracker stores original paths (/data/...).
-
-        Returns:
-            Tuple of (matched_path, entry) if found, None otherwise.
-        """
-        target_filename = os.path.basename(file_path)
-        for stored_path, entry in self._data.items():
-            if os.path.basename(stored_path) == target_filename:
-                return (stored_path, entry)
-        return None
-
-    def get_entry(self, file_path: str) -> Optional[dict]:
-        """Get the tracker entry for a file.
-
-        Args:
-            file_path: The path to the media file.
-
-        Returns:
-            The entry dict or None if not found.
-        """
-        with self._lock:
-            if file_path in self._data:
-                return self._data[file_path]
-            # Try to find by filename (handles path prefix mismatches)
-            result = self._find_entry_by_filename(file_path)
-            if result:
-                return result[1]
-            return None
-
     def is_expired(self, file_path: str, retention_days: int) -> bool:
         """Check if a watchlist item has expired based on retention period.
 
@@ -504,42 +582,6 @@ class WatchlistTracker:
                 logging.warning(f"Invalid watchlisted_at timestamp for {file_path}: {e}")
                 return False
 
-    def cleanup_stale_entries(self, max_days_since_seen: int = 7) -> int:
-        """Remove entries that haven't been seen on any watchlist recently.
-
-        This cleans up entries for files that were removed from all watchlists.
-
-        Args:
-            max_days_since_seen: Remove entries not seen in this many days.
-
-        Returns:
-            Number of entries removed.
-        """
-        with self._lock:
-            stale = []
-            now = datetime.now()
-            for path, entry in self._data.items():
-                last_seen_str = entry.get('last_seen')
-                if last_seen_str:
-                    try:
-                        last_seen = datetime.fromisoformat(last_seen_str)
-                        days_since = (now - last_seen).total_seconds() / 86400
-                        if days_since > max_days_since_seen:
-                            stale.append(path)
-                    except ValueError:
-                        stale.append(path)
-                else:
-                    stale.append(path)
-
-            for path in stale:
-                del self._data[path]
-
-            if stale:
-                self._save()
-                logging.info(f"Cleaned up {len(stale)} stale watchlist tracker entries")
-
-            return len(stale)
-
     def cleanup_missing_files(self) -> int:
         """Remove entries for files that no longer exist.
 
@@ -556,7 +598,7 @@ class WatchlistTracker:
         return 0
 
 
-class OnDeckTracker:
+class OnDeckTracker(JSONTracker):
     """Thread-safe tracker for OnDeck items and their users.
 
     Tracks which users have each file OnDeck, similar to WatchlistTracker.
@@ -591,29 +633,7 @@ class OnDeckTracker:
         Args:
             tracker_file: Path to the JSON file storing OnDeck data.
         """
-        self.tracker_file = tracker_file
-        self._lock = threading.Lock()
-        self._data: Dict[str, dict] = {}
-        self._load()
-
-    def _load(self) -> None:
-        """Load tracker data from file."""
-        try:
-            if os.path.exists(self.tracker_file):
-                with open(self.tracker_file, 'r', encoding='utf-8') as f:
-                    self._data = json.load(f)
-                logging.debug(f"Loaded {len(self._data)} OnDeck entries from {self.tracker_file}")
-        except (json.JSONDecodeError, IOError) as e:
-            logging.warning(f"Could not load OnDeck tracker file: {type(e).__name__}: {e}")
-            self._data = {}
-
-    def _save(self) -> None:
-        """Save tracker data to file."""
-        try:
-            with open(self.tracker_file, 'w', encoding='utf-8') as f:
-                json.dump(self._data, f, indent=2)
-        except IOError as e:
-            logging.error(f"Could not save OnDeck tracker file: {type(e).__name__}: {e}")
+        super().__init__(tracker_file, "OnDeck")
 
     def update_entry(self, file_path: str, username: str,
                      episode_info: Optional[Dict[str, any]] = None,
@@ -673,39 +693,6 @@ class OnDeckTracker:
                 logging.debug(f"[USER:{username}] Added new OnDeck entry: {file_path}")
 
             self._save()
-
-    def _find_entry_by_filename(self, file_path: str) -> Optional[Tuple[str, dict]]:
-        """Find a tracker entry by matching filename when full path doesn't match.
-
-        This handles cases where the cache file has modified paths (/mnt/cache_downloads/...)
-        but the tracker stores original paths (/mnt/user/...).
-
-        Returns:
-            Tuple of (matched_path, entry) if found, None otherwise.
-        """
-        target_filename = os.path.basename(file_path)
-        for stored_path, entry in self._data.items():
-            if os.path.basename(stored_path) == target_filename:
-                return (stored_path, entry)
-        return None
-
-    def get_entry(self, file_path: str) -> Optional[dict]:
-        """Get the tracker entry for a file.
-
-        Args:
-            file_path: The path to the media file.
-
-        Returns:
-            The entry dict or None if not found.
-        """
-        with self._lock:
-            if file_path in self._data:
-                return self._data[file_path]
-            # Try to find by filename (handles path prefix mismatches)
-            result = self._find_entry_by_filename(file_path)
-            if result:
-                return result[1]
-            return None
 
     def get_user_count(self, file_path: str) -> int:
         """Get the number of users who have this file OnDeck.

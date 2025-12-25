@@ -284,11 +284,8 @@ class PlexCacheApp:
             # If we can't check, assume mover is not running
             return False
 
-    def _initialize_components(self) -> None:
-        """Initialize components that depend on configuration."""
-        logging.debug("Initializing application components...")
-        
-        # Initialize Plex manager with token cache
+    def _init_plex_manager(self) -> None:
+        """Initialize the Plex manager with token cache."""
         logging.debug("Initializing Plex manager...")
         token_cache_file = os.path.join(
             self.config_manager.paths.script_folder,
@@ -301,38 +298,27 @@ class PlexCacheApp:
             delay=self.config_manager.performance.delay,
             token_cache_file=token_cache_file
         )
-        
-        # Initialize file operation components
+
+    def _init_path_modifier(self) -> None:
+        """Initialize path modifier and subtitle finder."""
         logging.debug("Initializing file operation components...")
 
-        # Always use MultiPathModifier (legacy settings are auto-migrated by config.py)
         all_mappings = self.config_manager.paths.path_mappings or []
         enabled_mappings = [m for m in all_mappings if m.enabled]
         logging.info(f"Using multi-path mode with {len(all_mappings)} mappings ({len(enabled_mappings)} enabled)")
         self.file_path_modifier = MultiPathModifier(mappings=all_mappings)
 
-        # Show deprecation warning if legacy path arrays are still present
         if self.config_manager.has_legacy_path_arrays():
             legacy_info = self.config_manager.get_legacy_array_info()
             logging.info(f"Legacy path arrays detected: {legacy_info}")
             logging.info("These are deprecated and can be removed from your settings file.")
             logging.info("Path conversion now uses path_mappings exclusively.")
-        
+
         self.subtitle_finder = SubtitleFinder()
-        
-        # Get mover exclude file path
-        mover_exclude = self.config_manager.get_mover_exclude_file()
-        timestamp_file = self.config_manager.get_timestamp_file()
-        logging.debug(f"Mover exclude file: {mover_exclude}")
-        logging.debug(f"Timestamp file: {timestamp_file}")
 
-        # Create exclude file on startup if it doesn't exist
-        # This allows users to configure Mover settings before any files are moved
-        if not mover_exclude.exists():
-            mover_exclude.touch()
-            logging.info(f"Created mover exclude file: {mover_exclude}")
-
-        # Run one-time migration to create .plexcached backups for existing cached files
+    def _init_trackers(self, mover_exclude, timestamp_file) -> None:
+        """Initialize timestamp, watchlist, and OnDeck trackers."""
+        # Run one-time migration to create .plexcached backups
         migration = PlexcachedMigration(
             exclude_file=str(mover_exclude),
             cache_dir=self.config_manager.paths.cache_dir,
@@ -345,23 +331,19 @@ class PlexCacheApp:
             max_concurrent = self.config_manager.performance.max_concurrent_moves_array
             migration.run_migration(dry_run=self.debug, max_concurrent=max_concurrent)
 
-        # Initialize the cache timestamp tracker for retention period tracking
         self.timestamp_tracker = CacheTimestampTracker(str(timestamp_file))
 
-        # Initialize the watchlist tracker for watchlist retention
         watchlist_tracker_file = self.config_manager.get_watchlist_tracker_file()
         self.watchlist_tracker = WatchlistTracker(str(watchlist_tracker_file))
 
-        # Initialize the OnDeck tracker for priority scoring
         ondeck_tracker_file = os.path.join(
             self.config_manager.paths.script_folder,
             "plexcache_ondeck_tracker.json"
         )
         self.ondeck_tracker = OnDeckTracker(ondeck_tracker_file)
 
-        # Pass path_modifier for multi-path support (always available now)
-        path_modifier = self.file_path_modifier
-
+    def _init_file_operations(self, mover_exclude) -> None:
+        """Initialize file filter and file mover."""
         self.file_filter = FileFilter(
             real_source=self.config_manager.paths.real_source,
             cache_dir=self.config_manager.paths.cache_dir,
@@ -371,7 +353,7 @@ class PlexCacheApp:
             cache_retention_hours=self.config_manager.cache.cache_retention_hours,
             ondeck_tracker=self.ondeck_tracker,
             watchlist_tracker=self.watchlist_tracker,
-            path_modifier=path_modifier
+            path_modifier=self.file_path_modifier
         )
 
         self.file_mover = FileMover(
@@ -382,23 +364,21 @@ class PlexCacheApp:
             debug=self.debug,
             mover_cache_exclude_file=str(mover_exclude),
             timestamp_tracker=self.timestamp_tracker,
-            path_modifier=path_modifier
+            path_modifier=self.file_path_modifier
         )
-        
-        # Get cache folders from path_mappings (always available after migration)
+
+    def _init_cache_management(self) -> None:
+        """Initialize cache cleanup and priority manager."""
         cache_folders = []
         cache_dir = self.config_manager.paths.cache_dir
         for mapping in self.config_manager.paths.path_mappings or []:
             if mapping.cacheable and mapping.enabled and mapping.cache_path:
-                # Extract the relative folder from cache_path
-                # e.g., /mnt/cache_downloads/Movies/ -> Movies
                 cache_path = mapping.cache_path.rstrip('/')
                 if cache_path.startswith(cache_dir.rstrip('/')):
                     rel_path = cache_path[len(cache_dir.rstrip('/')):].lstrip('/')
                     if rel_path and rel_path not in cache_folders:
                         cache_folders.append(rel_path)
                 else:
-                    # cache_path is not under cache_dir, use full path's last component
                     folder_name = os.path.basename(cache_path)
                     if folder_name and folder_name not in cache_folders:
                         cache_folders.append(folder_name)
@@ -408,7 +388,6 @@ class PlexCacheApp:
             cache_folders
         )
 
-        # Initialize priority manager for smart eviction
         self.priority_manager = CachePriorityManager(
             timestamp_tracker=self.timestamp_tracker,
             watchlist_tracker=self.watchlist_tracker,
@@ -416,6 +395,37 @@ class PlexCacheApp:
             eviction_min_priority=self.config_manager.cache.eviction_min_priority,
             number_episodes=self.config_manager.plex.number_episodes
         )
+
+    def _initialize_components(self) -> None:
+        """Initialize components that depend on configuration."""
+        logging.debug("Initializing application components...")
+
+        # Initialize Plex manager
+        self._init_plex_manager()
+
+        # Initialize path modifier and subtitle finder
+        self._init_path_modifier()
+
+        # Get file paths for trackers
+        mover_exclude = self.config_manager.get_mover_exclude_file()
+        timestamp_file = self.config_manager.get_timestamp_file()
+        logging.debug(f"Mover exclude file: {mover_exclude}")
+        logging.debug(f"Timestamp file: {timestamp_file}")
+
+        # Create exclude file on startup if it doesn't exist
+        if not mover_exclude.exists():
+            mover_exclude.touch()
+            logging.info(f"Created mover exclude file: {mover_exclude}")
+
+        # Initialize trackers
+        self._init_trackers(mover_exclude, timestamp_file)
+
+        # Initialize file filter and mover
+        self._init_file_operations(mover_exclude)
+
+        # Initialize cache cleanup and priority manager
+        self._init_cache_management()
+
         logging.debug("All components initialized successfully")
     
     def _ensure_cache_path_exists(self, cache_path: str) -> None:
