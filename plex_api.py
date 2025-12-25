@@ -9,10 +9,9 @@ import os
 import threading
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
-from typing import List, Set, Optional, Generator, Tuple, Dict
+from typing import List, Optional, Generator, Tuple, Dict
 from dataclasses import dataclass
 
 from plexapi.server import PlexServer
@@ -20,7 +19,7 @@ from plexapi.server import PlexServer
 
 from plexapi.video import Episode, Movie
 from plexapi.myplex import MyPlexAccount
-from plexapi.exceptions import NotFound, BadRequest
+from plexapi.exceptions import NotFound
 import requests
 
 

@@ -8,14 +8,13 @@ import time
 import logging
 import re
 import shutil
-from datetime import datetime
 from pathlib import Path
 from typing import List, Set, Optional, Tuple
 import os
 
 from config import ConfigManager
 from logging_config import LoggingManager
-from system_utils import SystemDetector, PathConverter, FileUtils, SingleInstanceLock
+from system_utils import SystemDetector, FileUtils, SingleInstanceLock
 from plex_api import PlexManager, OnDeckItem
 from file_operations import MultiPathModifier, SubtitleFinder, FileFilter, FileMover, CacheCleanup, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration
 
@@ -35,7 +34,6 @@ class PlexCacheApp:
         # Initialize components
         self.config_manager = ConfigManager(config_file)
         self.system_detector = SystemDetector()
-        self.path_converter = PathConverter(self.system_detector.is_linux)
         self.file_utils = FileUtils(self.system_detector.is_linux)
         
         # Will be initialized after config loading
@@ -377,6 +375,15 @@ class PlexCacheApp:
         )
         logging.debug("All components initialized successfully")
     
+    def _ensure_cache_path_exists(self, cache_path: str) -> None:
+        """Ensure a cache directory exists, creating it if necessary."""
+        if not os.path.exists(cache_path):
+            try:
+                os.makedirs(cache_path, exist_ok=True)
+                logging.info(f"Created missing cache directory: {cache_path}")
+            except OSError as e:
+                raise FileNotFoundError(f"Cannot create cache directory {cache_path}: {e}")
+
     def _check_paths(self) -> None:
         """Check that required paths exist and are accessible."""
         if self.config_manager.paths.path_mappings:
@@ -386,12 +393,15 @@ class PlexCacheApp:
                     if mapping.real_path:
                         self.file_utils.check_path_exists(mapping.real_path)
                     if mapping.cacheable and mapping.cache_path:
-                        self.file_utils.check_path_exists(mapping.cache_path)
+                        # Create cache directory if it doesn't exist
+                        self._ensure_cache_path_exists(mapping.cache_path)
         else:
             # Legacy single-path mode
-            for path in [self.config_manager.paths.real_source, self.config_manager.paths.cache_dir]:
-                if path:  # Skip empty paths
-                    self.file_utils.check_path_exists(path)
+            if self.config_manager.paths.real_source:
+                self.file_utils.check_path_exists(self.config_manager.paths.real_source)
+            if self.config_manager.paths.cache_dir:
+                # Create cache directory if it doesn't exist
+                self._ensure_cache_path_exists(self.config_manager.paths.cache_dir)
     
     def _connect_to_plex(self) -> None:
         """Connect to the Plex server and load user tokens."""
@@ -550,7 +560,6 @@ class PlexCacheApp:
                 self.source_map[item] = "ondeck"
 
         # Process watchlist (returns already-modified paths)
-        watchlist_count = 0
         if self.config_manager.cache.watchlist_toggle:
             logging.debug("Processing watchlist media...")
             watchlist_items = self._process_watchlist()
@@ -558,7 +567,6 @@ class PlexCacheApp:
                 # Store watchlist items (don't override ondeck source for items in both)
                 self.watchlist_items = watchlist_items
                 modified_paths_set.update(watchlist_items)
-                watchlist_count = len(watchlist_items)
 
                 # Track source for watchlist items (only if not already tracked as ondeck)
                 for item in watchlist_items:

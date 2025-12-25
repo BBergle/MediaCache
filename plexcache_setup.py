@@ -1,4 +1,4 @@
-import json, os, requests, ntpath, posixpath, re, uuid, time, webbrowser
+import json, os, requests, ntpath, posixpath, uuid, time, webbrowser
 from urllib.parse import urlparse
 from plexapi.server import PlexServer
 from plexapi.exceptions import BadRequest

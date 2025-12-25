@@ -5,11 +5,7 @@ Handles OS detection, system-specific operations, and path conversions.
 
 import os
 import platform
-import re
-import socket
 import shutil
-import ntpath
-import posixpath
 import atexit
 import fcntl
 from typing import Tuple, Optional
@@ -100,105 +96,6 @@ class SystemDetector:
         """Detect if running inside a Docker container."""
         return os.path.exists('/.dockerenv')
     
-    def get_system_info(self) -> str:
-        """Get human-readable system information."""
-        info_parts = [f"Script is currently running on {self.os_name}."]
-        
-        if self.is_unraid:
-            info_parts.append("The script is also running on Unraid.")
-        
-        if self.is_docker:
-            info_parts.append("The script is running inside a Docker container.")
-            
-        return ' '.join(info_parts)
-    
-    def is_connected(self) -> bool:
-        """Check if internet connection is available."""
-        try:
-            socket.gethostbyname("www.google.com")
-            return True
-        except socket.error:
-            return False
-
-
-class PathConverter:
-    """Handles path conversions between different operating systems."""
-    
-    def __init__(self, is_linux: bool):
-        self.is_linux = is_linux
-    
-    def remove_trailing_slashes(self, value: str) -> str:
-        """Remove trailing slashes from a path."""
-        try:
-            if isinstance(value, str):
-                if ':' in value and value.rstrip('/\\') == '':
-                    return value.rstrip('/') + "\\"
-                else:
-                    return value.rstrip('/\\')
-            return value
-        except Exception as e:
-            raise ValueError(f"Error occurred while removing trailing slashes: {e}")
-    
-    def add_trailing_slashes(self, value: str) -> str:
-        """Add trailing slashes to a path."""
-        try:
-            if ':' not in value:  # Not a Windows path
-                if not value.startswith("/"):
-                    value = "/" + value
-                if not value.endswith("/"):
-                    value = value + "/"
-            return value
-        except Exception as e:
-            raise ValueError(f"Error occurred while adding trailing slashes: {e}")
-    
-    def remove_all_slashes(self, value_list: list) -> list:
-        """Remove all slashes from a list of paths."""
-        try:
-            return [value.strip('/\\') for value in value_list]
-        except Exception as e:
-            raise ValueError(f"Error occurred while removing all slashes: {e}")
-    
-    def convert_path_to_nt(self, value: str, drive_letter: str) -> str:
-        """Convert path to Windows NT format."""
-        try:
-            if value.startswith('/'):
-                value = drive_letter.rstrip(':\\') + ':' + value
-            value = value.replace(posixpath.sep, ntpath.sep)
-            return ntpath.normpath(value)
-        except Exception as e:
-            raise ValueError(f"Error occurred while converting path to Windows compatible: {e}")
-    
-    def convert_path_to_posix(self, value: str) -> Tuple[str, Optional[str]]:
-        """Convert path to POSIX format."""
-        try:
-            # Save the drive letter if exists
-            drive_letter_match = re.search(r'^[A-Za-z]:', value)
-            drive_letter = drive_letter_match.group() + '\\' if drive_letter_match else None
-            
-            # Remove drive letter if exists
-            value = re.sub(r'^[A-Za-z]:', '', value)
-            value = value.replace(ntpath.sep, posixpath.sep)
-            return posixpath.normpath(value), drive_letter
-        except Exception as e:
-            raise ValueError(f"Error occurred while converting path to Posix compatible: {e}")
-    
-    def convert_path(self, value: str, key: str, settings_data: dict, drive_letter: Optional[str] = None) -> str:
-        """Convert path according to the operating system."""
-        try:
-            if self.is_linux:
-                value, drive_letter = self.convert_path_to_posix(value)
-                if drive_letter:
-                    settings_data[f"{key}_drive"] = drive_letter
-            else:
-                if drive_letter is None:
-                    drive_letter = 'C:\\'
-                value = self.convert_path_to_nt(value, drive_letter)
-            
-            return value
-        except Exception as e:
-            raise ValueError(f"Error occurred while converting path: {e}")
-
-
 class FileUtils:
     """Utility functions for file operations."""
     
@@ -241,21 +138,6 @@ class FileUtils:
         stat = os.statvfs(directory)
         return stat.f_blocks * stat.f_frsize
 
-    def get_directory_size(self, directory: str) -> int:
-        """Calculate total size of all files in a directory (recursive) in bytes."""
-        total_size = 0
-        try:
-            for dirpath, _, filenames in os.walk(directory):
-                for filename in filenames:
-                    filepath = os.path.join(dirpath, filename)
-                    try:
-                        total_size += os.path.getsize(filepath)
-                    except (OSError, FileNotFoundError):
-                        pass  # Skip files that can't be accessed
-        except Exception as e:
-            logging.warning(f"Error calculating directory size for {directory}: {e}")
-        return total_size
-    
     def get_total_size_of_files(self, files: list) -> Tuple[float, str]:
         """Calculate total size of files in human-readable format."""
         total_size_bytes = 0
@@ -290,35 +172,6 @@ class FileUtils:
         
         return size, unit
     
-    def move_file(self, src: str, dest: str) -> int:
-        """Move a file with proper permissions."""
-        logging.debug(f"Moving file from {src} to {dest}")
-        
-        try:
-            if self.is_linux:
-                stat_info = os.stat(src)
-                uid = stat_info.st_uid
-                gid = stat_info.st_gid
-                
-                # Move the file first
-                shutil.move(src, dest)
-                logging.debug(f"File moved successfully: {src} -> {dest}")
-                
-                # Then set the owner and group to the original values
-                os.chown(dest, uid, gid)
-                original_umask = os.umask(0)
-                os.chmod(dest, self.permissions)
-                os.umask(original_umask)
-                logging.debug(f"Permissions restored for: {dest}")
-            else:  # Windows logic
-                shutil.move(src, dest)
-                logging.debug(f"File moved successfully (Windows): {src} -> {dest}")
-            
-            return 0
-        except (FileNotFoundError, PermissionError, Exception) as e:
-            logging.error(f"Error moving file from {src} to {dest}: {str(e)}")
-            raise RuntimeError(f"Error moving file: {str(e)}")
-
     def copy_file_with_permissions(self, src: str, dest: str, verbose: bool = False) -> int:
         """Copy a file preserving original ownership and permissions (Linux only)."""
         logging.debug(f"Copying file from {src} to {dest}")
