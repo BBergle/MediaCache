@@ -66,7 +66,7 @@ class PlexCacheApp:
             if self.dry_run:
                 logging.warning("DRY-RUN MODE - No files will be moved")
             if self.verbose:
-                logging.info("VERBOSE MODE enabled")
+                logging.info("VERBOSE MODE - Showing DEBUG level logs")
 
             # Prevent multiple instances from running simultaneously
             script_folder = os.path.dirname(os.path.abspath(__file__))
