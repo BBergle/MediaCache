@@ -17,7 +17,7 @@ from core.config import ConfigManager
 from core.logging_config import LoggingManager
 from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock
 from core.plex_api import PlexManager, OnDeckItem
-from core.file_operations import MultiPathModifier, SubtitleFinder, FileFilter, FileMover, CacheCleanup, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration
+from core.file_operations import MultiPathModifier, SubtitleFinder, FileFilter, FileMover, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration
 
 
 class PlexCacheApp:
@@ -239,7 +239,7 @@ class PlexCacheApp:
         logging.debug(f"Docker detected: {self.system_detector.is_docker}")
         logging.debug("===========================")
 
-    def _log_diagnostic_summary(self, folders_cleaned: int, folders_failed: int) -> None:
+    def _log_diagnostic_summary(self) -> None:
         """Log diagnostic summary at end of run in verbose mode."""
         logging.debug("")
         logging.debug("=== Diagnostic Summary ===")
@@ -249,9 +249,8 @@ class PlexCacheApp:
         logging.debug(f"Files already on cache: {already_cached}")
         logging.debug(f"Files moved to cache: {actually_moved}")
         logging.debug(f"Files moved to array: {len(self.media_to_array)}")
-        logging.debug(f"Empty folders removed: {folders_cleaned}")
-        if folders_failed > 0:
-            logging.debug(f"Empty folders failed: {folders_failed}")
+        # Note: Empty folder cleanup now happens immediately during file operations
+        # (per File and Folder Management Policy) and is logged at DEBUG level as it occurs
         logging.debug("==========================")
 
     def _is_mover_running(self) -> bool:
@@ -369,25 +368,9 @@ class PlexCacheApp:
         )
 
     def _init_cache_management(self) -> None:
-        """Initialize cache cleanup and priority manager."""
-        cache_folders = []
-        cache_dir = self.config_manager.paths.cache_dir
-        for mapping in self.config_manager.paths.path_mappings or []:
-            if mapping.cacheable and mapping.enabled and mapping.cache_path:
-                cache_path = mapping.cache_path.rstrip('/')
-                if cache_path.startswith(cache_dir.rstrip('/')):
-                    rel_path = cache_path[len(cache_dir.rstrip('/')):].lstrip('/')
-                    if rel_path and rel_path not in cache_folders:
-                        cache_folders.append(rel_path)
-                else:
-                    folder_name = os.path.basename(cache_path)
-                    if folder_name and folder_name not in cache_folders:
-                        cache_folders.append(folder_name)
-
-        self.cache_cleanup = CacheCleanup(
-            self.config_manager.paths.cache_dir,
-            cache_folders
-        )
+        """Initialize cache priority manager."""
+        # Note: Empty folder cleanup is now handled immediately during file operations
+        # (per File and Folder Management Policy) - see FileMover._cleanup_empty_parent_folders()
 
         self.priority_manager = CachePriorityManager(
             timestamp_tracker=self.timestamp_tracker,
@@ -1255,8 +1238,8 @@ class PlexCacheApp:
 
         self.logging_manager.log_summary()
 
-        # Clean up empty folders in cache
-        folders_cleaned, folders_failed = self.cache_cleanup.cleanup_empty_folders()
+        # Note: Empty folder cleanup now happens immediately during file operations
+        # (per File and Folder Management Policy) - no blanket cleanup needed here
 
         # Clean up stale timestamp entries for files that no longer exist
         if hasattr(self, 'timestamp_tracker') and self.timestamp_tracker:
@@ -1269,7 +1252,7 @@ class PlexCacheApp:
 
         # Log diagnostic summary in verbose mode
         if self.verbose:
-            self._log_diagnostic_summary(folders_cleaned, folders_failed)
+            self._log_diagnostic_summary()
 
         logging.info("")
         logging.info(f"Completed in {execution_time}")

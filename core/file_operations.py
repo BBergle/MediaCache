@@ -1949,7 +1949,7 @@ class FileFilter:
 
         # Log non-cacheable files summary
         if non_cacheable_count > 0:
-            logging.info(f"Skipped {non_cacheable_count} files from non-cacheable paths (remote storage)")
+            logging.info(f"Skipped {non_cacheable_count} files from non-cacheable path mappings")
 
         return media_to
     
@@ -3067,6 +3067,8 @@ class FileMover:
                 if os.path.isfile(cache_file):
                     os.remove(cache_file)
                     logging.debug(f"Deleted cache file: {cache_file}")
+                    # Clean up empty parent folders (per File and Folder Management Policy)
+                    self._cleanup_empty_parent_folders(cache_file)
                 else:
                     logging.debug(f"Cache file already removed: {cache_file}")
 
@@ -3086,6 +3088,59 @@ class FileMover:
         except Exception as e:
             logging.error(f"Error restoring to array: {type(e).__name__}: {e}")
             return 1
+
+    def _cleanup_empty_parent_folders(self, file_path: str) -> int:
+        """Clean up empty parent folders after a file is removed.
+
+        Implements the File and Folder Management Policy: PlexCache only removes
+        folders that it emptied by moving files out. This method walks up the
+        directory tree from the deleted file's parent, removing empty folders
+        until it hits the cache_dir boundary or a non-empty folder.
+
+        Args:
+            file_path: Path to the file that was just deleted
+
+        Returns:
+            Number of folders removed
+        """
+        folders_removed = 0
+        current_dir = os.path.dirname(file_path)
+
+        # Normalize paths for comparison
+        cache_boundary = os.path.normpath(self.cache_dir)
+
+        while current_dir:
+            normalized_current = os.path.normpath(current_dir)
+
+            # Stop if we've reached or passed the cache boundary
+            # We should never delete the cache_dir itself or anything above it
+            if normalized_current == cache_boundary or not normalized_current.startswith(cache_boundary):
+                break
+
+            try:
+                # Check if directory is empty
+                if not os.path.exists(current_dir):
+                    break
+
+                contents = os.listdir(current_dir)
+                if contents:
+                    # Folder not empty, stop climbing
+                    logging.debug(f"Folder not empty, stopping cleanup: {current_dir}")
+                    break
+
+                # Folder is empty, remove it
+                os.rmdir(current_dir)
+                logging.debug(f"Removed empty folder (PlexCache cleanup): {current_dir}")
+                folders_removed += 1
+
+                # Move up to parent
+                current_dir = os.path.dirname(current_dir)
+
+            except OSError as e:
+                logging.debug(f"Could not remove folder {current_dir}: {type(e).__name__}: {e}")
+                break
+
+        return folders_removed
 
     def _cleanup_failed_cache_copy(self, array_file: str, cache_file_name: str) -> None:
         """Clean up after a failed cache copy operation."""
@@ -3168,133 +3223,7 @@ class PlexcachedRestorer:
         return success_count, error_count
 
 
-class CacheCleanup:
-    """Handles cleanup of empty folders in cache directories."""
-
-    # Directories that should never be cleaned (safety check)
-    _PROTECTED_PATHS = {'/', '/mnt', '/mnt/user', '/mnt/user0', '/home', '/var', '/etc', '/usr'}
-
-    def __init__(self, cache_dir: str, library_folders: List[str] = None):
-        if not cache_dir or not cache_dir.strip():
-            raise ValueError("cache_dir cannot be empty")
-
-        normalized_cache_dir = os.path.normpath(cache_dir)
-        if normalized_cache_dir in self._PROTECTED_PATHS:
-            raise ValueError(f"cache_dir cannot be a protected system directory: {cache_dir}")
-
-        self.cache_dir = cache_dir
-        self.library_folders = library_folders or []
-
-    def cleanup_empty_folders(self) -> Tuple[int, int]:
-        """Remove empty folders from cache directories.
-
-        Returns:
-            Tuple of (cleaned_count, failed_count)
-        """
-        logging.debug("Starting cache cleanup process...")
-        cleaned_count = 0
-        failed_count = 0
-
-        # Use configured library folders, or fall back to scanning cache_dir subdirectories
-        if self.library_folders:
-            subdirs_to_clean = self.library_folders
-        else:
-            # Fallback: scan all subdirectories in cache_dir
-            try:
-                subdirs_to_clean = [d for d in os.listdir(self.cache_dir)
-                                   if os.path.isdir(os.path.join(self.cache_dir, d))]
-            except OSError as e:
-                logging.error(f"Could not list cache directory {self.cache_dir}: {type(e).__name__}: {e}")
-                subdirs_to_clean = []
-
-        for subdir in subdirs_to_clean:
-            subdir_path = os.path.join(self.cache_dir, subdir)
-            if os.path.exists(subdir_path):
-                logging.debug(f"Cleaning up {subdir} directory: {subdir_path}")
-                cleaned, failed = self._cleanup_directory(subdir_path)
-                cleaned_count += cleaned
-                failed_count += failed
-            else:
-                logging.debug(f"Directory does not exist, skipping: {subdir_path}")
-
-        if cleaned_count > 0:
-            logging.info(f"Cleaned up {cleaned_count} empty folders")
-
-        return cleaned_count, failed_count
-    
-    def _cleanup_directory(self, directory_path: str) -> Tuple[int, int]:
-        """Recursively remove empty folders from a directory.
-
-        Returns:
-            Tuple of (cleaned_count, failed_count)
-        """
-        cleaned_count = 0
-        failed_count = 0
-
-        try:
-            # Walk through the directory tree from bottom up
-            for root, dirs, files in os.walk(directory_path, topdown=False):
-                for dir_name in dirs:
-                    dir_path = os.path.join(root, dir_name)
-                    try:
-                        # Check if directory is empty
-                        contents = os.listdir(dir_path)
-                        if contents:
-                            # Separate files from subdirectories for clearer logging
-                            files = []
-                            subdirs = []
-                            hidden = []
-                            for item in contents:
-                                item_path = os.path.join(dir_path, item)
-                                if item.startswith('.'):
-                                    hidden.append(item)
-                                elif os.path.isdir(item_path):
-                                    subdirs.append(item)
-                                else:
-                                    files.append(item)
-
-                            logging.debug(f"Folder not empty, skipping: {dir_path}")
-                            if subdirs:
-                                logging.debug(f"  Subdirectories ({len(subdirs)}): {subdirs[:5]}{'...' if len(subdirs) > 5 else ''}")
-                                # Show files inside each subdirectory for debugging
-                                for subdir in subdirs[:3]:  # Limit to first 3 subdirs
-                                    subdir_path = os.path.join(dir_path, subdir)
-                                    try:
-                                        subdir_files = [f for f in os.listdir(subdir_path) if not os.path.isdir(os.path.join(subdir_path, f))]
-                                        if subdir_files:
-                                            logging.debug(f"    {subdir}/ contains ({len(subdir_files)}): {subdir_files[:3]}{'...' if len(subdir_files) > 3 else ''}")
-                                    except Exception:
-                                        pass
-                            if files:
-                                logging.debug(f"  Files ({len(files)}): {files[:5]}{'...' if len(files) > 5 else ''}")
-                            if hidden:
-                                logging.debug(f"  Hidden ({len(hidden)}): {hidden[:5]}{'...' if len(hidden) > 5 else ''}")
-                            continue
-
-                        # Attempt deletion
-                        os.rmdir(dir_path)
-
-                        # VERIFY deletion actually worked
-                        if os.path.exists(dir_path):
-                            failed_count += 1
-                            logging.warning(f"Folder deletion FAILED silently: {dir_path}")
-                            # Try to figure out why
-                            try:
-                                post_contents = os.listdir(dir_path)
-                                if post_contents:
-                                    logging.warning(f"  Contents after failed delete: {post_contents[:10]}")
-                            except Exception:
-                                pass
-                        else:
-                            logging.debug(f"Removed empty folder: {dir_path}")
-                            cleaned_count += 1
-                    except OSError as e:
-                        failed_count += 1
-                        logging.warning(f"Could not remove directory {dir_path}: {type(e).__name__}: {e}")
-        except Exception as e:
-            logging.error(f"Error cleaning up directory {directory_path}: {type(e).__name__}: {e}")
-
-        if failed_count > 0:
-            logging.warning(f"Failed to remove {failed_count} empty folders (check permissions or hidden files)")
-
-        return cleaned_count, failed_count 
+# Note: CacheCleanup class was removed per File and Folder Management Policy.
+# Empty folder cleanup is now handled immediately during file operations
+# by FileMover._cleanup_empty_parent_folders() - PlexCache only removes
+# folders that it empties by moving files out, not arbitrary empty folders.
