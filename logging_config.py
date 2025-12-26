@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import time
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -15,10 +16,63 @@ from typing import Optional
 
 import requests
 
+# Global lock for thread-safe console output (shared with tqdm)
+_console_lock = threading.RLock()
+
+
+def get_console_lock() -> threading.RLock:
+    """Get the global console output lock for use with tqdm."""
+    return _console_lock
+
+
+class ThreadSafeStreamHandler(logging.StreamHandler):
+    """A StreamHandler that uses a global lock for thread-safe console output.
+
+    This prevents interleaving of log messages with tqdm progress bars
+    when multiple threads are logging simultaneously.
+    """
+
+    def emit(self, record):
+        """Emit a record with thread-safe locking."""
+        with _console_lock:
+            super().emit(record)
+
 
 # Define a new level called SUMMARY that is equivalent to INFO level
 SUMMARY = logging.WARNING + 1
 logging.addLevelName(SUMMARY, 'SUMMARY')
+
+
+class VerboseMessageFilter(logging.Filter):
+    """Filter to downgrade certain verbose messages to DEBUG level.
+
+    Some messages (like datetime parsing failures for empty strings) are
+    logged at INFO level by libraries but should be DEBUG level for our use case.
+    """
+
+    # Patterns of messages that should be downgraded to DEBUG
+    DOWNGRADE_PATTERNS = [
+        "Failed to parse",  # datetime parsing failures
+        "to datetime as timestamp",
+    ]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return True to allow the record, False to suppress it."""
+        if record.levelno == logging.INFO:
+            msg = record.getMessage()
+            for pattern in self.DOWNGRADE_PATTERNS:
+                if pattern in msg:
+                    # Check if we're in verbose/debug mode
+                    effective_level = logging.getLogger().getEffectiveLevel()
+                    if effective_level <= logging.DEBUG:
+                        # Verbose mode: show as DEBUG
+                        record.levelno = logging.DEBUG
+                        record.levelname = 'DEBUG'
+                        return True
+                    else:
+                        # Normal mode: suppress entirely
+                        return False
+        return True
 
 
 class UnraidHandler(logging.Handler):
@@ -121,6 +175,12 @@ class LoggingManager:
         self._setup_log_file()
         self._set_log_level()
         self._clean_old_log_files()
+        # Add filter to downgrade verbose library messages to DEBUG
+        self.logger.addFilter(VerboseMessageFilter())
+        # Suppress noisy HTTP request logs from urllib3/requests
+        logging.getLogger("urllib3").setLevel(logging.WARNING)
+        logging.getLogger("requests").setLevel(logging.WARNING)
+        logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
         
     def _ensure_logs_folder(self) -> None:
         """Ensure the logs folder exists."""
@@ -143,11 +203,13 @@ class LoggingManager:
             backupCount=self.max_log_files
         )
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        file_handler.addFilter(VerboseMessageFilter())  # Apply filter to handler
         self.logger.addHandler(file_handler)
 
-        # Add console handler for stdout output
-        console_handler = logging.StreamHandler()
+        # Add console handler for stdout output (thread-safe to prevent tqdm interleaving)
+        console_handler = ThreadSafeStreamHandler()
         console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        console_handler.addFilter(VerboseMessageFilter())  # Apply filter to handler
         self.logger.addHandler(console_handler)
 
         # Ensure the logs folder exists
@@ -249,9 +311,16 @@ class LoggingManager:
             self.files_moved = True
     
     def log_summary(self) -> None:
-        """Log the summary message."""
+        """Log the summary message.
+
+        Uses newlines for multi-line output when there are multiple messages.
+        """
         if self.summary_messages:
-            summary_message = '  '.join(self.summary_messages)
+            if len(self.summary_messages) == 1:
+                summary_message = self.summary_messages[0]
+            else:
+                # Multi-line format for multiple messages
+                summary_message = '\n  ' + '\n  '.join(self.summary_messages)
             self.logger.log(SUMMARY, summary_message)
     
     def shutdown(self) -> None:

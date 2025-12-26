@@ -10,11 +10,37 @@ import threading
 import json
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Set, Optional, Tuple, Dict
+from typing import List, Set, Optional, Tuple, Dict, TYPE_CHECKING
 import re
+
+from logging_config import get_console_lock
+
+if TYPE_CHECKING:
+    from config import PathMapping
 
 # Extension used to mark array files that have been cached
 PLEXCACHED_EXTENSION = ".plexcached"
+
+
+def format_bytes(bytes_value: int) -> str:
+    """Format bytes into human-readable string (e.g., '1.5 GB').
+
+    Args:
+        bytes_value: Size in bytes to format.
+
+    Returns:
+        Human-readable string with appropriate unit.
+    """
+    if bytes_value < 1024:
+        return f"{bytes_value} B"
+    elif bytes_value < 1024 ** 2:
+        return f"{bytes_value / 1024:.1f} KB"
+    elif bytes_value < 1024 ** 3:
+        return f"{bytes_value / (1024 ** 2):.1f} MB"
+    elif bytes_value < 1024 ** 4:
+        return f"{bytes_value / (1024 ** 3):.1f} GB"
+    else:
+        return f"{bytes_value / (1024 ** 4):.1f} TB"
 
 
 def get_media_identity(filepath: str) -> str:
@@ -74,6 +100,139 @@ def find_matching_plexcached(array_path: str, media_identity: str) -> Optional[s
         logging.debug(f"Error scanning for .plexcached files in {array_path}: {e}")
 
     return None
+
+
+class JSONTracker:
+    """Base class for thread-safe JSON file trackers.
+
+    Provides common functionality for loading, saving, and accessing
+    JSON-based tracking data with thread safety.
+
+    Subclasses should:
+    - Call super().__init__(tracker_file, tracker_name) in their __init__
+    - Override _post_load() for any migration or post-load processing
+    - Use self._data dict for storage
+    """
+
+    def __init__(self, tracker_file: str, tracker_name: str = "tracker"):
+        """Initialize the tracker.
+
+        Args:
+            tracker_file: Path to the JSON file storing tracker data.
+            tracker_name: Human-readable name for logging (e.g., "watchlist", "OnDeck").
+        """
+        self.tracker_file = tracker_file
+        self._tracker_name = tracker_name
+        self._lock = threading.Lock()
+        self._data: Dict[str, dict] = {}
+        self._load()
+
+    def _load(self) -> None:
+        """Load tracker data from file."""
+        try:
+            if os.path.exists(self.tracker_file):
+                with open(self.tracker_file, 'r', encoding='utf-8') as f:
+                    self._data = json.load(f)
+                self._post_load()
+                logging.debug(f"Loaded {len(self._data)} {self._tracker_name} entries from {self.tracker_file}")
+        except (json.JSONDecodeError, IOError) as e:
+            logging.warning(f"Could not load {self._tracker_name} file: {type(e).__name__}: {e}")
+            self._data = {}
+
+    def _post_load(self) -> None:
+        """Hook for subclasses to perform post-load processing (e.g., migration)."""
+        pass
+
+    def _save(self) -> None:
+        """Save tracker data to file."""
+        try:
+            with open(self.tracker_file, 'w', encoding='utf-8') as f:
+                json.dump(self._data, f, indent=2)
+        except IOError as e:
+            logging.error(f"Could not save {self._tracker_name} file: {type(e).__name__}: {e}")
+
+    def _find_entry_by_filename(self, file_path: str) -> Optional[Tuple[str, dict]]:
+        """Find a tracker entry by matching filename when full path doesn't match.
+
+        This handles cases where the cache file has modified paths (/mnt/cache_downloads/...)
+        but the tracker stores original paths (/mnt/user/...).
+
+        Args:
+            file_path: The file path to search for.
+
+        Returns:
+            Tuple of (matched_path, entry) if found, None otherwise.
+        """
+        target_filename = os.path.basename(file_path)
+        for stored_path, entry in self._data.items():
+            if os.path.basename(stored_path) == target_filename:
+                return (stored_path, entry)
+        return None
+
+    def get_entry(self, file_path: str) -> Optional[dict]:
+        """Get the tracker entry for a file.
+
+        Args:
+            file_path: The path to the media file.
+
+        Returns:
+            The entry dict or None if not found.
+        """
+        with self._lock:
+            if file_path in self._data:
+                return self._data[file_path]
+            result = self._find_entry_by_filename(file_path)
+            if result:
+                return result[1]
+            return None
+
+    def remove_entry(self, file_path: str) -> None:
+        """Remove a file's tracker entry.
+
+        Args:
+            file_path: The path to the file.
+        """
+        with self._lock:
+            if file_path in self._data:
+                del self._data[file_path]
+                self._save()
+                logging.debug(f"Removed {self._tracker_name} entry for: {file_path}")
+
+    def cleanup_stale_entries(self, max_days_since_seen: int = 7) -> int:
+        """Remove entries that haven't been seen recently.
+
+        Args:
+            max_days_since_seen: Remove entries not seen in this many days.
+
+        Returns:
+            Number of entries removed.
+        """
+        with self._lock:
+            stale = []
+            now = datetime.now()
+            for path, entry in self._data.items():
+                last_seen_str = entry.get('last_seen')
+                if last_seen_str:
+                    try:
+                        last_seen = datetime.fromisoformat(last_seen_str)
+                        days_since = (now - last_seen).total_seconds() / 86400
+                        if days_since > max_days_since_seen:
+                            stale.append(path)
+                    except ValueError:
+                        stale.append(path)
+                else:
+                    # No last_seen field - keep if it has other valid timestamps
+                    if not entry.get('watchlisted_at') and not entry.get('cached_at'):
+                        stale.append(path)
+
+            for path in stale:
+                del self._data[path]
+
+            if stale:
+                self._save()
+                logging.info(f"Cleaned up {len(stale)} stale {self._tracker_name} entries")
+
+            return len(stale)
 
 
 class CacheTimestampTracker:
@@ -290,7 +449,7 @@ class CacheTimestampTracker:
             return len(missing)
 
 
-class WatchlistTracker:
+class WatchlistTracker(JSONTracker):
     """Thread-safe tracker for watchlist retention.
 
     Tracks when files were added to watchlists and by which users.
@@ -313,29 +472,7 @@ class WatchlistTracker:
         Args:
             tracker_file: Path to the JSON file storing watchlist data.
         """
-        self.tracker_file = tracker_file
-        self._lock = threading.Lock()
-        self._data: Dict[str, dict] = {}
-        self._load()
-
-    def _load(self) -> None:
-        """Load tracker data from file."""
-        try:
-            if os.path.exists(self.tracker_file):
-                with open(self.tracker_file, 'r', encoding='utf-8') as f:
-                    self._data = json.load(f)
-                logging.debug(f"Loaded {len(self._data)} watchlist entries from {self.tracker_file}")
-        except (json.JSONDecodeError, IOError) as e:
-            logging.warning(f"Could not load watchlist tracker file: {type(e).__name__}: {e}")
-            self._data = {}
-
-    def _save(self) -> None:
-        """Save tracker data to file."""
-        try:
-            with open(self.tracker_file, 'w', encoding='utf-8') as f:
-                json.dump(self._data, f, indent=2)
-        except IOError as e:
-            logging.error(f"Could not save watchlist tracker file: {type(e).__name__}: {e}")
+        super().__init__(tracker_file, "watchlist")
 
     def update_entry(self, file_path: str, username: str, watchlisted_at: Optional[datetime]) -> None:
         """Update or create an entry for a watchlist item.
@@ -370,7 +507,7 @@ class WatchlistTracker:
                             existing_dt_naive = existing_dt.replace(tzinfo=None) if existing_dt.tzinfo else existing_dt
                             if new_ts_naive > existing_dt_naive:
                                 entry['watchlisted_at'] = new_ts_iso
-                                logging.debug(f"Updated watchlist timestamp for {file_path} (user {username} added later)")
+                                logging.debug(f"[USER:{username}] Updated watchlist timestamp: {file_path}")
                         except ValueError:
                             entry['watchlisted_at'] = new_ts_iso
                     else:
@@ -390,24 +527,9 @@ class WatchlistTracker:
                     'users': [username],
                     'last_seen': now_iso
                 }
-                logging.debug(f"Added new watchlist entry: {file_path} (user: {username})")
+                logging.debug(f"[USER:{username}] Added new watchlist entry: {file_path}")
 
             self._save()
-
-    def _find_entry_by_filename(self, file_path: str) -> Optional[Tuple[str, dict]]:
-        """Find a tracker entry by matching filename when full path doesn't match.
-
-        This handles cases where the cache file has modified paths (/mnt/user/...)
-        but the tracker stores original paths (/data/...).
-
-        Returns:
-            Tuple of (matched_path, entry) if found, None otherwise.
-        """
-        target_filename = os.path.basename(file_path)
-        for stored_path, entry in self._data.items():
-            if os.path.basename(stored_path) == target_filename:
-                return (stored_path, entry)
-        return None
 
     def is_expired(self, file_path: str, retention_days: int) -> bool:
         """Check if a watchlist item has expired based on retention period.
@@ -449,20 +571,219 @@ class WatchlistTracker:
 
                 if age_days > retention_days:
                     users = entry.get('users', ['unknown'])
-                    logging.debug(
-                        f"Watchlist retention expired ({age_days:.1f} days > {retention_days} days): "
-                        f"{os.path.basename(file_path)} (users: {', '.join(users)})"
-                    )
+                    filename = os.path.basename(file_path)
+                    for user in users:
+                        logging.debug(
+                            f"[USER:{user}] Watchlist retention expired ({age_days:.1f} days > {retention_days} days): {filename}"
+                        )
                     return True
                 return False
             except (ValueError, TypeError) as e:
                 logging.warning(f"Invalid watchlisted_at timestamp for {file_path}: {e}")
                 return False
 
-    def cleanup_stale_entries(self, max_days_since_seen: int = 7) -> int:
-        """Remove entries that haven't been seen on any watchlist recently.
+    def cleanup_missing_files(self) -> int:
+        """Remove entries for files that no longer exist.
 
-        This cleans up entries for files that were removed from all watchlists.
+        Note: Currently disabled because tracker stores Plex paths (/data/...)
+        which are internal to the Plex Docker container and don't map directly
+        to filesystem paths. The cleanup_stale_entries() method handles cleanup
+        based on last_seen timestamp instead.
+
+        Returns:
+            Number of entries removed (always 0 for now).
+        """
+        # Disabled: Plex paths are internal to Docker, not filesystem paths
+        # Cleanup is handled by cleanup_stale_entries() based on last_seen
+        return 0
+
+
+class OnDeckTracker(JSONTracker):
+    """Thread-safe tracker for OnDeck items and their users.
+
+    Tracks which users have each file OnDeck, similar to WatchlistTracker.
+    Used for priority scoring - items OnDeck for multiple users have higher priority.
+    Also tracks episode position info for TV shows to enable episode position awareness.
+
+    Storage format:
+    {
+        "/path/to/file.mkv": {
+            "users": ["Brandon", "Home"],
+            "last_seen": "2025-12-03T10:00:00.000000",
+            "episode_info": {
+                "show": "Foundation",
+                "season": 2,
+                "episode": 5,
+                "is_current_ondeck": true
+            },
+            "ondeck_users": ["Brandon"]
+        }
+    }
+
+    Fields:
+    - users: All users who have this file in their OnDeck queue (current or prefetched)
+    - episode_info: For TV episodes, contains show/season/episode and whether this is
+                   the actual OnDeck episode vs a prefetched next episode
+    - ondeck_users: Users for whom this is the CURRENT OnDeck episode (not prefetched)
+    """
+
+    def __init__(self, tracker_file: str):
+        """Initialize the tracker with the path to the tracker file.
+
+        Args:
+            tracker_file: Path to the JSON file storing OnDeck data.
+        """
+        super().__init__(tracker_file, "OnDeck")
+
+    def update_entry(self, file_path: str, username: str,
+                     episode_info: Optional[Dict[str, any]] = None,
+                     is_current_ondeck: bool = False) -> None:
+        """Update or create an entry for an OnDeck item.
+
+        Args:
+            file_path: The path to the media file.
+            username: The user who has this on their OnDeck.
+            episode_info: For TV episodes, dict with 'show', 'season', 'episode' keys.
+            is_current_ondeck: True if this is the actual OnDeck episode (not prefetched next).
+        """
+        with self._lock:
+            now_iso = datetime.now().isoformat()
+
+            if file_path in self._data:
+                entry = self._data[file_path]
+                # Add user if not already in list
+                if username not in entry.get('users', []):
+                    entry.setdefault('users', []).append(username)
+                # Always update last_seen
+                entry['last_seen'] = now_iso
+
+                # Track ondeck_users separately (users for whom this is current ondeck)
+                if is_current_ondeck:
+                    if username not in entry.get('ondeck_users', []):
+                        entry.setdefault('ondeck_users', []).append(username)
+
+                # Update episode_info if provided and not already set, or update is_current_ondeck
+                if episode_info:
+                    if 'episode_info' not in entry:
+                        entry['episode_info'] = {
+                            'show': episode_info.get('show'),
+                            'season': episode_info.get('season'),
+                            'episode': episode_info.get('episode'),
+                            'is_current_ondeck': is_current_ondeck
+                        }
+                    elif is_current_ondeck and not entry['episode_info'].get('is_current_ondeck'):
+                        # Upgrade to current ondeck if it was previously just prefetched
+                        entry['episode_info']['is_current_ondeck'] = True
+            else:
+                # New entry
+                new_entry = {
+                    'users': [username],
+                    'last_seen': now_iso
+                }
+                if is_current_ondeck:
+                    new_entry['ondeck_users'] = [username]
+                if episode_info:
+                    new_entry['episode_info'] = {
+                        'show': episode_info.get('show'),
+                        'season': episode_info.get('season'),
+                        'episode': episode_info.get('episode'),
+                        'is_current_ondeck': is_current_ondeck
+                    }
+                self._data[file_path] = new_entry
+                logging.debug(f"[USER:{username}] Added new OnDeck entry: {file_path}")
+
+            self._save()
+
+    def get_user_count(self, file_path: str) -> int:
+        """Get the number of users who have this file OnDeck.
+
+        Args:
+            file_path: The path to the media file.
+
+        Returns:
+            Number of users, or 0 if not found.
+        """
+        entry = self.get_entry(file_path)
+        if entry:
+            return len(entry.get('users', []))
+        return 0
+
+    def get_episode_info(self, file_path: str) -> Optional[Dict[str, any]]:
+        """Get episode info for a file.
+
+        Args:
+            file_path: The path to the media file.
+
+        Returns:
+            Episode info dict with 'show', 'season', 'episode', 'is_current_ondeck' keys,
+            or None if not a TV episode or no info available.
+        """
+        entry = self.get_entry(file_path)
+        if entry:
+            return entry.get('episode_info')
+        return None
+
+    def get_ondeck_positions_for_show(self, show_name: str) -> List[Tuple[int, int]]:
+        """Get all current OnDeck positions for a show.
+
+        Finds all entries for the given show that are marked as current OnDeck
+        (not prefetched), and returns their season/episode positions.
+
+        Args:
+            show_name: The show name to look up (case-insensitive).
+
+        Returns:
+            List of (season, episode) tuples for current OnDeck positions.
+        """
+        with self._lock:
+            positions = []
+            show_lower = show_name.lower()
+            for path, entry in self._data.items():
+                ep_info = entry.get('episode_info')
+                if ep_info and ep_info.get('is_current_ondeck'):
+                    entry_show = ep_info.get('show', '').lower()
+                    if entry_show == show_lower:
+                        season = ep_info.get('season')
+                        episode = ep_info.get('episode')
+                        if season is not None and episode is not None:
+                            positions.append((season, episode))
+            return positions
+
+    def get_earliest_ondeck_position(self, show_name: str) -> Optional[Tuple[int, int]]:
+        """Get the earliest (furthest behind) OnDeck position for a show.
+
+        Useful for determining how many episodes a file is "ahead" of the
+        user who is furthest behind in the show.
+
+        Args:
+            show_name: The show name to look up (case-insensitive).
+
+        Returns:
+            Tuple of (season, episode) for the earliest OnDeck position,
+            or None if no OnDeck entries for this show.
+        """
+        positions = self.get_ondeck_positions_for_show(show_name)
+        if not positions:
+            return None
+        # Sort by (season, episode) and return the earliest
+        positions.sort()
+        return positions[0]
+
+    def clear_for_run(self) -> None:
+        """Clear all entries at the start of a run.
+
+        OnDeck status is ephemeral - items are only OnDeck for the current run.
+        This is called at the start of each run to reset the tracker.
+        """
+        with self._lock:
+            self._data = {}
+            self._save()
+            logging.debug("Cleared OnDeck tracker for new run")
+
+    def cleanup_stale_entries(self, max_days_since_seen: int = 1) -> int:
+        """Remove entries that haven't been seen recently.
+
+        OnDeck items change frequently, so we use a shorter retention than watchlist.
 
         Args:
             max_days_since_seen: Remove entries not seen in this many days.
@@ -491,24 +812,434 @@ class WatchlistTracker:
 
             if stale:
                 self._save()
-                logging.info(f"Cleaned up {len(stale)} stale watchlist tracker entries")
+                logging.debug(f"Cleaned up {len(stale)} stale OnDeck tracker entries")
 
             return len(stale)
 
-    def cleanup_missing_files(self) -> int:
-        """Remove entries for files that no longer exist.
 
-        Note: Currently disabled because tracker stores Plex paths (/data/...)
-        which are internal to the Plex Docker container and don't map directly
-        to filesystem paths. The cleanup_stale_entries() method handles cleanup
-        based on last_seen timestamp instead.
+class CachePriorityManager:
+    """Manages priority scoring and smart eviction for cached files.
+
+    Uses metadata from CacheTimestampTracker, WatchlistTracker, and OnDeckTracker
+    to calculate priority scores. Lower-priority items are evicted first when
+    cache space is needed.
+
+    Priority Score (0-100):
+    - Base score: 50
+    - Source type: +20 for ondeck, +0 for watchlist (OnDeck = actively watching)
+    - User count: +5 per user (max +15) - multiple users = popular
+    - Cache recency: +5 to +15 based on hours cached (avoid churn)
+    - Watchlist age: +10 if fresh, 0 if >30 days, -10 if >60 days
+    - OnDeck age: +10 if recently watched, 0 if >30 days, -10 if >60 days
+    - Episode position: +15 for current OnDeck, +10 for next X episodes, 0 otherwise
+
+    Eviction Philosophy:
+    - Watchlist items are evicted first (lower base priority)
+    - Only when watchlist is exhausted should OnDeck items be considered
+    - Recently added items (watchlist or ondeck) get priority boost
+    - Current/next episodes in a series get higher priority
+    """
+
+    def __init__(self, timestamp_tracker: CacheTimestampTracker,
+                 watchlist_tracker: WatchlistTracker,
+                 ondeck_tracker: OnDeckTracker,
+                 eviction_min_priority: int = 60,
+                 number_episodes: int = 5):
+        """Initialize the priority manager.
+
+        Args:
+            timestamp_tracker: Tracker for cache timestamps and source.
+            watchlist_tracker: Tracker for watchlist items and users.
+            ondeck_tracker: Tracker for OnDeck items and users.
+            eviction_min_priority: Only evict items with priority below this threshold.
+            number_episodes: Number of episodes prefetched after OnDeck (for position scoring).
+        """
+        self.timestamp_tracker = timestamp_tracker
+        self.watchlist_tracker = watchlist_tracker
+        self.ondeck_tracker = ondeck_tracker
+        self.eviction_min_priority = eviction_min_priority
+        self.number_episodes = number_episodes
+
+    def calculate_priority(self, cache_path: str) -> int:
+        """Calculate 0-100 priority score for a cached file.
+
+        Higher score = more likely to be watched soon = keep longer.
+        Lower score = evict first when space is needed.
+
+        Eviction philosophy: Watchlist items evicted first, OnDeck protected.
+
+        Args:
+            cache_path: Path to the cached file.
 
         Returns:
-            Number of entries removed (always 0 for now).
+            Priority score between 0 and 100.
         """
-        # Disabled: Plex paths are internal to Docker, not filesystem paths
-        # Cleanup is handled by cleanup_stale_entries() based on last_seen
-        return 0
+        score = 50  # Base score
+
+        # Factor 1: Source Type (+20 for ondeck, +0 for watchlist)
+        # OnDeck means user is actively watching this content - protect it
+        source = self.timestamp_tracker.get_source(cache_path)
+        is_ondeck = source == "ondeck"
+        if is_ondeck:
+            score += 20
+
+        # Factor 2: User Count (+5 per user, max +15)
+        # Items on multiple users' OnDeck/watchlists are more popular
+        user_count = 0
+
+        # Check OnDeck tracker first
+        ondeck_entry = self.ondeck_tracker.get_entry(cache_path)
+        if ondeck_entry:
+            user_count = len(ondeck_entry.get('users', []))
+
+        # Also check watchlist tracker if not found or for additional users
+        watchlist_entry = self.watchlist_tracker.get_entry(cache_path)
+        if watchlist_entry:
+            watchlist_users = len(watchlist_entry.get('users', []))
+            user_count = max(user_count, watchlist_users)
+
+        score += min(user_count * 5, 15)
+
+        # Factor 3: Cache Recency (+15 if cached in last 24h, scaled down)
+        # Recently cached = recent interest, avoid churn from moving back and forth
+        hours_cached = self._get_hours_since_cached(cache_path)
+        if hours_cached >= 0:  # -1 means no timestamp
+            if hours_cached < 24:
+                score += 15
+            elif hours_cached < 72:
+                score += 10
+            elif hours_cached < 168:  # 7 days
+                score += 5
+
+        # Factor 4: Watchlist Age (+10 fresh, 0 if >30 days, -10 if >60 days)
+        # Recently added to watchlist = user intends to watch soon
+        # Old watchlist items (>60 days) = likely forgotten
+        if watchlist_entry and watchlist_entry.get('watchlisted_at'):
+            days_on_watchlist = self._get_days_on_watchlist(watchlist_entry)
+            if days_on_watchlist >= 0:
+                if days_on_watchlist < 7:
+                    score += 10  # Fresh watchlist item
+                elif days_on_watchlist > 60:
+                    score -= 10  # Very old, likely forgotten
+                # 7-60 days: no adjustment (0)
+
+        # Factor 5: OnDeck Age (+10 if recently watched, 0 if >30 days, -10 if >60 days)
+        # Items that haven't been watched lately get lower priority
+        # But still protected vs watchlist due to +20 base for ondeck
+        if is_ondeck and ondeck_entry:
+            last_seen_str = ondeck_entry.get('last_seen')
+            if last_seen_str:
+                days_since_seen = self._get_days_since_last_seen(last_seen_str)
+                if days_since_seen >= 0:
+                    if days_since_seen < 7:
+                        score += 10  # Recently watched
+                    elif days_since_seen > 60:
+                        score -= 10  # Stale OnDeck item
+                    # 7-60 days: no adjustment (0)
+
+        # Factor 6: Episode Position (+15 for current OnDeck, +10 for next X episodes, 0 otherwise)
+        # Current/next episodes in a series get higher priority
+        # X = half of number_episodes setting (so if prefetching 5 episodes, prioritize next 2-3)
+        if self._is_tv_episode(cache_path):
+            episodes_ahead = self._get_episodes_ahead_of_ondeck(cache_path)
+            if episodes_ahead >= 0:  # -1 means not applicable
+                if episodes_ahead == 0:
+                    score += 15  # Current OnDeck episode - highest priority
+                elif episodes_ahead <= max(1, self.number_episodes // 2):
+                    score += 10  # Next few episodes - high priority
+                # episodes_ahead > half of number_episodes: no adjustment (0)
+                # Per StudioNirin: far-ahead episodes should NOT get negative scores
+
+        return max(0, min(100, score))
+
+    def _get_days_since_last_seen(self, last_seen_str: str) -> float:
+        """Get days since an item was last seen in OnDeck/watchlist.
+
+        Args:
+            last_seen_str: ISO format timestamp string.
+
+        Returns:
+            Days since last seen, or -1 if invalid timestamp.
+        """
+        try:
+            last_seen = datetime.fromisoformat(last_seen_str)
+            return (datetime.now() - last_seen).total_seconds() / 86400
+        except (ValueError, TypeError):
+            return -1
+
+    def get_all_priorities(self, cached_files: List[str]) -> List[Tuple[str, int]]:
+        """Get priority scores for all cached files.
+
+        Args:
+            cached_files: List of cache file paths.
+
+        Returns:
+            List of (cache_path, priority_score) tuples, sorted by score ascending
+            (lowest priority first, for eviction order).
+        """
+        priorities = []
+        for cache_path in cached_files:
+            score = self.calculate_priority(cache_path)
+            priorities.append((cache_path, score))
+
+        # Sort by score ascending (lowest priority first)
+        priorities.sort(key=lambda x: x[1])
+        return priorities
+
+    def get_eviction_candidates(self, cached_files: List[str], target_bytes: int) -> List[str]:
+        """Get files to evict to free target_bytes of space.
+
+        Only considers files with priority below eviction_min_priority.
+        Returns lowest-priority files first, accumulating until target_bytes reached.
+
+        Args:
+            cached_files: List of cache file paths.
+            target_bytes: Amount of space needed to free.
+
+        Returns:
+            List of cache file paths to evict, in eviction order.
+        """
+        if target_bytes <= 0:
+            return []
+
+        # Get all priorities, sorted by score ascending
+        priorities = self.get_all_priorities(cached_files)
+
+        candidates = []
+        bytes_accumulated = 0
+
+        for cache_path, score in priorities:
+            # Only evict files below minimum priority threshold
+            if score >= self.eviction_min_priority:
+                logging.debug(f"Skipping eviction candidate (score {score} >= {self.eviction_min_priority}): {os.path.basename(cache_path)}")
+                continue
+
+            # Check file exists and get size
+            if not os.path.exists(cache_path):
+                continue
+
+            try:
+                file_size = os.path.getsize(cache_path)
+            except (OSError, IOError):
+                continue
+
+            candidates.append(cache_path)
+            bytes_accumulated += file_size
+
+            logging.debug(f"Eviction candidate (score {score}): {os.path.basename(cache_path)} ({file_size / (1024**2):.1f}MB)")
+
+            if bytes_accumulated >= target_bytes:
+                break
+
+        return candidates
+
+    def get_priority_report(self, cached_files: List[str]) -> str:
+        """Generate a human-readable priority report for all cached files.
+
+        Sorted by: Score (desc), Source (ondeck first), Days cached (asc)
+
+        Args:
+            cached_files: List of cache file paths.
+
+        Returns:
+            Formatted string showing priority scores and metadata.
+        """
+        priorities = self.get_all_priorities(cached_files)
+
+        # Build list of report entries with all metadata for sorting
+        entries = []
+        stale_entries = []  # Track files that no longer exist on disk
+        for cache_path, score in priorities:
+            # Get file info
+            try:
+                if os.path.exists(cache_path):
+                    size_bytes = os.path.getsize(cache_path)
+                    size_str = f"{size_bytes / (1024**3):.1f}GB" if size_bytes >= 1024**3 else f"{size_bytes / (1024**2):.0f}MB"
+                else:
+                    # File doesn't exist - track as stale and skip
+                    filename = os.path.basename(cache_path)
+                    if len(filename) > 50:
+                        filename = filename[:47] + "..."
+                    stale_entries.append(filename)
+                    continue
+            except (OSError, IOError):
+                # Can't access file - track as stale and skip
+                filename = os.path.basename(cache_path)
+                if len(filename) > 50:
+                    filename = filename[:47] + "..."
+                stale_entries.append(filename)
+                continue
+
+            source = self.timestamp_tracker.get_source(cache_path)
+            hours_cached = self._get_hours_since_cached(cache_path)
+            days_cached = hours_cached / 24 if hours_cached >= 0 else -1
+
+            # Get user count from OnDeck and Watchlist trackers
+            user_count = 0
+            ondeck_entry = self.ondeck_tracker.get_entry(cache_path)
+            if ondeck_entry:
+                user_count = len(ondeck_entry.get('users', []))
+            watchlist_entry = self.watchlist_tracker.get_entry(cache_path)
+            if watchlist_entry:
+                watchlist_users = len(watchlist_entry.get('users', []))
+                user_count = max(user_count, watchlist_users)
+
+            filename = os.path.basename(cache_path)
+            if len(filename) > 35:
+                filename = filename[:32] + "..."
+
+            entries.append({
+                'score': score,
+                'source': source,
+                'days': days_cached,
+                'size_str': size_str,
+                'size_bytes': size_bytes,
+                'user_count': user_count,
+                'filename': filename
+            })
+
+        # Sort by: Score (desc), Source (ondeck=0, watchlist=1, unknown=2), Days (asc)
+        source_order = {'ondeck': 0, 'watchlist': 1, 'unknown': 2}
+        entries.sort(key=lambda e: (-e['score'], source_order.get(e['source'], 2), e['days']))
+
+        # Build report
+        lines = []
+        lines.append("Cache Priority Report")
+        lines.append("=" * 70)
+        lines.append(f"{'Score':>5} | {'Size':>8} | {'Source':>9} | {'Users':>5} | {'Days':>4} | File")
+        lines.append("-" * 70)
+
+        evictable_count = 0
+        evictable_bytes = 0
+
+        for entry in entries:
+            evict_marker = " *" if entry['score'] < self.eviction_min_priority else ""
+            lines.append(f"{entry['score']:>5} | {entry['size_str']:>8} | {entry['source']:>9} | {entry['user_count']:>5} | {entry['days']:>4.0f} | {entry['filename']}{evict_marker}")
+
+            if entry['score'] < self.eviction_min_priority:
+                evictable_count += 1
+                evictable_bytes += entry['size_bytes']
+
+        lines.append("-" * 70)
+        lines.append(f"Items below eviction threshold ({self.eviction_min_priority}): {evictable_count}")
+        lines.append(f"Space that would be freed: {evictable_bytes / (1024**3):.2f}GB")
+        lines.append("")
+        lines.append("* = Would be evicted when space is needed")
+
+        # List stale entries if any
+        if stale_entries:
+            lines.append("")
+            lines.append(f"Stale entries (file not found): {len(stale_entries)} — run app to clean")
+            for stale_file in sorted(stale_entries):
+                lines.append(f"  - {stale_file}")
+
+        return "\n".join(lines)
+
+    def _get_hours_since_cached(self, cache_path: str) -> float:
+        """Get hours since file was cached.
+
+        Args:
+            cache_path: Path to the cached file.
+
+        Returns:
+            Hours since cached, or -1 if no timestamp.
+        """
+        # Use the retention_remaining method with a large retention to get the age
+        remaining = self.timestamp_tracker.get_retention_remaining(cache_path, 10000)
+        if remaining == 0:
+            return -1  # No timestamp
+        # remaining = retention - age, so age = retention - remaining
+        return 10000 - remaining
+
+    def _get_days_on_watchlist(self, entry: dict) -> float:
+        """Get days since item was added to watchlist.
+
+        Args:
+            entry: Watchlist tracker entry dict.
+
+        Returns:
+            Days on watchlist, or -1 if no timestamp.
+        """
+        watchlisted_at_str = entry.get('watchlisted_at')
+        if not watchlisted_at_str:
+            return -1
+
+        try:
+            watchlisted_at = datetime.fromisoformat(watchlisted_at_str)
+            return (datetime.now() - watchlisted_at).total_seconds() / 86400
+        except (ValueError, TypeError):
+            return -1
+
+    def _get_episodes_ahead_of_ondeck(self, cache_path: str) -> int:
+        """Get how many episodes this file is ahead of the OnDeck position.
+
+        For TV episodes, calculates the distance from the earliest OnDeck position
+        for the same show. This is used to prioritize current/next episodes over
+        episodes further in the future.
+
+        Args:
+            cache_path: Path to the cached file.
+
+        Returns:
+            Number of episodes ahead of OnDeck position:
+            - 0: This IS the current OnDeck episode
+            - 1-N: Number of episodes ahead
+            - -1: Not a TV episode, or no OnDeck position found for this show
+        """
+        # Get episode info for this file
+        ep_info = self.ondeck_tracker.get_episode_info(cache_path)
+        if not ep_info:
+            return -1  # Not a TV episode or no info available
+
+        show = ep_info.get('show')
+        season = ep_info.get('season')
+        episode = ep_info.get('episode')
+
+        if not show or season is None or episode is None:
+            return -1
+
+        # Check if this IS the current OnDeck episode
+        if ep_info.get('is_current_ondeck'):
+            return 0
+
+        # Get the earliest OnDeck position for this show
+        ondeck_pos = self.ondeck_tracker.get_earliest_ondeck_position(show)
+        if not ondeck_pos:
+            return -1  # No OnDeck position found for this show
+
+        ondeck_season, ondeck_episode = ondeck_pos
+
+        # Calculate how many episodes ahead this file is
+        if season < ondeck_season:
+            # This episode is BEFORE the OnDeck position (shouldn't happen, but handle it)
+            return -1
+        elif season == ondeck_season:
+            if episode <= ondeck_episode:
+                # Same season, same or earlier episode
+                return 0
+            else:
+                # Same season, later episode
+                return episode - ondeck_episode
+        else:
+            # Later season - estimate distance
+            # Assume ~13 episodes per season for estimation
+            episodes_per_season = 13
+            seasons_ahead = season - ondeck_season
+            episodes_remaining_in_ondeck_season = episodes_per_season - ondeck_episode
+            full_seasons_between = max(0, seasons_ahead - 1) * episodes_per_season
+            return episodes_remaining_in_ondeck_season + full_seasons_between + episode
+
+    def _is_tv_episode(self, cache_path: str) -> bool:
+        """Check if a cached file is a TV episode.
+
+        Args:
+            cache_path: Path to the cached file.
+
+        Returns:
+            True if this is a TV episode with episode info, False otherwise.
+        """
+        ep_info = self.ondeck_tracker.get_episode_info(cache_path)
+        return ep_info is not None and ep_info.get('show') is not None
 
 
 class PlexcachedMigration:
@@ -542,44 +1273,34 @@ class PlexcachedMigration:
         """Check if migration has already been completed."""
         return not os.path.exists(self.flag_file)
 
-    def run_migration(self, dry_run: bool = False, max_concurrent: int = 5) -> Tuple[int, int, int]:
-        """Run the migration to create .plexcached backups.
-
-        Args:
-            dry_run: If True, only log what would be done without making changes.
-            max_concurrent: Maximum number of concurrent file copies.
+    def _read_exclude_file(self) -> Tuple[List[str], int]:
+        """Read and deduplicate the exclude file.
 
         Returns:
-            Tuple of (files_migrated, files_skipped, errors)
+            Tuple of (deduplicated_cache_files, duplicates_removed_count)
         """
-        if not self.needs_migration():
-            logging.info("Migration already complete, skipping")
-            return 0, 0, 0
-
         if not os.path.exists(self.exclude_file):
-            logging.info("No exclude file found, nothing to migrate")
-            self._mark_complete()
-            return 0, 0, 0
+            return [], 0
 
-        # Read exclude file to get list of cached files (deduplicated)
         with open(self.exclude_file, 'r') as f:
             all_lines = [line.strip() for line in f if line.strip()]
             cache_files = list(dict.fromkeys(all_lines))
             duplicates_removed = len(all_lines) - len(cache_files)
 
-        if not cache_files:
-            logging.info("Exclude file is empty, nothing to migrate")
-            self._mark_complete()
-            return 0, 0, 0
+        return cache_files, duplicates_removed
 
-        logging.info("=== PlexCache-R Migration ===")
-        if duplicates_removed > 0:
-            logging.info(f"Removed {duplicates_removed} duplicate entries from exclude list")
-        logging.info(f"Checking {len(cache_files)} unique files in exclude list...")
+    def _find_files_needing_migration(self, cache_files: List[str]) -> Tuple[List[Tuple[str, str, str]], int]:
+        """Find files that need .plexcached backup creation.
 
+        Args:
+            cache_files: List of cache file paths from exclude file.
+
+        Returns:
+            Tuple of (files_needing_migration, total_bytes)
+            where files_needing_migration is a list of (cache_file, array_file, plexcached_file) tuples.
+        """
         files_needing_migration = []
 
-        # Find files that need migration (on cache but no .plexcached on array)
         for cache_file in cache_files:
             if not os.path.isfile(cache_file):
                 logging.debug(f"Cache file no longer exists, skipping: {cache_file}")
@@ -608,12 +1329,7 @@ class PlexcachedMigration:
             # This file needs migration
             files_needing_migration.append((cache_file, array_file_check, plexcached_file))
 
-        if not files_needing_migration:
-            logging.info("All files already have backups, no migration needed")
-            self._mark_complete()
-            return 0, len(cache_files), 0
-
-        # Calculate total size of files to migrate
+        # Calculate total size
         total_bytes = 0
         for cache_file, _, _ in files_needing_migration:
             try:
@@ -621,94 +1337,140 @@ class PlexcachedMigration:
             except OSError:
                 pass
 
-        total_gb = total_bytes / (1024 ** 3)
-        logging.info(f"Found {len(files_needing_migration)} files needing .plexcached backup ({total_gb:.2f} GB)")
+        return files_needing_migration, total_bytes
 
-        if dry_run:
-            logging.info("[DRY RUN] Would create the following backups:")
-            for cache_file, array_file, plexcached_file in files_needing_migration:
-                logging.info(f"  {cache_file} -> {plexcached_file}")
-            return 0, 0, 0
+    def _migrate_single_file(self, args: Tuple[str, str, str]) -> int:
+        """Migrate a single file by creating its .plexcached backup.
 
-        # Perform migration with progress tracking using thread pool
-        logging.info(f"Starting migration with {max_concurrent} concurrent copies...")
+        Args:
+            args: Tuple of (cache_file, array_file, plexcached_file)
 
-        # Thread-safe counters and state
-        self._migration_lock = threading.Lock()
-        self._migrated = 0
-        self._errors = 0
-        self._completed_bytes = 0
-        self._total_files = len(files_needing_migration)
-        self._total_bytes = total_bytes
-        self._active_files = {}  # Thread ID -> (filename, size)
-        self._last_display_lines = 0
+        Returns:
+            0 on success, 1 on error
+        """
+        cache_file, array_file, plexcached_file = args
+        thread_id = threading.get_ident()
 
-        def migrate_file(args):
-            cache_file, array_file, plexcached_file = args
-            thread_id = threading.get_ident()
+        try:
+            # Get file size for progress
             try:
-                # Get file size for progress
-                try:
-                    file_size = os.path.getsize(cache_file)
-                except OSError:
-                    file_size = 0
+                file_size = os.path.getsize(cache_file)
+            except OSError:
+                file_size = 0
 
-                filename = os.path.basename(cache_file)
+            filename = os.path.basename(cache_file)
 
-                # Register as active before starting copy
+            # Register as active before starting copy
+            with self._migration_lock:
+                self._active_files[thread_id] = (filename, file_size)
+                self._print_progress()
+
+            # Ensure directory exists
+            array_dir = os.path.dirname(plexcached_file)
+            if not os.path.exists(array_dir):
+                os.makedirs(array_dir, exist_ok=True)
+
+            # Copy cache file to array as .plexcached (preserving ownership on Linux)
+            if self.is_unraid:
+                # Get source ownership before copy
+                stat_info = os.stat(cache_file)
+                src_uid = stat_info.st_uid
+                src_gid = stat_info.st_gid
+
+                shutil.copy2(cache_file, plexcached_file)
+
+                # Restore original ownership (shutil.copy2 doesn't preserve uid/gid)
+                os.chown(plexcached_file, src_uid, src_gid)
+                logging.debug(f"  Preserved ownership: uid={src_uid}, gid={src_gid}")
+            else:
+                shutil.copy2(cache_file, plexcached_file)
+
+            # Verify copy succeeded
+            if os.path.isfile(plexcached_file):
                 with self._migration_lock:
-                    self._active_files[thread_id] = (filename, file_size)
+                    self._migrated += 1
+                    self._completed_bytes += file_size
+                    if thread_id in self._active_files:
+                        del self._active_files[thread_id]
                     self._print_progress()
-
-                # Ensure directory exists
-                array_dir = os.path.dirname(plexcached_file)
-                if not os.path.exists(array_dir):
-                    os.makedirs(array_dir, exist_ok=True)
-
-                # Copy cache file to array as .plexcached (preserving ownership on Linux)
-                if self.is_unraid:
-                    # Get source ownership before copy
-                    stat_info = os.stat(cache_file)
-                    src_uid = stat_info.st_uid
-                    src_gid = stat_info.st_gid
-
-                    shutil.copy2(cache_file, plexcached_file)
-
-                    # Restore original ownership (shutil.copy2 doesn't preserve uid/gid)
-                    os.chown(plexcached_file, src_uid, src_gid)
-                    logging.debug(f"  Preserved ownership: uid={src_uid}, gid={src_gid}")
-                else:
-                    shutil.copy2(cache_file, plexcached_file)
-
-                # Verify copy succeeded
-                if os.path.isfile(plexcached_file):
-                    with self._migration_lock:
-                        self._migrated += 1
-                        self._completed_bytes += file_size
-                        if thread_id in self._active_files:
-                            del self._active_files[thread_id]
-                        self._print_progress()
-                    # Log to file (outside lock for performance)
-                    logging.info(f"Migrated: {filename} ({self._format_bytes(file_size)})")
-                    return 0
-                else:
-                    logging.error(f"Failed to verify: {plexcached_file}")
-                    with self._migration_lock:
-                        self._errors += 1
-                        if thread_id in self._active_files:
-                            del self._active_files[thread_id]
-                    return 1
-
-            except Exception as e:
-                logging.error(f"Error migrating {cache_file}: {type(e).__name__}: {e}")
+                # Log to file (outside lock for performance)
+                logging.info(f"Migrated: {filename} ({format_bytes(file_size)})")
+                return 0
+            else:
+                logging.error(f"Failed to verify: {plexcached_file}")
                 with self._migration_lock:
                     self._errors += 1
                     if thread_id in self._active_files:
                         del self._active_files[thread_id]
                 return 1
 
+        except Exception as e:
+            logging.error(f"Error migrating {cache_file}: {type(e).__name__}: {e}")
+            with self._migration_lock:
+                self._errors += 1
+                if thread_id in self._active_files:
+                    del self._active_files[thread_id]
+            return 1
+
+    def run_migration(self, dry_run: bool = False, max_concurrent: int = 5) -> Tuple[int, int, int]:
+        """Run the migration to create .plexcached backups.
+
+        Args:
+            dry_run: If True, only log what would be done without making changes.
+            max_concurrent: Maximum number of concurrent file copies.
+
+        Returns:
+            Tuple of (files_migrated, files_skipped, errors)
+        """
+        if not self.needs_migration():
+            logging.info("Migration already complete, skipping")
+            return 0, 0, 0
+
+        # Read and deduplicate exclude file
+        cache_files, duplicates_removed = self._read_exclude_file()
+
+        if not cache_files:
+            logging.info("No exclude file or empty, nothing to migrate")
+            self._mark_complete()
+            return 0, 0, 0
+
+        logging.info("=== PlexCache-R Migration ===")
+        if duplicates_removed > 0:
+            logging.info(f"Removed {duplicates_removed} duplicate entries from exclude list")
+        logging.info(f"Checking {len(cache_files)} unique files in exclude list...")
+
+        # Find files that need migration
+        files_needing_migration, total_bytes = self._find_files_needing_migration(cache_files)
+
+        if not files_needing_migration:
+            logging.info("All files already have backups, no migration needed")
+            self._mark_complete()
+            return 0, len(cache_files), 0
+
+        total_gb = total_bytes / (1024 ** 3)
+        logging.info(f"Found {len(files_needing_migration)} files needing .plexcached backup ({total_gb:.2f} GB)")
+
+        if dry_run:
+            logging.info("[DRY RUN] Would create the following backups:")
+            for cache_file, _, plexcached_file in files_needing_migration:
+                logging.info(f"  {cache_file} -> {plexcached_file}")
+            return 0, 0, 0
+
+        # Perform migration with progress tracking
+        logging.info(f"Starting migration with {max_concurrent} concurrent copies...")
+
+        # Initialize thread-safe counters
+        self._migration_lock = threading.Lock()
+        self._migrated = 0
+        self._errors = 0
+        self._completed_bytes = 0
+        self._total_files = len(files_needing_migration)
+        self._total_bytes = total_bytes
+        self._active_files = {}
+        self._last_display_lines = 0
+
         with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
-            list(executor.map(migrate_file, files_needing_migration))
+            list(executor.map(self._migrate_single_file, files_needing_migration))
 
         # Print final progress
         with self._migration_lock:
@@ -716,8 +1478,8 @@ class PlexcachedMigration:
 
         migrated = self._migrated
         errors = self._errors
-
         skipped = len(cache_files) - len(files_needing_migration)
+
         logging.info(f"=== Migration Complete ===")
         logging.info(f"  Migrated: {migrated} files")
         logging.info(f"  Skipped (already had backup): {skipped} files")
@@ -739,17 +1501,6 @@ class PlexcachedMigration:
         except IOError as e:
             logging.error(f"Could not create migration flag: {type(e).__name__}: {e}")
 
-    def _format_bytes(self, bytes_value: int) -> str:
-        """Format bytes into human-readable string (e.g., '1.5 GB')."""
-        if bytes_value < 1024:
-            return f"{bytes_value} B"
-        elif bytes_value < 1024 ** 2:
-            return f"{bytes_value / 1024:.1f} KB"
-        elif bytes_value < 1024 ** 3:
-            return f"{bytes_value / (1024 ** 2):.1f} MB"
-        else:
-            return f"{bytes_value / (1024 ** 3):.1f} GB"
-
     def _print_progress(self, final: bool = False) -> None:
         """Print progress bar for migration with active file queue display."""
         if self._total_files == 0:
@@ -762,93 +1513,277 @@ class PlexcachedMigration:
         bar = '█' * filled + '░' * (bar_width - filled)
 
         # Format data progress
-        completed_str = self._format_bytes(self._completed_bytes)
-        total_str = self._format_bytes(self._total_bytes)
+        completed_str = format_bytes(self._completed_bytes)
+        total_str = format_bytes(self._total_bytes)
         data_progress = f"{completed_str} / {total_str}"
 
         active_files = list(self._active_files.values())
 
-        # Clear previous display first (move up and clear each line)
-        if self._last_display_lines > 0:
-            for _ in range(self._last_display_lines):
-                print('\033[A\033[2K', end='')
+        # Use console lock to prevent interleaving with logging
+        with get_console_lock():
+            # Clear previous display first (move up and clear each line)
+            if self._last_display_lines > 0:
+                for _ in range(self._last_display_lines):
+                    print('\033[A\033[2K', end='')
 
-        if final:
-            # Print final summary
-            print(f"[{bar}] 100% ({completed}/{self._total_files}) - {data_progress} - Migration complete")
-            self._last_display_lines = 0
+            if final:
+                # Print final summary
+                print(f"[{bar}] 100% ({completed}/{self._total_files}) - {data_progress} - Migration complete")
+                self._last_display_lines = 0
+            else:
+                # Build the display lines
+                lines = []
+                lines.append(f"[{bar}] {percentage:.0f}% ({completed}/{self._total_files}) - {data_progress} - Migrating...")
+
+                if active_files:
+                    lines.append(f"  Currently copying ({len(active_files)} active):")
+                    for filename, file_size in active_files[:5]:  # Limit to 5 active files shown
+                        display_name = filename[:50] + '...' if len(filename) > 50 else filename
+                        size_str = format_bytes(file_size)
+                        lines.append(f"    -> {display_name} ({size_str})")
+                    if len(active_files) > 5:
+                        lines.append(f"    ... and {len(active_files) - 5} more")
+
+                # Print all lines and track count for next clear
+                for line in lines:
+                    print(line)
+                self._last_display_lines = len(lines)
+
+
+class MultiPathModifier:
+    """Handles path conversion with multiple mapping support.
+
+    Replaces the legacy FilePathModifier for setups with multiple path mappings.
+    Supports:
+    - Multiple independent path mappings (e.g., local array + remote NAS)
+    - Per-mapping cache configuration
+    - Non-cacheable paths (remote storage that shouldn't be cached)
+    - Longest-prefix matching for overlapping paths
+
+    Attributes:
+        mappings: List of PathMapping objects, sorted by plex_path length (descending)
+                  for longest-prefix matching.
+    """
+
+    def __init__(self, mappings: List['PathMapping']):
+        """Initialize with list of path mappings.
+
+        Args:
+            mappings: List of PathMapping objects. Will be filtered to enabled only
+                      and sorted by plex_path length (descending) for longest-prefix matching.
+        """
+        # Import here to avoid circular imports
+        from config import PathMapping
+
+        # Keep all mappings for disabled path checking, sorted by plex_path length (longest first)
+        self.all_mappings = sorted(
+            mappings,
+            key=lambda m: len(m.plex_path),
+            reverse=True
+        )
+
+        # Filter to enabled mappings for actual path conversion
+        self.mappings = [m for m in self.all_mappings if m.enabled]
+
+        # Track disabled skips across calls for consolidated logging
+        self._accumulated_disabled_skips = {}
+
+        if not self.mappings:
+            logging.warning("No enabled path mappings configured!")
         else:
-            # Build the display lines
-            lines = []
-            lines.append(f"[{bar}] {percentage:.0f}% ({completed}/{self._total_files}) - {data_progress} - Migrating...")
+            enabled_count = len(self.mappings)
+            total_count = len(self.all_mappings)
+            logging.debug(f"MultiPathModifier initialized with {total_count} mappings ({enabled_count} enabled)")
+            for m in self.mappings:
+                cacheable_str = "cacheable" if m.cacheable else "NOT cacheable"
+                logging.debug(f"  {m.name}: {m.plex_path} -> {m.real_path} ({cacheable_str})")
 
-            if active_files:
-                lines.append(f"  Currently copying ({len(active_files)} active):")
-                for filename, file_size in active_files[:5]:  # Limit to 5 active files shown
-                    display_name = filename[:50] + '...' if len(filename) > 50 else filename
-                    size_str = self._format_bytes(file_size)
-                    lines.append(f"    -> {display_name} ({size_str})")
-                if len(active_files) > 5:
-                    lines.append(f"    ... and {len(active_files) - 5} more")
+    def convert_plex_to_real(self, plex_path: str) -> Tuple[str, Optional['PathMapping']]:
+        """Convert Plex path to real filesystem path.
 
-            # Print all lines and track count for next clear
-            for line in lines:
-                print(line)
-            self._last_display_lines = len(lines)
+        Args:
+            plex_path: Path as returned by Plex API.
 
+        Returns:
+            Tuple of (converted_path, mapping_used).
+            If no mapping matches, returns (original_path, None).
+        """
+        # Check if already converted (matches any real_path prefix)
+        for mapping in self.mappings:
+            if plex_path.startswith(mapping.real_path):
+                logging.debug(f"Path already in real format, skipping: {plex_path}")
+                return (plex_path, mapping)
 
-class FilePathModifier:
-    """Handles file path modifications and conversions."""
-    
-    def __init__(self, plex_source: str, real_source: str, 
-                 plex_library_folders: List[str], nas_library_folders: List[str]):
-        self.plex_source = plex_source
-        self.real_source = real_source
-        self.plex_library_folders = plex_library_folders
-        self.nas_library_folders = nas_library_folders
-    
+        # Find matching mapping (longest prefix wins due to sort order)
+        for mapping in self.mappings:
+            if plex_path.startswith(mapping.plex_path):
+                converted = plex_path.replace(mapping.plex_path, mapping.real_path, 1)
+                logging.debug(f"Converted path using '{mapping.name}': {plex_path} -> {converted}")
+                return (converted, mapping)
+
+        # Check if path matches a disabled mapping (skip silently)
+        for mapping in self.all_mappings:
+            if not mapping.enabled and plex_path.startswith(mapping.plex_path):
+                logging.debug(f"Skipping disabled mapping '{mapping.name}': {plex_path}")
+                return (plex_path, None)
+
+        # Extract library folder for cleaner message (e.g., /nas/TV Shows UHD/)
+        path_parts = plex_path.lstrip('/').split('/')
+        if len(path_parts) >= 2:
+            library_hint = f"/{path_parts[0]}/{path_parts[1]}/"
+        elif path_parts:
+            library_hint = f"/{path_parts[0]}/"
+        else:
+            library_hint = plex_path
+        logging.info(f"Skipping unmapped path {library_hint} - add to path_mappings with enabled:false to silence")
+        logging.debug(f"Full unmapped path: {plex_path}")
+        return (plex_path, None)
+
+    def convert_real_to_cache(self, real_path: str) -> Tuple[Optional[str], Optional['PathMapping']]:
+        """Convert real filesystem path to cache path.
+
+        Args:
+            real_path: Actual filesystem path.
+
+        Returns:
+            Tuple of (cache_path, mapping_used).
+            Returns (None, mapping) if path is not cacheable.
+            Returns (None, None) if no mapping matches.
+        """
+        for mapping in self.mappings:
+            if real_path.startswith(mapping.real_path):
+                if not mapping.cacheable or not mapping.cache_path:
+                    logging.debug(f"Path not cacheable ({mapping.name}): {real_path}")
+                    return (None, mapping)
+                cache = real_path.replace(mapping.real_path, mapping.cache_path, 1)
+                return (cache, mapping)
+
+        # Check if path matches a disabled mapping (skip silently)
+        for mapping in self.all_mappings:
+            if not mapping.enabled and real_path.startswith(mapping.real_path):
+                logging.debug(f"Skipping disabled mapping '{mapping.name}': {real_path}")
+                return (None, None)
+
+        logging.debug(f"No mapping found for real path: {real_path}")
+        return (None, None)
+
+    def convert_cache_to_real(self, cache_path: str) -> Tuple[Optional[str], Optional['PathMapping']]:
+        """Convert cache path back to real filesystem path.
+
+        Args:
+            cache_path: Path on cache drive.
+
+        Returns:
+            Tuple of (real_path, mapping_used).
+            Returns (None, None) if no mapping matches.
+        """
+        for mapping in self.mappings:
+            if mapping.cache_path and cache_path.startswith(mapping.cache_path):
+                real = cache_path.replace(mapping.cache_path, mapping.real_path, 1)
+                return (real, mapping)
+
+        # Check if path matches a disabled mapping (skip silently)
+        for mapping in self.all_mappings:
+            if not mapping.enabled and mapping.cache_path and cache_path.startswith(mapping.cache_path):
+                logging.debug(f"Skipping disabled mapping '{mapping.name}': {cache_path}")
+                return (None, None)
+
+        logging.debug(f"No mapping found for cache path: {cache_path}")
+        return (None, None)
+
+    def is_cacheable(self, real_path: str) -> bool:
+        """Check if a real filesystem path is cacheable.
+
+        Args:
+            real_path: Actual filesystem path.
+
+        Returns:
+            True if path belongs to a cacheable mapping, False otherwise.
+        """
+        for mapping in self.mappings:
+            if real_path.startswith(mapping.real_path):
+                return mapping.cacheable
+        return False
+
+    def get_mapping_for_path(self, path: str) -> Optional['PathMapping']:
+        """Get the mapping that handles a given path.
+
+        Args:
+            path: Any path (plex, real, or cache).
+
+        Returns:
+            The PathMapping that handles this path, or None.
+        """
+        for mapping in self.mappings:
+            if (path.startswith(mapping.plex_path) or
+                path.startswith(mapping.real_path) or
+                (mapping.cache_path and path.startswith(mapping.cache_path))):
+                return mapping
+        return None
+
     def modify_file_paths(self, files: List[str]) -> List[str]:
-        """Modify file paths from Plex paths to real system paths."""
+        """Convert a list of Plex paths to real paths.
+
+        Compatibility method - replaces legacy FilePathModifier.modify_file_paths().
+
+        Args:
+            files: List of Plex paths.
+
+        Returns:
+            List of converted real paths.
+        """
         if files is None:
             return []
 
-        logging.debug("Editing file paths...")
-
+        logging.debug("Converting file paths using multi-path mappings...")
         result = []
+        disabled_skips = {}  # mapping_name -> count
+
         for file_path in files:
-            # Skip paths already in real_source format (prevents double-conversion)
-            # This is critical when plex_source is "/" - all paths start with "/"
-            if file_path.startswith(self.real_source):
-                logging.debug(f"Path already converted, skipping: {file_path}")
-                result.append(file_path)
-                continue
+            converted, mapping = self.convert_plex_to_real(file_path)
+            result.append(converted)
 
-            # Pass through paths that are already converted (don't start with plex_source)
-            if not file_path.startswith(self.plex_source):
-                result.append(file_path)
-                continue
+            # Track files skipped due to disabled mappings
+            if mapping is None:
+                # Check if it matched a disabled mapping
+                for m in self.all_mappings:
+                    if not m.enabled and file_path.startswith(m.plex_path):
+                        disabled_skips[m.name] = disabled_skips.get(m.name, 0) + 1
+                        break
 
-            logging.debug(f"Original path: {file_path}")
-
-            # Replace the plex_source with the real_source in the file path
-            file_path = file_path.replace(self.plex_source, self.real_source, 1)
-
-            # Determine which library folder is in the file path
-            folder_matched = False
-            for j, folder in enumerate(self.plex_library_folders):
-                if folder in file_path:
-                    # Replace the plex library folder with the corresponding NAS library folder
-                    file_path = file_path.replace(folder, self.nas_library_folders[j])
-                    folder_matched = True
-                    break
-
-            if not folder_matched:
-                logging.warning(f"Path conversion: No matching library folder found for: {file_path}")
-
-            result.append(file_path)
-            logging.debug(f"Edited path: {file_path}")
+        # Accumulate disabled skips for consolidated logging later
+        for name, count in disabled_skips.items():
+            self._accumulated_disabled_skips[name] = self._accumulated_disabled_skips.get(name, 0) + count
 
         return result
+
+    def log_disabled_skips_summary(self) -> None:
+        """Log a summary of all accumulated disabled library skips and reset the counter.
+
+        Call this once after all path processing is complete (e.g., end of _process_media).
+        """
+        if self._accumulated_disabled_skips:
+            total_skipped = sum(self._accumulated_disabled_skips.values())
+            mapping_names = ', '.join(sorted(self._accumulated_disabled_skips.keys()))
+            logging.info(f"Skipped {total_skipped} files from disabled libraries ({mapping_names})")
+            self._accumulated_disabled_skips = {}
+
+    def get_mapping_stats(self) -> Dict[str, Dict[str, any]]:
+        """Get statistics about path mappings.
+
+        Returns:
+            Dict mapping names to stats (plex_path, real_path, cacheable, enabled).
+        """
+        return {
+            m.name: {
+                'plex_path': m.plex_path,
+                'real_path': m.real_path,
+                'cache_path': m.cache_path,
+                'cacheable': m.cacheable,
+                'enabled': m.enabled
+            }
+            for m in self.mappings
+        }
 
 
 class SubtitleFinder:
@@ -909,13 +1844,19 @@ class FileFilter:
     def __init__(self, real_source: str, cache_dir: str, is_unraid: bool,
                  mover_cache_exclude_file: str,
                  timestamp_tracker: Optional['CacheTimestampTracker'] = None,
-                 cache_retention_hours: int = 12):
+                 cache_retention_hours: int = 12,
+                 ondeck_tracker: Optional['OnDeckTracker'] = None,
+                 watchlist_tracker: Optional['WatchlistTracker'] = None,
+                 path_modifier: Optional['MultiPathModifier'] = None):
         self.real_source = real_source
         self.cache_dir = cache_dir
         self.is_unraid = is_unraid
         self.mover_cache_exclude_file = mover_cache_exclude_file or ""
         self.timestamp_tracker = timestamp_tracker
         self.cache_retention_hours = cache_retention_hours
+        self.ondeck_tracker = ondeck_tracker
+        self.watchlist_tracker = watchlist_tracker
+        self.path_modifier = path_modifier  # For multi-path support
 
     def _add_to_exclude_file(self, cache_file_name: str) -> None:
         """Add a file to the exclude list."""
@@ -945,12 +1886,20 @@ class FileFilter:
         if not files:
             return []
 
+        non_cacheable_count = 0
         for file in files:
             if file in processed_files or (files_to_skip and file in files_to_skip):
                 continue
             processed_files.add(file)
 
-            cache_file_name = self._get_cache_paths(file)[1]
+            cache_path, cache_file_name = self._get_cache_paths(file)
+
+            # Skip non-cacheable files (e.g., remote NAS in multi-path mode)
+            if cache_file_name is None:
+                non_cacheable_count += 1
+                logging.debug(f"Skipping non-cacheable path: {file}")
+                continue
+
             cache_files_to_exclude.append(cache_file_name)
 
             if destination == 'array':
@@ -959,16 +1908,20 @@ class FileFilter:
                     cache_files_removed.append(cache_file_name)
                 if should_add:
                     media_to.append(file)
-                    logging.info(f"Adding file to array: {file}")
+                    logging.debug(f"Adding file to array: {file}")
 
             elif destination == 'cache':
                 if self._should_add_to_cache(file, cache_file_name):
                     media_to.append(file)
-                    logging.info(f"Adding file to cache: {file}")
+                    logging.debug(f"Adding file to cache: {file}")
 
         # Remove any cache files that were deleted during filtering from the exclude list
         if cache_files_removed:
             self.remove_files_from_exclude_list(cache_files_removed)
+
+        # Log non-cacheable files summary
+        if non_cacheable_count > 0:
+            logging.info(f"Skipped {non_cacheable_count} files from non-cacheable paths (remote storage)")
 
         return media_to
     
@@ -985,7 +1938,25 @@ class FileFilter:
             - cache_was_removed: True if cache file was removed (needs exclude list update)
         """
         if file in media_to_cache:
-            logging.debug(f"Skipping array move - file in media_to_cache: {file}")
+            # Look up which users still need this file
+            users = []
+            if self.ondeck_tracker:
+                entry = self.ondeck_tracker.get_entry(file)
+                if entry:
+                    users.extend(entry.get('users', []))
+            if self.watchlist_tracker and not users:
+                entry = self.watchlist_tracker.get_entry(file)
+                if entry:
+                    users.extend(entry.get('users', []))
+
+            filename = os.path.basename(file)
+            if users:
+                user_list = ', '.join(users[:3])  # Show first 3 users
+                if len(users) > 3:
+                    user_list += f" +{len(users) - 3} more"
+                logging.debug(f"Keeping in cache (OnDeck/Watchlist for {user_list}): {filename}")
+            else:
+                logging.debug(f"Keeping in cache (still needed): {filename}")
             return False, False
 
         # Note: Retention period check is handled upstream in get_files_to_move_back_to_array()
@@ -1050,15 +2021,100 @@ class FileFilter:
 
         return True
     
-    def _get_cache_paths(self, file: str) -> Tuple[str, str]:
-        """Get cache path and filename for a given file."""
-        # Get the cache path by replacing the real source directory with the cache directory
+    def _get_cache_paths(self, file: str) -> Tuple[str, Optional[str]]:
+        """Get cache path and filename for a given file.
+
+        Returns:
+            Tuple of (cache_path, cache_file_name).
+            cache_file_name is None if the file is not cacheable (multi-path mode).
+        """
+        # Use multi-path modifier if available
+        if self.path_modifier:
+            cache_file_name, mapping = self.path_modifier.convert_real_to_cache(file)
+            if cache_file_name is None:
+                # File is not cacheable (e.g., remote NAS)
+                return "", None
+            cache_path = os.path.dirname(cache_file_name)
+            return cache_path, cache_file_name
+
+        # Legacy single-path mode
         cache_path = os.path.dirname(file).replace(self.real_source, self.cache_dir, 1)
-        
-        # Get the cache file name by joining the cache path with the base name of the file
         cache_file_name = os.path.join(cache_path, os.path.basename(file))
-        
         return cache_path, cache_file_name
+
+    def _build_needed_media_sets(self, current_ondeck_items: Set[str],
+                                  current_watchlist_items: Set[str]) -> Tuple[Dict[str, Dict[int, int]], Set[str]]:
+        """Build tracking sets of media that should be kept in cache.
+
+        Args:
+            current_ondeck_items: Set of OnDeck file paths.
+            current_watchlist_items: Set of watchlist file paths.
+
+        Returns:
+            Tuple of (tv_show_min_episodes dict, needed_movies set).
+            tv_show_min_episodes maps show_name -> {season: min_episode_to_keep}
+        """
+        tv_show_min_episodes: Dict[str, Dict[int, int]] = {}
+        needed_movies: Set[str] = set()
+
+        for item in current_ondeck_items | current_watchlist_items:
+            tv_info = self._extract_tv_info(item)
+            if tv_info:
+                show_name, season_num, episode_num = tv_info
+                if show_name not in tv_show_min_episodes:
+                    tv_show_min_episodes[show_name] = {}
+                # Keep minimum episode for each season (the "current" episode)
+                if season_num not in tv_show_min_episodes[show_name]:
+                    tv_show_min_episodes[show_name][season_num] = episode_num
+                else:
+                    tv_show_min_episodes[show_name][season_num] = min(
+                        tv_show_min_episodes[show_name][season_num], episode_num
+                    )
+            else:
+                # It's a movie
+                media_name = self._extract_media_name(item)
+                if media_name:
+                    needed_movies.add(media_name)
+
+        logging.debug(f"TV shows on deck/watchlist: {list(tv_show_min_episodes.keys())}")
+        logging.debug(f"Movies on deck/watchlist: {len(needed_movies)}")
+        return tv_show_min_episodes, needed_movies
+
+    def _is_tv_episode_still_needed(self, show_name: str, season_num: int, episode_num: int,
+                                     tv_show_min_episodes: Dict[str, Dict[int, int]]) -> bool:
+        """Check if a TV episode should be kept in cache based on OnDeck position.
+
+        Args:
+            show_name: Name of the TV show.
+            season_num: Season number of the episode.
+            episode_num: Episode number.
+            tv_show_min_episodes: Dict of show -> {season: min_episode}.
+
+        Returns:
+            True if episode should be kept, False if it can be moved back.
+        """
+        if show_name not in tv_show_min_episodes:
+            return False  # Show not on deck/watchlist
+
+        min_ondeck_season = min(tv_show_min_episodes[show_name].keys())
+
+        if season_num < min_ondeck_season:
+            # Previous season - user has moved past this
+            logging.debug(f"TV episode in previous season (S{season_num:02d} < S{min_ondeck_season:02d}): {show_name}")
+            return False
+        elif season_num > min_ondeck_season:
+            # Future season - keep (user may have pre-cached ahead)
+            logging.debug(f"TV episode in future season, keeping: {show_name} S{season_num:02d}E{episode_num:02d}")
+            return True
+        else:
+            # Same season - check episode number
+            min_episode = tv_show_min_episodes[show_name][season_num]
+            if episode_num >= min_episode:
+                logging.debug(f"TV episode still needed (E{episode_num:02d} >= E{min_episode:02d}): {show_name}")
+                return True
+            else:
+                logging.debug(f"TV episode watched (E{episode_num:02d} < E{min_episode:02d}): {show_name}")
+                return False
 
     def get_files_to_move_back_to_array(self, current_ondeck_items: Set[str],
                                        current_watchlist_items: Set[str]) -> Tuple[List[str], List[str]]:
@@ -1073,118 +2129,77 @@ class FileFilter:
         """
         files_to_move_back = []
         cache_paths_to_remove = []
-        retained_count = 0
+        retention_holds = []
 
         try:
-            # Read the exclude file to get all files currently in cache
+            # Read exclude file
             if not os.path.exists(self.mover_cache_exclude_file):
                 logging.info("No exclude file found, nothing to move back")
                 return files_to_move_back, cache_paths_to_remove
 
             with open(self.mover_cache_exclude_file, 'r') as f:
                 cache_files = [line.strip() for line in f if line.strip()]
-
             logging.debug(f"Found {len(cache_files)} files in exclude list")
 
-            # Build TV show tracking: {show_name: {season: min_episode}}
-            # This tracks the minimum episode number that should be kept for each show/season
-            tv_show_min_episodes: Dict[str, Dict[int, int]] = {}
+            # Build tracking sets for needed media
+            tv_show_min_episodes, needed_movies = self._build_needed_media_sets(
+                current_ondeck_items, current_watchlist_items
+            )
 
-            # Build movie set for simple name matching
-            needed_movies = set()
-
-            # Process OnDeck and watchlist items
-            for item in current_ondeck_items | current_watchlist_items:
-                tv_info = self._extract_tv_info(item)
-                if tv_info:
-                    show_name, season_num, episode_num = tv_info
-                    if show_name not in tv_show_min_episodes:
-                        tv_show_min_episodes[show_name] = {}
-                    # Keep the minimum episode number for each season (the "current" episode)
-                    if season_num not in tv_show_min_episodes[show_name]:
-                        tv_show_min_episodes[show_name][season_num] = episode_num
-                    else:
-                        tv_show_min_episodes[show_name][season_num] = min(
-                            tv_show_min_episodes[show_name][season_num], episode_num
-                        )
-                else:
-                    # It's a movie - use filename matching
-                    media_name = self._extract_media_name(item)
-                    if media_name:
-                        needed_movies.add(media_name)
-
-            logging.debug(f"TV shows on deck/watchlist: {list(tv_show_min_episodes.keys())}")
-            logging.debug(f"Movies on deck/watchlist: {len(needed_movies)}")
-
-            # Check each file in cache
+            # Check each cached file
             for cache_file in cache_files:
                 if not os.path.exists(cache_file):
                     logging.debug(f"Cache file no longer exists: {cache_file}")
                     cache_paths_to_remove.append(cache_file)
                     continue
 
-                # Check if this is a TV show
+                # Determine if file should be kept
                 tv_info = self._extract_tv_info(cache_file)
-
                 if tv_info:
-                    # TV show episode logic
                     show_name, season_num, episode_num = tv_info
-
-                    # Check if this show is still being watched
-                    if show_name in tv_show_min_episodes:
-                        # Find the minimum (current) season for this show
-                        min_ondeck_season = min(tv_show_min_episodes[show_name].keys())
-
-                        if season_num < min_ondeck_season:
-                            # Previous season - user has moved past this season
-                            logging.debug(f"TV episode in previous season (S{season_num:02d} < S{min_ondeck_season:02d}), will check retention: {show_name} S{season_num:02d}E{episode_num:02d}")
-                        elif season_num > min_ondeck_season:
-                            # Future season - keep (user may have pre-cached ahead)
-                            logging.debug(f"TV episode in future season (S{season_num:02d} > S{min_ondeck_season:02d}), keeping: {show_name} S{season_num:02d}E{episode_num:02d}")
-                            continue
-                        else:
-                            # Same season as OnDeck - check episode number
-                            min_episode = tv_show_min_episodes[show_name][season_num]
-                            if episode_num >= min_episode:
-                                # Current or upcoming episode
-                                logging.debug(f"TV episode still needed (E{episode_num:02d} >= E{min_episode:02d}), keeping: {show_name} S{season_num:02d}E{episode_num:02d}")
-                                continue
-                            else:
-                                # Watched episode in current season
-                                logging.debug(f"TV episode watched (E{episode_num:02d} < E{min_episode:02d}), will check retention: {show_name} S{season_num:02d}E{episode_num:02d}")
-                    # Show not on deck/watchlist - will be moved back
+                    if self._is_tv_episode_still_needed(show_name, season_num, episode_num, tv_show_min_episodes):
+                        continue
                     media_name = show_name
                 else:
-                    # Movie logic - use filename matching
                     media_name = self._extract_media_name(cache_file)
                     if media_name is None:
                         logging.warning(f"Could not extract media name from path: {cache_file}")
                         continue
-
                     if media_name in needed_movies:
                         logging.debug(f"Movie still needed, keeping in cache: {media_name}")
                         continue
 
-                # Media is no longer needed - check if retention period applies
+                # Check retention period
                 if self.timestamp_tracker and self.cache_retention_hours > 0:
                     if self.timestamp_tracker.is_within_retention_period(cache_file, self.cache_retention_hours):
                         remaining = self.timestamp_tracker.get_retention_remaining(cache_file, self.cache_retention_hours)
+                        display_name = self._extract_display_name(cache_file)
+                        retention_holds.append((media_name, remaining, display_name))
                         remaining_str = f"{remaining:.0f}h" if remaining >= 1 else f"{remaining * 60:.0f}m"
-                        logging.info(f"Retention hold ({remaining_str} left): {media_name}")
-                        retained_count += 1
+                        logging.debug(f"Retention hold ({remaining_str} left): {display_name}")
                         continue
 
-                # Media is no longer needed and retention doesn't apply, move this file back to array
-                array_file = cache_file.replace(self.cache_dir, self.real_source, 1)
+                # Move file back to array
+                if self.path_modifier:
+                    array_file, _ = self.path_modifier.convert_cache_to_real(cache_file)
+                    if array_file is None:
+                        logging.warning(f"Could not convert cache path to array path: {cache_file}")
+                        continue
+                else:
+                    array_file = cache_file.replace(self.cache_dir, self.real_source, 1)
 
-                logging.info(f"Media no longer needed, will move back to array: {media_name} - {cache_file}")
+                display_name = self._extract_display_name(cache_file)
+                logging.debug(f"Media no longer needed, will move back to array: {display_name} - {cache_file}")
                 files_to_move_back.append(array_file)
                 cache_paths_to_remove.append(cache_file)
 
-            if retained_count > 0:
-                logging.info(f"Retained {retained_count} files due to cache retention period ({self.cache_retention_hours}h)")
+            # Log retention summary
+            if retention_holds:
+                grouped = self._group_retention_holds(retention_holds)
+                for line in self._format_retention_summary(grouped):
+                    logging.info(line)
             if files_to_move_back:
-                logging.info(f"Found {len(files_to_move_back)} files to move back to array")
+                logging.debug(f"Found {len(files_to_move_back)} files to move back to array")
 
         except Exception as e:
             logging.exception(f"Error getting files to move back to array: {type(e).__name__}: {e}")
@@ -1291,6 +2306,96 @@ class FileFilter:
         except Exception:
             return None
 
+    def _extract_display_name(self, file_path: str) -> str:
+        """Extract a human-readable display name from a file path.
+
+        For TV shows: Returns "Show - S##E## - Title" format
+        For movies: Returns "Movie Title (Year)" format
+
+        Args:
+            file_path: Full path to the media file
+
+        Returns:
+            Human-readable display name
+        """
+        try:
+            filename = os.path.basename(file_path)
+            name = os.path.splitext(filename)[0]
+
+            # Remove quality/codec info in brackets
+            if '[' in name:
+                name = name[:name.index('[')].strip()
+
+            # Clean up trailing dashes
+            name = name.rstrip(' -').rstrip('-').strip()
+
+            return name if name else os.path.basename(file_path)
+        except Exception:
+            return os.path.basename(file_path)
+
+    def _group_retention_holds(self, holds: List[Tuple[str, float, str]]) -> Dict[str, List[Tuple[float, str]]]:
+        """Group retention holds by media title.
+
+        Args:
+            holds: List of (media_name, hours_remaining, display_name) tuples
+
+        Returns:
+            Dict mapping media_name to list of (hours_remaining, display_name) tuples
+        """
+        from collections import defaultdict
+        grouped = defaultdict(list)
+        for media_name, hours, display_name in holds:
+            grouped[media_name].append((hours, display_name))
+        return grouped
+
+    def _format_retention_summary(self, grouped: Dict[str, List[Tuple[float, str]]], max_titles: int = 6) -> List[str]:
+        """Format grouped retention holds for logging.
+
+        Args:
+            grouped: Dict from _group_retention_holds()
+            max_titles: Maximum titles to show before summarizing
+
+        Returns:
+            List of formatted log lines
+        """
+        lines = []
+        total_count = sum(len(v) for v in grouped.values())
+
+        if total_count == 0:
+            return lines
+
+        # Use "episodes" for TV shows (majority of cached content)
+        unit = "episode" if total_count == 1 else "episodes"
+        lines.append(f"Retention holds ({total_count} {unit}):")
+
+        # Sort by count descending
+        sorted_titles = sorted(grouped.items(), key=lambda x: len(x[1]), reverse=True)
+
+        shown_count = 0
+        for i, (title, entries) in enumerate(sorted_titles):
+            if i >= max_titles:
+                remaining_titles = len(sorted_titles) - max_titles
+                remaining_count = total_count - shown_count
+                unit = "episode" if remaining_count == 1 else "episodes"
+                lines.append(f"  ...and {remaining_titles} more titles ({remaining_count} {unit})")
+                break
+
+            hours_list = [h for h, _ in entries]
+            min_h, max_h = min(hours_list), max(hours_list)
+            # Compare rounded values to avoid "3-3h" when values like 3.2 and 3.8 round to same
+            min_rounded, max_rounded = round(min_h), round(max_h)
+            if min_rounded == max_rounded:
+                time_str = f"{min_rounded}h" if min_rounded >= 1 else f"{round(min_h * 60)}m"
+            else:
+                time_str = f"{min_rounded}-{max_rounded}h"
+
+            count = len(entries)
+            unit = "episode" if count == 1 else "episodes"
+            lines.append(f"  {title}: {count} {unit} ({time_str} remaining)")
+            shown_count += count
+
+        return lines
+
     def remove_files_from_exclude_list(self, cache_paths_to_remove: List[str]) -> bool:
         """Remove specified files from the exclude list. Returns True on success."""
         try:
@@ -1390,7 +2495,8 @@ class FileMover:
 
     def __init__(self, real_source: str, cache_dir: str, is_unraid: bool,
                  file_utils, debug: bool = False, mover_cache_exclude_file: Optional[str] = None,
-                 timestamp_tracker: Optional['CacheTimestampTracker'] = None):
+                 timestamp_tracker: Optional['CacheTimestampTracker'] = None,
+                 path_modifier: Optional['MultiPathModifier'] = None):
         self.real_source = real_source
         self.cache_dir = cache_dir
         self.is_unraid = is_unraid
@@ -1398,6 +2504,7 @@ class FileMover:
         self.debug = debug
         self.mover_cache_exclude_file = mover_cache_exclude_file
         self.timestamp_tracker = timestamp_tracker
+        self.path_modifier = path_modifier  # For multi-path support
         self._exclude_file_lock = threading.Lock()
         # Progress tracking
         self._progress_lock = threading.Lock()
@@ -1409,16 +2516,6 @@ class FileMover:
         self._last_display_lines = 0
         # Source tracking: maps cache file paths to their source (ondeck/watchlist)
         self._source_map: Dict[str, str] = {}
-
-    def _format_size(self, size_bytes: int) -> str:
-        """Format file size in human-readable format."""
-        if size_bytes >= 1024 ** 3:
-            return f"{size_bytes / (1024 ** 3):.1f}GB"
-        elif size_bytes >= 1024 ** 2:
-            return f"{size_bytes / (1024 ** 2):.1f}MB"
-        elif size_bytes >= 1024:
-            return f"{size_bytes / 1024:.1f}KB"
-        return f"{size_bytes}B"
 
     def move_media_files(self, files: List[str], destination: str,
                         max_concurrent_moves_array: int, max_concurrent_moves_cache: int,
@@ -1434,7 +2531,7 @@ class FileMover:
         """
         # Store source map for use during moves
         self._source_map = source_map or {}
-        logging.info(f"Moving media files to {destination}...")
+        logging.debug(f"Moving media files to {destination}...")
         logging.debug(f"Total files to process: {len(files)}")
 
         processed_files = set()
@@ -1468,33 +2565,46 @@ class FileMover:
             else:
                 logging.debug(f"No move command generated for: {file_to_move}")
 
-        logging.info(f"Generated {len(move_commands)} move commands for {destination}")
+        logging.debug(f"Generated {len(move_commands)} move commands for {destination}")
 
         # Execute the move commands
         self._execute_move_commands(move_commands, max_concurrent_moves_array,
                                   max_concurrent_moves_cache, destination, total_bytes)
     
     def _get_paths(self, file_to_move: str) -> Tuple[str, str, str, str]:
-        """Get all necessary paths for file moving."""
+        """Get all necessary paths for file moving.
+
+        Returns:
+            Tuple of (user_path, cache_path, cache_file_name, user_file_name).
+        """
         # Get the user path
         user_path = os.path.dirname(file_to_move)
-        
-        # Get the relative path from the real source directory
-        relative_path = os.path.relpath(user_path, self.real_source)
-        
-        # Get the cache path by joining the cache directory with the relative path
-        cache_path = os.path.join(self.cache_dir, relative_path)
-        
-        # Get the cache file name by joining the cache path with the base name of the file to move
-        cache_file_name = os.path.join(cache_path, os.path.basename(file_to_move))
-        
+
+        # Use multi-path modifier if available
+        if self.path_modifier:
+            cache_file_name, mapping = self.path_modifier.convert_real_to_cache(file_to_move)
+            if cache_file_name is None:
+                # This shouldn't happen - non-cacheable files should be filtered earlier
+                logging.warning(f"Non-cacheable file reached FileMover: {file_to_move}")
+                # Fall back to legacy behavior
+                relative_path = os.path.relpath(user_path, self.real_source)
+                cache_path = os.path.join(self.cache_dir, relative_path)
+                cache_file_name = os.path.join(cache_path, os.path.basename(file_to_move))
+            else:
+                cache_path = os.path.dirname(cache_file_name)
+        else:
+            # Legacy single-path mode
+            relative_path = os.path.relpath(user_path, self.real_source)
+            cache_path = os.path.join(self.cache_dir, relative_path)
+            cache_file_name = os.path.join(cache_path, os.path.basename(file_to_move))
+
         # Modify the user path if unraid is True
         if self.is_unraid:
             user_path = user_path.replace("/mnt/user/", "/mnt/user0/", 1)
 
         # Get the user file name by joining the user path with the base name of the file to move
         user_file_name = os.path.join(user_path, os.path.basename(file_to_move))
-        
+
         return user_path, cache_path, cache_file_name, user_file_name
     
     def _get_move_command(self, destination: str, cache_file_name: str,
@@ -1647,6 +2757,9 @@ class FileMover:
         self._completed_bytes = 0
         self._total_bytes = total_bytes
 
+        # Get console lock for thread-safe tqdm output
+        console_lock = get_console_lock()
+
         if self.debug:
             # Debug mode - no actual moves, just log what would happen
             with tqdm(total=total_count, desc=f"Moving to {destination}", unit="file",
@@ -1655,13 +2768,15 @@ class FileMover:
                     (src, dest) = move_cmd
                     if destination == 'cache':
                         plexcached_file = src + PLEXCACHED_EXTENSION
-                        tqdm.write(f"[DEBUG] Would copy: {src} -> {cache_file_name}")
-                        tqdm.write(f"[DEBUG] Would rename: {src} -> {plexcached_file}")
+                        with console_lock:
+                            tqdm.write(f"[DEBUG] Would copy: {src} -> {cache_file_name}")
+                            tqdm.write(f"[DEBUG] Would rename: {src} -> {plexcached_file}")
                     elif destination == 'array':
                         array_file = os.path.join(dest, os.path.basename(src))
                         plexcached_file = array_file + PLEXCACHED_EXTENSION
-                        tqdm.write(f"[DEBUG] Would rename: {plexcached_file} -> {array_file}")
-                        tqdm.write(f"[DEBUG] Would delete: {src}")
+                        with console_lock:
+                            tqdm.write(f"[DEBUG] Would rename: {plexcached_file} -> {array_file}")
+                            tqdm.write(f"[DEBUG] Would delete: {src}")
                     pbar.update(1)
         else:
             # Real move with thread pool
@@ -1670,7 +2785,7 @@ class FileMover:
             # Create tqdm progress bar with data size info
             # ncols=80 keeps bar compact, mininterval=0.5 forces more frequent updates
             import sys
-            total_size_str = self._format_bytes(total_bytes)
+            total_size_str = format_bytes(total_bytes)
             with tqdm(total=total_count, desc=f"Moving to {destination} (0 B / {total_size_str})",
                       unit="file", bar_format="{l_bar}{bar:20}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
                       mininterval=0.5, ncols=80, file=sys.stdout) as pbar:
@@ -1690,7 +2805,7 @@ class FileMover:
             elif errors:
                 logging.warning(f"Finished moving files with {len(errors)} errors.")
             else:
-                logging.info(f"Finished moving {total_count} files successfully.")
+                logging.debug(f"Finished moving {total_count} files successfully.")
     
     def _move_file(self, move_cmd_with_cache: Tuple[Tuple[str, str], str, int, str], destination: str) -> int:
         """Move a single file using the .plexcached approach.
@@ -1723,8 +2838,8 @@ class FileMover:
                 self._completed_bytes += file_size
                 if self._tqdm_pbar:
                     # Update description to show data progress
-                    completed_str = self._format_bytes(self._completed_bytes)
-                    total_str = self._format_bytes(self._total_bytes)
+                    completed_str = format_bytes(self._completed_bytes)
+                    total_str = format_bytes(self._total_bytes)
                     self._tqdm_pbar.set_description(f"Moving to {destination} ({completed_str} / {total_str})")
                     self._tqdm_pbar.update(1)
                     self._tqdm_pbar.refresh()  # Force display update
@@ -1735,7 +2850,8 @@ class FileMover:
             with self._progress_lock:
                 if self._tqdm_pbar:
                     self._tqdm_pbar.update(1)
-            tqdm.write(f"Error moving {filename}: {type(e).__name__}: {e}")
+            with get_console_lock():
+                tqdm.write(f"Error moving {filename}: {type(e).__name__}: {e}")
             return 1
 
     def _move_to_cache(self, array_file: str, cache_path: str, cache_file_name: str,
@@ -1772,7 +2888,12 @@ class FileMover:
                     # The exclude list stores full cache paths, so join the cache directory with the old filename
                     old_cache_file_to_remove = os.path.join(os.path.dirname(cache_file_name), old_name)
 
-            # Step 1: Copy file from array to cache (preserving metadata and ownership)
+            # Step 1: Ensure cache directory exists, then copy file
+            cache_dir = os.path.dirname(cache_file_name)
+            if not os.path.exists(cache_dir):
+                self.file_utils.create_directory_with_permissions(cache_dir, array_file)
+                logging.debug(f"Created cache directory: {cache_dir}")
+
             logging.debug(f"Starting copy: {array_file} -> {cache_file_name}")
             self.file_utils.copy_file_with_permissions(array_file, cache_file_name, verbose=True)
             logging.debug(f"Copy complete: {os.path.basename(array_file)}")
@@ -1805,8 +2926,9 @@ class FileMover:
             # Log successful move using tqdm.write to avoid progress bar interference
             from tqdm import tqdm
             file_size = os.path.getsize(cache_file_name)
-            size_str = self._format_bytes(file_size) if hasattr(self, '_format_bytes') else f"{file_size} bytes"
-            tqdm.write(f"Successfully cached: {os.path.basename(cache_file_name)} ({size_str})")
+            size_str = format_bytes(file_size)
+            with get_console_lock():
+                tqdm.write(f"Successfully cached: {os.path.basename(cache_file_name)} ({size_str})")
 
             return 0
         except Exception as e:
@@ -1843,7 +2965,7 @@ class FileMover:
 
                 if cache_size > 0 and cache_size != plexcached_size:
                     # In-place upgrade: same filename but different file content
-                    logging.info(f"In-place upgrade detected ({self._format_size(plexcached_size)} -> {self._format_size(cache_size)}): {os.path.basename(cache_file)}")
+                    logging.info(f"In-place upgrade detected ({format_bytes(plexcached_size)} -> {format_bytes(cache_size)}): {os.path.basename(cache_file)}")
                     os.remove(plexcached_file)
                     self.file_utils.copy_file_with_permissions(cache_file, array_file, verbose=True)
                     logging.debug(f"Copied upgraded file to array: {array_file}")
@@ -1915,11 +3037,8 @@ class FileMover:
                 if self.timestamp_tracker:
                     self.timestamp_tracker.remove_entry(cache_file)
 
-                # Log successful restore using tqdm.write to avoid progress bar interference
-                from tqdm import tqdm
-                file_size = os.path.getsize(array_file)
-                size_str = self._format_bytes(file_size) if hasattr(self, '_format_bytes') else f"{file_size} bytes"
-                tqdm.write(f"Successfully restored to array: {os.path.basename(array_file)} ({size_str})")
+                # Log successful restore at DEBUG level (summary already shown at INFO)
+                logging.debug(f"Restored to array: {os.path.basename(array_file)}")
 
                 return 0
             else:
@@ -1946,16 +3065,6 @@ class FileMover:
         except Exception as e:
             logging.error(f"Error during cleanup: {type(e).__name__}: {e}")
 
-    def _format_bytes(self, bytes_value: int) -> str:
-        """Format bytes into human-readable string (e.g., '1.5 GB')."""
-        if bytes_value < 1024:
-            return f"{bytes_value} B"
-        elif bytes_value < 1024 ** 2:
-            return f"{bytes_value / 1024:.1f} KB"
-        elif bytes_value < 1024 ** 3:
-            return f"{bytes_value / (1024 ** 2):.1f} MB"
-        else:
-            return f"{bytes_value / (1024 ** 3):.1f} GB"
 
 class PlexcachedRestorer:
     """Emergency restore utility to rename all .plexcached files back to originals."""
