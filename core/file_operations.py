@@ -14,12 +14,16 @@ from typing import List, Set, Optional, Tuple, Dict, TYPE_CHECKING
 import re
 
 from core.logging_config import get_console_lock
+from core.system_utils import resolve_user0_to_disk, get_disk_free_space_bytes, get_disk_number_from_path
 
 if TYPE_CHECKING:
     from core.config import PathMapping
 
 # Extension used to mark array files that have been cached
 PLEXCACHED_EXTENSION = ".plexcached"
+
+# Minimum free space (in bytes) required for metadata operations during rename
+MINIMUM_SPACE_FOR_RENAME = 100 * 1024 * 1024  # 100 MB
 
 
 def format_bytes(bytes_value: int) -> str:
@@ -2834,13 +2838,21 @@ class FileMover:
 
                 errors = [result for result in results if result == 1]
                 partial_successes = [result for result in results if result == 2]
+                skipped_space = [result for result in results if result == 3]
 
             self._tqdm_pbar = None
 
+            # Build summary message based on what happened
+            issues = []
+            if errors:
+                issues.append(f"{len(errors)} errors")
             if partial_successes:
-                logging.warning(f"Finished moving files: {len(errors)} errors, {len(partial_successes)} partial (missing .plexcached)")
-            elif errors:
-                logging.warning(f"Finished moving files with {len(errors)} errors.")
+                issues.append(f"{len(partial_successes)} partial (missing .plexcached)")
+            if skipped_space:
+                issues.append(f"{len(skipped_space)} skipped (insufficient disk space)")
+
+            if issues:
+                logging.warning(f"Finished moving files: {', '.join(issues)}")
             else:
                 logging.debug(f"Finished moving {total_count} files successfully.")
     
@@ -2974,6 +2986,76 @@ class FileMover:
             self._cleanup_failed_cache_copy(array_file, cache_file_name)
             return 1
 
+    def _check_array_disk_space(self, cache_file: str, plexcached_file: str,
+                                 array_file: str) -> Tuple[bool, str]:
+        """Pre-flight check for sufficient disk space on the target array disk.
+
+        On Unraid, resolves the /mnt/user0/ path to the actual /mnt/diskX/ path
+        and checks available space. Calculates required space based on whether
+        this will be a rename operation or a copy operation.
+
+        Args:
+            cache_file: Path to the file on cache.
+            plexcached_file: Path to the .plexcached file on array.
+            array_file: Path where the restored file should end up.
+
+        Returns:
+            Tuple of (has_sufficient_space, reason_if_not).
+            reason_if_not is empty string if space is sufficient.
+        """
+        if not self.is_unraid:
+            # Non-Unraid systems don't need this check (no disk abstraction)
+            return True, ""
+
+        # Determine which file to check for disk resolution
+        check_path = plexcached_file if os.path.isfile(plexcached_file) else array_file
+
+        # Resolve to actual disk path
+        disk_path = resolve_user0_to_disk(check_path)
+        if disk_path is None:
+            # Couldn't resolve - fall back to checking via user0 path
+            logging.debug(f"Could not resolve disk path for: {check_path}")
+            disk_path = check_path
+
+        disk_name = get_disk_number_from_path(disk_path) or "unknown disk"
+
+        # Get available space on that disk
+        free_space = get_disk_free_space_bytes(disk_path)
+
+        # Calculate required space based on scenario
+        cache_size = os.path.getsize(cache_file) if os.path.isfile(cache_file) else 0
+
+        if os.path.isfile(plexcached_file):
+            plexcached_size = os.path.getsize(plexcached_file)
+
+            if cache_size == 0 or cache_size == plexcached_size:
+                # Pure rename - just need metadata buffer
+                space_required = MINIMUM_SPACE_FOR_RENAME
+                operation = "rename"
+            else:
+                # In-place upgrade - we delete old first, then copy new
+                # Space needed: max(0, new_size - old_size) + buffer
+                space_required = max(0, cache_size - plexcached_size) + MINIMUM_SPACE_FOR_RENAME
+                operation = f"upgrade ({format_bytes(plexcached_size)} -> {format_bytes(cache_size)})"
+        else:
+            # No .plexcached - need full file size + buffer
+            space_required = cache_size + MINIMUM_SPACE_FOR_RENAME
+            operation = "copy (no .plexcached)"
+
+        if free_space < space_required:
+            reason = (
+                f"Insufficient space on {disk_name} for {operation}: "
+                f"need {format_bytes(space_required)}, have {format_bytes(free_space)}. "
+                f"File will remain on cache. Free up space on {disk_name} or manually relocate the .plexcached file."
+            )
+            return False, reason
+
+        logging.debug(
+            f"Disk space check passed for {disk_name}: "
+            f"need {format_bytes(space_required)}, have {format_bytes(free_space)} ({operation})"
+        )
+        return True, ""
+
     def _move_to_array(self, cache_file: str, array_path: str, cache_file_name: str) -> int:
         """Move file from cache back to array.
 
@@ -2985,14 +3067,24 @@ class FileMover:
            - Delete old .plexcached, copy upgraded cache file to array
         3. No .plexcached: Copy from cache to array, then delete cache copy
 
+        Before any operation, performs a pre-flight disk space check on Unraid
+        systems to prevent "No space left on device" errors.
+
         Returns:
             0: Success - array file exists and cache deleted
             1: Error - exception occurred during operation
+            3: Skipped - insufficient disk space (file remains on cache)
         """
         try:
             # Derive the original array file path and .plexcached path
             array_file = os.path.join(array_path, os.path.basename(cache_file))
             plexcached_file = array_file + PLEXCACHED_EXTENSION
+
+            # Pre-flight check: verify sufficient disk space on target disk
+            has_space, reason = self._check_array_disk_space(cache_file, plexcached_file, array_file)
+            if not has_space:
+                logging.warning(f"Skipping restore for {os.path.basename(cache_file)}: {reason}")
+                return 3  # Skipped due to insufficient space
 
             # Scenario 1: Exact .plexcached exists (same filename)
             if os.path.isfile(plexcached_file):

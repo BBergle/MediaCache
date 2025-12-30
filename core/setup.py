@@ -947,6 +947,20 @@ def _setup_advanced_settings():
             unraid_level = ''
         settings_data['unraid_level'] = unraid_level
 
+    # Logging Settings
+    if 'max_log_files' not in settings_data or 'keep_error_logs_days' not in settings_data:
+        print('\n--- Logging Settings ---')
+
+    if 'max_log_files' not in settings_data:
+        print('Max log files: Number of log files to keep before cleanup.')
+        print('(Useful if running hourly - 24 keeps ~1 day of logs)')
+        prompt_user_for_number('Max log files to keep [24]: ', '24', 'max_log_files')
+
+    if 'keep_error_logs_days' not in settings_data:
+        print('\nError log retention: Logs with warnings/errors are preserved longer.')
+        print('(Copied to logs/errors/ subfolder for debugging)')
+        prompt_user_for_number('Days to keep error logs [7]: ', '7', 'keep_error_logs_days')
+
     # Legacy path configuration (skip if path_mappings already configured)
     _setup_legacy_paths_if_needed()
 
@@ -1192,6 +1206,8 @@ def check_for_missing_settings(settings: dict) -> list:
         'cache_eviction_threshold_percent',
         'eviction_min_priority',
         'path_mappings',
+        'max_log_files',
+        'keep_error_logs_days',
     ]
     missing = [s for s in optional_new_settings if s not in settings]
     return missing

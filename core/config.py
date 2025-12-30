@@ -152,6 +152,16 @@ class PerformanceConfig:
     permissions: int = 0o777
 
 
+@dataclass
+class LoggingConfig:
+    """Configuration for logging settings."""
+    # Maximum number of log files to keep (default: 24 for hourly runs = 1 day)
+    max_log_files: int = 24
+    # Keep error logs (containing WARNING/ERROR) for this many days (default: 7)
+    # Logs are preserved in logs/errors/ subfolder
+    keep_error_logs_days: int = 7
+
+
 def migrate_path_settings(settings: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
     """Migrate legacy single-path settings to multi-path format.
 
@@ -206,7 +216,7 @@ def migrate_path_settings(settings: Dict[str, Any]) -> Tuple[Dict[str, Any], boo
 
 class ConfigManager:
     """Manages application configuration loading and validation."""
-    
+
     def __init__(self, config_file: str):
         self.config_file = Path(config_file)
         self.settings_data: Dict[str, Any] = {}
@@ -215,6 +225,7 @@ class ConfigManager:
         self.plex = PlexConfig()
         self.cache = CacheConfig()
         self.performance = PerformanceConfig()
+        self.logging = LoggingConfig()
         self.debug = False
         self.exit_if_active_session = False
         self._path_settings_migrated = False
@@ -270,6 +281,7 @@ class ConfigManager:
         self._load_path_config()
         self._load_performance_config()
         self._load_notification_config()
+        self._load_logging_config()
         self._load_misc_config()
     
     def _load_plex_config(self) -> None:
@@ -378,6 +390,20 @@ class ConfigManager:
         self.notification.unraid_level = self.settings_data.get('unraid_level', 'summary')
         self.notification.webhook_level = self.settings_data.get('webhook_level', '')
         self.notification.webhook_url = self.settings_data.get('webhook_url', '')
+
+    def _load_logging_config(self) -> None:
+        """Load logging-related configuration."""
+        # Max log files (default: 24 for hourly runs)
+        self.logging.max_log_files = self.settings_data.get('max_log_files', 24)
+        if self.logging.max_log_files < 1:
+            logging.warning(f"Invalid max_log_files '{self.logging.max_log_files}', using 24")
+            self.logging.max_log_files = 24
+
+        # Error log retention (default: 7 days)
+        self.logging.keep_error_logs_days = self.settings_data.get('keep_error_logs_days', 7)
+        if self.logging.keep_error_logs_days < 0:
+            logging.warning(f"Invalid keep_error_logs_days '{self.logging.keep_error_logs_days}', using 7")
+            self.logging.keep_error_logs_days = 7
 
     def _load_misc_config(self) -> None:
         """Load miscellaneous configuration."""

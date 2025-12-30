@@ -191,11 +191,17 @@ class PlexCacheApp:
 
 
     def _setup_logging(self) -> None:
-        """Set up logging system (basic logging only, notifications set up after config load)."""
+        """Set up logging system (basic logging only, notifications set up after config load).
+
+        Note: Logging settings (max_log_files, keep_error_logs_days) are loaded
+        from config after initial setup. The LoggingManager uses sensible defaults
+        until config is loaded.
+        """
         self.logging_manager = LoggingManager(
             logs_folder=self.config_manager.paths.logs_folder,
             log_level="",  # Will be set from config
-            max_log_files=5
+            max_log_files=24,  # Default: 24 for hourly runs
+            keep_error_logs_days=7  # Default: preserve error logs for 7 days
         )
         self.logging_manager.setup_logging()
         logging.info("")
@@ -203,6 +209,12 @@ class PlexCacheApp:
 
     def _setup_notification_handlers(self) -> None:
         """Set up notification handlers after config is loaded."""
+        # Update logging settings from config (max_log_files, keep_error_logs_days)
+        self.logging_manager.update_settings(
+            max_log_files=self.config_manager.logging.max_log_files,
+            keep_error_logs_days=self.config_manager.logging.keep_error_logs_days
+        )
+
         # Override notification level if --quiet flag is used
         notification_config = self.config_manager.notification
         if self.quiet:
@@ -239,19 +251,27 @@ class PlexCacheApp:
         logging.debug(f"Docker detected: {self.system_detector.is_docker}")
         logging.debug("===========================")
 
-    def _log_diagnostic_summary(self) -> None:
-        """Log diagnostic summary at end of run in verbose mode."""
-        logging.debug("")
-        logging.debug("=== Diagnostic Summary ===")
+    def _log_results_summary(self) -> None:
+        """Log results summary at end of run.
+
+        Shows key metrics at INFO level for all runs, with additional
+        detail at DEBUG level for verbose mode.
+        """
+        logging.info("")
+        logging.info("--- Results ---")
+
         # Get accurate counts from file_filter and file_mover
         already_cached = getattr(self.file_filter, 'last_already_cached_count', 0) if self.file_filter else 0
         actually_moved = getattr(self.file_mover, 'last_cache_moves_count', 0) if self.file_mover else 0
-        logging.debug(f"Files already on cache: {already_cached}")
-        logging.debug(f"Files moved to cache: {actually_moved}")
-        logging.debug(f"Files moved to array: {len(self.media_to_array)}")
+        moved_to_array = len(self.media_to_array)
+
+        logging.info(f"Already cached: {already_cached} files")
+        logging.info(f"Moved to cache: {actually_moved} files")
+        logging.info(f"Moved to array: {moved_to_array} files")
+
+        # Additional detail at DEBUG level
         # Note: Empty folder cleanup now happens immediately during file operations
         # (per File and Folder Management Policy) and is logged at DEBUG level as it occurs
-        logging.debug("==========================")
 
     def _is_mover_running(self) -> bool:
         """Check if the Unraid mover is currently running.
@@ -1251,9 +1271,8 @@ class PlexCacheApp:
             self.watchlist_tracker.cleanup_stale_entries()
             self.watchlist_tracker.cleanup_missing_files()
 
-        # Log diagnostic summary in verbose mode
-        if self.verbose:
-            self._log_diagnostic_summary()
+        # Log results summary for all runs (INFO level)
+        self._log_results_summary()
 
         logging.info("")
         logging.info(f"Completed in {execution_time}")

@@ -159,12 +159,15 @@ class WebhookHandler(logging.Handler):
 
 class LoggingManager:
     """Manages logging configuration and setup."""
-    
-    def __init__(self, logs_folder: str, log_level: str = "", max_log_files: int = 5):
+
+    def __init__(self, logs_folder: str, log_level: str = "",
+                 max_log_files: int = 24, keep_error_logs_days: int = 7):
         self.logs_folder = Path(logs_folder)
         self.log_level = log_level
         self.max_log_files = max_log_files
+        self.keep_error_logs_days = keep_error_logs_days
         self.log_file_pattern = "plexcache_log_*.log"
+        self.current_log_file: Optional[Path] = None  # Track current log file for error preservation
         self.logger = logging.getLogger()
         self.summary_messages = []
         self.files_moved = False
@@ -181,6 +184,20 @@ class LoggingManager:
         logging.getLogger("urllib3").setLevel(logging.WARNING)
         logging.getLogger("requests").setLevel(logging.WARNING)
         logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
+
+    def update_settings(self, max_log_files: int = None, keep_error_logs_days: int = None) -> None:
+        """Update logging settings after config is loaded.
+
+        This allows settings to be updated from config values after initial setup.
+        Re-runs log cleanup with the updated max_log_files value.
+        """
+        if max_log_files is not None:
+            self.max_log_files = max_log_files
+        if keep_error_logs_days is not None:
+            self.keep_error_logs_days = keep_error_logs_days
+
+        # Re-run cleanup with updated max_log_files
+        self._clean_old_log_files()
         
     def _ensure_logs_folder(self) -> None:
         """Ensure the logs folder exists."""
@@ -194,6 +211,7 @@ class LoggingManager:
         """Set up the log file with rotation."""
         current_time = datetime.now().strftime("%Y%m%d_%H%M")
         log_file = self.logs_folder / f"plexcache_log_{current_time}.log"
+        self.current_log_file = log_file  # Track for error preservation
         latest_log_file = self.logs_folder / "plexcache_log_latest.log"
 
         # Configure the rotating file handler
@@ -323,6 +341,76 @@ class LoggingManager:
                 summary_message = '\n  ' + '\n  '.join(self.summary_messages)
             self.logger.log(SUMMARY, summary_message)
     
+    def _preserve_error_log(self) -> None:
+        """Preserve the current log file if it contains warnings or errors.
+
+        Copies logs with WARNING/ERROR/CRITICAL entries to logs/errors/ subfolder
+        for longer retention. Only runs if keep_error_logs_days > 0.
+        """
+        if self.keep_error_logs_days <= 0:
+            return
+
+        if not self.current_log_file or not self.current_log_file.exists():
+            return
+
+        # Check if log contains warning/error entries
+        try:
+            with open(self.current_log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+
+            # Look for WARNING, ERROR, or CRITICAL level entries
+            has_errors = any(
+                level in content
+                for level in [' - WARNING - ', ' - ERROR - ', ' - CRITICAL - ']
+            )
+
+            if not has_errors:
+                return
+
+            # Create errors subfolder
+            errors_folder = self.logs_folder / "errors"
+            errors_folder.mkdir(exist_ok=True)
+
+            # Copy to errors folder
+            import shutil
+            dest_file = errors_folder / self.current_log_file.name
+            shutil.copy2(self.current_log_file, dest_file)
+            logging.debug(f"Preserved error log: {dest_file}")
+
+        except Exception as e:
+            # Don't fail the run if error preservation fails
+            logging.debug(f"Could not preserve error log: {e}")
+
+    def _clean_old_error_logs(self) -> None:
+        """Clean up error logs older than keep_error_logs_days.
+
+        Only runs if keep_error_logs_days > 0.
+        """
+        if self.keep_error_logs_days <= 0:
+            return
+
+        errors_folder = self.logs_folder / "errors"
+        if not errors_folder.exists():
+            return
+
+        try:
+            cutoff_time = time.time() - (self.keep_error_logs_days * 24 * 60 * 60)
+
+            for log_file in errors_folder.glob(self.log_file_pattern):
+                try:
+                    if log_file.stat().st_mtime < cutoff_time:
+                        log_file.unlink()
+                        logging.debug(f"Removed old error log: {log_file.name}")
+                except OSError:
+                    pass  # Ignore files we can't access/delete
+
+        except Exception as e:
+            logging.debug(f"Could not clean old error logs: {e}")
+
     def shutdown(self) -> None:
-        """Shutdown logging."""
+        """Shutdown logging, preserving error logs if configured."""
+        # Preserve error log before shutdown (must happen before handlers close)
+        self._preserve_error_log()
+        # Clean up old error logs
+        self._clean_old_error_logs()
         logging.shutdown() 

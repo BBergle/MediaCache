@@ -12,6 +12,77 @@ from typing import Tuple, Optional
 import logging
 
 
+# ============================================================================
+# Unraid Disk Utilities
+# ============================================================================
+
+def resolve_user0_to_disk(user0_path: str) -> Optional[str]:
+    """Resolve /mnt/user0/path to the actual /mnt/diskX/path on Unraid.
+
+    On Unraid, /mnt/user0/ is a FUSE-based aggregate of all array disks.
+    This function finds which physical disk a file actually lives on.
+
+    Args:
+        user0_path: A path starting with /mnt/user0/
+
+    Returns:
+        The actual /mnt/diskX/ path if found, None otherwise.
+    """
+    if not user0_path.startswith('/mnt/user0/'):
+        return None
+
+    relative_path = user0_path[len('/mnt/user0/'):]
+
+    # Check each disk (Unraid supports up to 30 data disks)
+    for disk_num in range(1, 31):
+        disk_path = f'/mnt/disk{disk_num}/{relative_path}'
+        if os.path.exists(disk_path):
+            return disk_path
+
+    return None
+
+
+def get_disk_free_space_bytes(path: str) -> int:
+    """Get free space in bytes for the filesystem containing the given path.
+
+    Args:
+        path: Any path on the filesystem to check.
+
+    Returns:
+        Free space in bytes available for writing.
+    """
+    if not os.path.exists(path):
+        # For files that don't exist yet, check the parent directory
+        parent = os.path.dirname(path)
+        if not os.path.exists(parent):
+            return 0
+        path = parent
+
+    stat = os.statvfs(path)
+    # f_bavail = blocks available to non-superuser (more accurate than f_bfree)
+    return stat.f_bavail * stat.f_frsize
+
+
+def get_disk_number_from_path(disk_path: str) -> Optional[str]:
+    """Extract the disk number from a /mnt/diskX/ path.
+
+    Args:
+        disk_path: A path like /mnt/disk6/TV Shows/...
+
+    Returns:
+        The disk identifier (e.g., "disk6") or None if not a disk path.
+    """
+    if not disk_path.startswith('/mnt/disk'):
+        return None
+
+    # Extract "disk6" from "/mnt/disk6/TV Shows/..."
+    parts = disk_path.split('/')
+    if len(parts) >= 3 and parts[2].startswith('disk'):
+        return parts[2]
+
+    return None
+
+
 class SingleInstanceLock:
     """
     Prevent multiple instances of PlexCache from running simultaneously.

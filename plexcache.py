@@ -17,8 +17,42 @@ import sys
 import os
 
 
+def get_help_text():
+    """Generate help text with the actual Python command being used."""
+    # Get the actual python command (e.g., python, python3, python3.11)
+    python_cmd = os.path.basename(sys.executable)
+
+    return f"""
+PlexCache-R - Plex media caching automation for Unraid
+
+Usage: {python_cmd} plexcache.py [OPTIONS]
+
+Options:
+  --setup               Run the setup wizard to configure PlexCache
+  --dry-run             Simulate operations without moving files
+  --verbose, -v         Enable debug-level logging
+  --quiet               Only notify on errors (suppress info messages)
+  --show-priorities     Display cache priority scores for all cached files
+  --show-mappings       Display path mapping configuration and status
+  --restore-plexcached  Emergency restore of .plexcached backup files
+
+Examples:
+  {python_cmd} plexcache.py                     Run caching (auto-setup on first run)
+  {python_cmd} plexcache.py --setup             Configure or reconfigure settings
+  {python_cmd} plexcache.py --dry-run --verbose Test run with full debug output
+  {python_cmd} plexcache.py --show-priorities   See which files would be evicted first
+
+Documentation: https://github.com/StudioNirin/PlexCache-R
+"""
+
+
 def main():
     """Main entry point for PlexCache-R."""
+    # Check for help flags
+    if "--help" in sys.argv or "-h" in sys.argv or "--h" in sys.argv:
+        print(get_help_text())
+        return 0
+
     # Check for --setup flag (explicit setup request)
     if "--setup" in sys.argv:
         from core.setup import run_setup
