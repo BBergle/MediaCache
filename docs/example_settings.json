@@ -84,8 +84,8 @@
     "max_concurrent_moves_cache": 5,
     "max_concurrent_moves_array": 2,
 
-    "notification_type": "system",
+    "notification_type": "both",
     "unraid_level": "summary",
-    "webhook_level": "",
-    "webhook_url": ""
+    "webhook_url": "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "webhook_level": "summary"
 }

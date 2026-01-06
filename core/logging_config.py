@@ -119,42 +119,342 @@ class UnraidHandler(logging.Handler):
 
 
 class WebhookHandler(logging.Handler):
-    """Custom logging handler for webhook notifications."""
-    
+    """Custom logging handler for webhook notifications with rich formatting.
+
+    Supports Discord (embeds), Slack (Block Kit), and generic webhooks.
+    Platform is auto-detected from the webhook URL.
+    """
+
     SUMMARY = SUMMARY
-    
+
+    # Platform detection patterns
+    DISCORD_PATTERNS = ['discord.com/api/webhooks/', 'discordapp.com/api/webhooks/']
+    SLACK_PATTERNS = ['hooks.slack.com/services/']
+
+    # Color codes for Discord embeds (decimal format)
+    COLORS = {
+        'success': 3066993,   # Green (#2ECC71)
+        'warning': 16776960,  # Yellow (#FFFF00)
+        'error': 15158332,    # Red (#E74C3C)
+        'info': 3447003,      # Blue (#3498DB)
+    }
+
     def __init__(self, webhook_url: str):
         super().__init__()
         self.webhook_url = webhook_url
+        self.platform = self._detect_platform(webhook_url)
+        self._summary_data: Optional[dict] = None
+
+    def _detect_platform(self, url: str) -> str:
+        """Auto-detect webhook platform from URL."""
+        url_lower = url.lower()
+        for pattern in self.DISCORD_PATTERNS:
+            if pattern in url_lower:
+                return 'discord'
+        for pattern in self.SLACK_PATTERNS:
+            if pattern in url_lower:
+                return 'slack'
+        return 'generic'
+
+    def set_summary_data(self, data: dict) -> None:
+        """Set structured summary data for rich formatting.
+
+        Expected keys:
+            - cached_count: int - Files moved to cache
+            - cached_bytes: int - Bytes moved to cache
+            - restored_count: int - Files restored to array
+            - restored_bytes: int - Bytes restored to array
+            - already_cached: int - Files already on cache
+            - duration_seconds: float - Execution time
+            - had_errors: bool - Whether errors occurred
+            - had_warnings: bool - Whether warnings occurred
+        """
+        self._summary_data = data
 
     def emit(self, record):
         if record.levelno == SUMMARY:
-            self.send_summary_webhook_message(record)
+            self._send_summary(record)
         else:
-            self.send_webhook_message(record)
+            self._send_message(record)
 
-    def send_summary_webhook_message(self, record):
-        summary = "Plex Cache Summary:\n" + record.msg
-        payload = {
-            "content": summary
-        }
-        headers = {
-            "Content-Type": "application/json"
-        }
-        response = requests.post(self.webhook_url, data=json.dumps(payload), headers=headers)
-        if not response.status_code == 204:
-            logging.error(f"Failed to send summary message. Error code: {response.status_code}")
+    def _send_summary(self, record):
+        """Send summary notification with rich formatting if available."""
+        try:
+            if self.platform == 'discord':
+                payload = self._build_discord_summary(record)
+            elif self.platform == 'slack':
+                payload = self._build_slack_summary(record)
+            else:
+                payload = self._build_generic_summary(record)
 
-    def send_webhook_message(self, record):
-        payload = {
-            "content": record.msg
+            self._send_payload(payload)
+        except Exception as e:
+            logging.error(f"Failed to send webhook summary: {e}")
+
+    def _send_message(self, record):
+        """Send individual log message."""
+        try:
+            if self.platform == 'discord':
+                payload = self._build_discord_message(record)
+            elif self.platform == 'slack':
+                payload = self._build_slack_message(record)
+            else:
+                payload = {"content": record.msg}
+
+            self._send_payload(payload)
+        except Exception as e:
+            logging.error(f"Failed to send webhook message: {e}")
+
+    def _send_payload(self, payload: dict) -> bool:
+        """Send payload to webhook URL."""
+        headers = {"Content-Type": "application/json"}
+        try:
+            response = requests.post(
+                self.webhook_url,
+                data=json.dumps(payload),
+                headers=headers,
+                timeout=10
+            )
+            # Discord returns 204, Slack returns 200
+            if response.status_code not in [200, 204]:
+                logging.error(f"Webhook failed: HTTP {response.status_code}")
+                return False
+            return True
+        except requests.RequestException as e:
+            logging.error(f"Webhook request failed: {e}")
+            return False
+
+    def _format_bytes(self, bytes_val: int) -> str:
+        """Format bytes to human-readable string."""
+        if bytes_val >= 1024**3:
+            return f"{bytes_val / (1024**3):.2f} GB"
+        elif bytes_val >= 1024**2:
+            return f"{bytes_val / (1024**2):.2f} MB"
+        elif bytes_val >= 1024:
+            return f"{bytes_val / 1024:.2f} KB"
+        return f"{bytes_val} B"
+
+    def _format_duration(self, seconds: float) -> str:
+        """Format duration to human-readable string."""
+        if seconds < 60:
+            return f"{int(seconds)}s"
+        elif seconds < 3600:
+            mins = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{mins}m {secs}s" if secs > 0 else f"{mins}m"
+        else:
+            hours = int(seconds // 3600)
+            mins = int((seconds % 3600) // 60)
+            return f"{hours}h {mins}m" if mins > 0 else f"{hours}h"
+
+    def _get_status_color(self) -> int:
+        """Get color based on summary data status."""
+        if self._summary_data:
+            if self._summary_data.get('had_errors'):
+                return self.COLORS['error']
+            if self._summary_data.get('had_warnings'):
+                return self.COLORS['warning']
+        return self.COLORS['success']
+
+    def _build_discord_summary(self, record) -> dict:
+        """Build Discord embed for summary."""
+        fields = []
+
+        if self._summary_data:
+            data = self._summary_data
+
+            # Cached files
+            if data.get('cached_count', 0) > 0:
+                cached_str = f"{data['cached_count']} file{'s' if data['cached_count'] != 1 else ''}"
+                if data.get('cached_bytes', 0) > 0:
+                    cached_str += f"\n({self._format_bytes(data['cached_bytes'])})"
+                fields.append({
+                    "name": "📥 Cached",
+                    "value": cached_str,
+                    "inline": True
+                })
+
+            # Restored files
+            if data.get('restored_count', 0) > 0:
+                restored_str = f"{data['restored_count']} file{'s' if data['restored_count'] != 1 else ''}"
+                if data.get('restored_bytes', 0) > 0:
+                    restored_str += f"\n({self._format_bytes(data['restored_bytes'])})"
+                fields.append({
+                    "name": "📤 Restored",
+                    "value": restored_str,
+                    "inline": True
+                })
+
+            # Already cached
+            if data.get('already_cached', 0) > 0:
+                fields.append({
+                    "name": "✓ Already Cached",
+                    "value": f"{data['already_cached']} file{'s' if data['already_cached'] != 1 else ''}",
+                    "inline": True
+                })
+
+            # Spacer before duration (creates visual separation)
+            if fields and data.get('duration_seconds', 0) > 0:
+                fields.append({"name": "\u200b", "value": "\u200b", "inline": False})
+
+            # Duration
+            if data.get('duration_seconds', 0) > 0:
+                fields.append({
+                    "name": "⏱️ Duration",
+                    "value": self._format_duration(data['duration_seconds']),
+                    "inline": True
+                })
+
+        # If no structured data, fall back to message parsing
+        if not fields:
+            fields.append({
+                "name": "Summary",
+                "value": record.msg or "No files moved",
+                "inline": False
+            })
+
+        # Determine title based on activity
+        if self._summary_data:
+            total_moved = (self._summary_data.get('cached_count', 0) +
+                          self._summary_data.get('restored_count', 0))
+            if total_moved > 0:
+                title = "PlexCache Summary"
+            else:
+                title = "PlexCache - No Changes"
+        else:
+            title = "PlexCache Summary"
+
+        embed = {
+            "title": title,
+            "color": self._get_status_color(),
+            "fields": fields,
+            "footer": {
+                "text": "PlexCache-R"
+            },
+            "timestamp": datetime.utcnow().isoformat() + "Z"
         }
-        headers = {
-            "Content-Type": "application/json"
+
+        return {"embeds": [embed]}
+
+    def _build_discord_message(self, record) -> dict:
+        """Build Discord embed for individual log message."""
+        # Map log levels to colors
+        level_colors = {
+            logging.ERROR: self.COLORS['error'],
+            logging.WARNING: self.COLORS['warning'],
+            logging.INFO: self.COLORS['info'],
+            logging.DEBUG: self.COLORS['info'],
         }
-        response = requests.post(self.webhook_url, data=json.dumps(payload), headers=headers)
-        if not response.status_code == 204:
-            logging.error(f"Failed to send message. Error code: {response.status_code}")
+        color = level_colors.get(record.levelno, self.COLORS['info'])
+
+        embed = {
+            "title": f"PlexCache - {record.levelname}",
+            "description": record.msg,
+            "color": color,
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        }
+
+        return {"embeds": [embed]}
+
+    def _build_slack_summary(self, record) -> dict:
+        """Build Slack Block Kit for summary."""
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "PlexCache Summary",
+                    "emoji": True
+                }
+            }
+        ]
+
+        if self._summary_data:
+            data = self._summary_data
+            fields = []
+
+            if data.get('cached_count', 0) > 0:
+                size_str = f" ({self._format_bytes(data['cached_bytes'])})" if data.get('cached_bytes') else ""
+                fields.append({
+                    "type": "mrkdwn",
+                    "text": f"*Cached:* {data['cached_count']} file{'s' if data['cached_count'] != 1 else ''}{size_str}"
+                })
+
+            if data.get('restored_count', 0) > 0:
+                size_str = f" ({self._format_bytes(data['restored_bytes'])})" if data.get('restored_bytes') else ""
+                fields.append({
+                    "type": "mrkdwn",
+                    "text": f"*Restored:* {data['restored_count']} file{'s' if data['restored_count'] != 1 else ''}{size_str}"
+                })
+
+            if data.get('already_cached', 0) > 0:
+                fields.append({
+                    "type": "mrkdwn",
+                    "text": f"*Already Cached:* {data['already_cached']} file{'s' if data['already_cached'] != 1 else ''}"
+                })
+
+            if data.get('duration_seconds', 0) > 0:
+                fields.append({
+                    "type": "mrkdwn",
+                    "text": f"*Duration:* {self._format_duration(data['duration_seconds'])}"
+                })
+
+            if fields:
+                blocks.append({
+                    "type": "section",
+                    "fields": fields[:10]  # Slack limits to 10 fields
+                })
+        else:
+            # Fallback to plain message
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": record.msg or "No files moved"
+                }
+            })
+
+        # Add context footer
+        blocks.append({
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"PlexCache-R • {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                }
+            ]
+        })
+
+        return {"blocks": blocks}
+
+    def _build_slack_message(self, record) -> dict:
+        """Build Slack message for individual log entry."""
+        # Use emoji for level indicator
+        level_emoji = {
+            logging.ERROR: "🔴",
+            logging.WARNING: "🟡",
+            logging.INFO: "🔵",
+            logging.DEBUG: "⚪",
+        }
+        emoji = level_emoji.get(record.levelno, "⚪")
+
+        return {
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"{emoji} *PlexCache - {record.levelname}*\n{record.msg}"
+                    }
+                }
+            ]
+        }
+
+    def _build_generic_summary(self, record) -> dict:
+        """Build generic JSON payload for unknown webhook types."""
+        # Try content first (Discord-compatible), fall back to text (Slack-compatible)
+        message = "PlexCache Summary:\n" + (record.msg or "No files moved")
+        return {"content": message, "text": message}
 
 
 class LoggingManager:
@@ -171,6 +471,8 @@ class LoggingManager:
         self.logger = logging.getLogger()
         self.summary_messages = []
         self.files_moved = False
+        self._webhook_handler: Optional[WebhookHandler] = None  # Reference for rich summaries
+        self._summary_data: dict = {}  # Structured data for rich webhook formatting
         
     def setup_logging(self) -> None:
         """Set up logging configuration."""
@@ -298,6 +600,8 @@ class LoggingManager:
             webhook_handler = WebhookHandler(notification_config.webhook_url)
             self._set_handler_level(webhook_handler, notification_config.webhook_level)
             self.logger.addHandler(webhook_handler)
+            self._webhook_handler = webhook_handler  # Store reference for rich summaries
+            logging.debug(f"Webhook configured: {webhook_handler.platform} platform detected")
     
     def _set_handler_level(self, handler: logging.Handler, level_str: str) -> None:
         """Set the level for a logging handler."""
@@ -327,12 +631,47 @@ class LoggingManager:
         else:
             self.summary_messages = [message]
             self.files_moved = True
-    
+
+    def set_summary_data(self, cached_count: int = 0, cached_bytes: int = 0,
+                         restored_count: int = 0, restored_bytes: int = 0,
+                         already_cached: int = 0, duration_seconds: float = 0,
+                         had_errors: bool = False, had_warnings: bool = False) -> None:
+        """Set structured summary data for rich webhook formatting.
+
+        This data is passed to WebhookHandler to generate rich embeds
+        with fields, colors, and proper formatting.
+
+        Args:
+            cached_count: Number of files moved to cache
+            cached_bytes: Total bytes moved to cache
+            restored_count: Number of files restored to array
+            restored_bytes: Total bytes restored to array
+            already_cached: Number of files already on cache (skipped)
+            duration_seconds: Total execution time
+            had_errors: Whether any errors occurred during run
+            had_warnings: Whether any warnings occurred during run
+        """
+        self._summary_data = {
+            'cached_count': cached_count,
+            'cached_bytes': cached_bytes,
+            'restored_count': restored_count,
+            'restored_bytes': restored_bytes,
+            'already_cached': already_cached,
+            'duration_seconds': duration_seconds,
+            'had_errors': had_errors,
+            'had_warnings': had_warnings,
+        }
+
     def log_summary(self) -> None:
         """Log the summary message.
 
         Uses newlines for multi-line output when there are multiple messages.
+        Passes structured data to webhook handler for rich formatting.
         """
+        # Pass structured data to webhook handler before logging
+        if self._webhook_handler and self._summary_data:
+            self._webhook_handler.set_summary_data(self._summary_data)
+
         if self.summary_messages:
             if len(self.summary_messages) == 1:
                 summary_message = self.summary_messages[0]

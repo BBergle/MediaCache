@@ -1257,6 +1257,24 @@ class PlexCacheApp:
         execution_time_seconds = end_time - self.start_time
         execution_time = self._convert_time(execution_time_seconds)
 
+        # Collect structured summary data for rich webhook formatting
+        cached_count = getattr(self.file_mover, 'last_cache_moves_count', 0) if self.file_mover else 0
+        cached_bytes = getattr(self, 'cached_bytes', 0)
+        restored_count = getattr(self, 'restored_count', 0)
+        restored_bytes = getattr(self, 'restored_bytes', 0)
+        already_cached = getattr(self.file_filter, 'last_already_cached_count', 0) if self.file_filter else 0
+
+        self.logging_manager.set_summary_data(
+            cached_count=cached_count,
+            cached_bytes=cached_bytes,
+            restored_count=restored_count,
+            restored_bytes=restored_bytes,
+            already_cached=already_cached,
+            duration_seconds=execution_time_seconds,
+            had_errors=False,  # Could track this via error count if needed
+            had_warnings=False
+        )
+
         self.logging_manager.log_summary()
 
         # Note: Empty folder cleanup now happens immediately during file operations

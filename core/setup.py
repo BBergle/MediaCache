@@ -935,17 +935,9 @@ def _setup_advanced_settings():
     if 'cache_eviction_mode' not in settings_data:
         _configure_eviction_settings()
 
-    # Notification Level
-    if 'unraid_level' not in settings_data:
-        print('\n--- Unraid Notifications ---')
-        print('  summary - Notify after every run with files moved (default)')
-        print('  warning - Only notify on warnings and errors')
-        print('  error   - Only notify on errors')
-        print('  blank   - Disable notifications')
-        unraid_level = input('Notification level [summary]: ').strip().lower() or 'summary'
-        if unraid_level in ['disable', 'disabled', 'none', 'blank', '']:
-            unraid_level = ''
-        settings_data['unraid_level'] = unraid_level
+    # Notification Configuration
+    if 'notification_type' not in settings_data or 'webhook_url' not in settings_data:
+        _configure_notifications()
 
     # Logging Settings
     if 'max_log_files' not in settings_data or 'keep_error_logs_days' not in settings_data:
@@ -1015,6 +1007,191 @@ def _configure_eviction_settings():
             except ValueError:
                 print(f"Invalid number '{min_pri}', using default 60")
                 settings_data['eviction_min_priority'] = 60
+
+
+def _detect_webhook_platform(url: str) -> str:
+    """Auto-detect webhook platform from URL."""
+    url_lower = url.lower()
+    if 'discord.com/api/webhooks/' in url_lower or 'discordapp.com/api/webhooks/' in url_lower:
+        return 'discord'
+    elif 'hooks.slack.com/services/' in url_lower:
+        return 'slack'
+    return 'generic'
+
+
+def _test_webhook(url: str, platform: str) -> bool:
+    """Send a test message to the webhook.
+
+    Returns True if successful, False otherwise.
+    """
+    print(f"\nSending test message to {platform} webhook...")
+
+    headers = {"Content-Type": "application/json"}
+
+    if platform == 'discord':
+        # Discord embed test
+        payload = {
+            "embeds": [{
+                "title": "PlexCache-R Test",
+                "description": "Webhook configured successfully!",
+                "color": 3066993,  # Green
+                "footer": {"text": "PlexCache-R Setup"}
+            }]
+        }
+    elif platform == 'slack':
+        # Slack Block Kit test
+        payload = {
+            "blocks": [
+                {
+                    "type": "header",
+                    "text": {"type": "plain_text", "text": "PlexCache-R Test", "emoji": True}
+                },
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "Webhook configured successfully!"}
+                }
+            ]
+        }
+    else:
+        # Generic test
+        payload = {"content": "PlexCache-R: Webhook configured successfully!",
+                   "text": "PlexCache-R: Webhook configured successfully!"}
+
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        if response.status_code in [200, 204]:
+            print("✓ Test message sent successfully!")
+            return True
+        else:
+            print(f"✗ Webhook returned status code: {response.status_code}")
+            return False
+    except requests.RequestException as e:
+        print(f"✗ Failed to send test message: {e}")
+        return False
+
+
+def _configure_notifications():
+    """Helper: Configure notification settings (Unraid/Webhook/Both)."""
+    global settings_data
+
+    print('\n--- Notification Settings ---')
+    print('\nPlexCache can send notifications via:')
+    print('  1. Unraid notifications only (system tray)')
+    print('  2. Webhook only (Discord/Slack)')
+    print('  3. Both Unraid and Webhook')
+    print('  4. None (disable notifications)')
+
+    # Determine default based on system
+    default_choice = '1' if is_unraid() else '4'
+
+    while True:
+        choice = input(f'\nSelect notification method [1-4, default {default_choice}]: ').strip() or default_choice
+
+        if choice == '1':
+            settings_data['notification_type'] = 'unraid'
+            _configure_unraid_level()
+            settings_data['webhook_url'] = ''
+            settings_data['webhook_level'] = ''
+            break
+        elif choice == '2':
+            settings_data['notification_type'] = 'webhook'
+            settings_data['unraid_level'] = ''
+            if _configure_webhook():
+                break
+            # If webhook config failed/cancelled, loop back
+        elif choice == '3':
+            settings_data['notification_type'] = 'both'
+            _configure_unraid_level()
+            if _configure_webhook():
+                break
+            # If webhook config failed/cancelled, loop back
+        elif choice == '4':
+            settings_data['notification_type'] = 'system'
+            settings_data['unraid_level'] = ''
+            settings_data['webhook_url'] = ''
+            settings_data['webhook_level'] = ''
+            print('Notifications disabled.')
+            break
+        else:
+            print('Invalid choice. Please enter 1, 2, 3, or 4.')
+
+
+def _configure_unraid_level():
+    """Helper: Configure Unraid notification level."""
+    global settings_data
+
+    print('\nUnraid notification level:')
+    print('  summary - Notify after every run with files moved (default)')
+    print('  warning - Only notify on warnings and errors')
+    print('  error   - Only notify on errors')
+
+    level = input('Level [summary]: ').strip().lower() or 'summary'
+    if level not in ['summary', 'warning', 'error', 'info', 'debug']:
+        level = 'summary'
+    settings_data['unraid_level'] = level
+    print(f'✓ Unraid notifications: {level}')
+
+
+def _configure_webhook() -> bool:
+    """Helper: Configure webhook URL and settings.
+
+    Returns True if webhook was configured successfully, False if cancelled.
+    """
+    global settings_data
+
+    print('\n--- Webhook Configuration ---')
+    print('\nSupported webhooks:')
+    print('  • Discord - Rich embeds with colors and fields')
+    print('  • Slack   - Block Kit formatting')
+    print('  • Other   - Plain text messages')
+
+    print('\nTo get a webhook URL:')
+    print('  Discord: Server Settings → Integrations → Webhooks → New Webhook')
+    print('  Slack:   Apps → Incoming Webhooks → Add New Webhook')
+
+    while True:
+        url = input('\nWebhook URL (or "cancel" to go back): ').strip()
+
+        if url.lower() == 'cancel':
+            return False
+
+        if not url:
+            print('URL cannot be empty.')
+            continue
+
+        # Validate URL format
+        if not url.startswith('http://') and not url.startswith('https://'):
+            print('URL must start with http:// or https://')
+            continue
+
+        # Detect platform
+        platform = _detect_webhook_platform(url)
+        print(f'✓ Detected platform: {platform.capitalize()}')
+
+        # Offer to test webhook
+        test_choice = input('Send a test message? [Y/n]: ').strip().lower() or 'y'
+        if test_choice in ['y', 'yes']:
+            if not _test_webhook(url, platform):
+                retry = input('Test failed. Try a different URL? [Y/n]: ').strip().lower() or 'y'
+                if retry in ['y', 'yes']:
+                    continue
+                # User chose to keep the URL despite failed test
+
+        settings_data['webhook_url'] = url
+
+        # Configure webhook level
+        print('\nWebhook notification level:')
+        print('  summary - Notify after every run with files moved (default)')
+        print('  warning - Only notify on warnings and errors')
+        print('  error   - Only notify on errors')
+
+        level = input('Level [summary]: ').strip().lower() or 'summary'
+        if level not in ['summary', 'warning', 'error', 'info', 'debug']:
+            level = 'summary'
+        settings_data['webhook_level'] = level
+
+        print(f'✓ Webhook configured: {platform.capitalize()}, level={level}')
+        return True
 
 
 def _setup_legacy_paths_if_needed():
@@ -1208,6 +1385,9 @@ def check_for_missing_settings(settings: dict) -> list:
         'path_mappings',
         'max_log_files',
         'keep_error_logs_days',
+        'notification_type',
+        'webhook_url',
+        'webhook_level',
     ]
     missing = [s for s in optional_new_settings if s not in settings]
     return missing
