@@ -45,13 +45,12 @@
 .log-viewer {
     max-height: 500px;
     overflow-y: auto;
+    overflow-x: hidden;
     background-color: var(--pico-code-background-color);
     padding: 1rem;
     font-family: var(--pico-font-family-monospace);
     font-size: 0.85em;
     line-height: 1.4;
-    white-space: pre-wrap;
-    word-wrap: break-word;
 }
 
 .log-viewer code {

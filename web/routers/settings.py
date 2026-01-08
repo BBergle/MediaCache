@@ -1,10 +1,12 @@
 """Settings routes"""
 
+from pathlib import Path
+
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from web.config import TEMPLATES_DIR
+from web.config import TEMPLATES_DIR, CONFIG_DIR
 from web.services import get_settings_service, get_scheduler_service
 
 router = APIRouter()
@@ -373,5 +375,23 @@ async def settings_schedule(request: Request):
             "page_title": "Schedule Settings",
             "active_tab": "schedule",
             "schedule": schedule
+        }
+    )
+
+
+@router.get("/import", response_class=HTMLResponse)
+async def settings_import(request: Request):
+    """Import data tab - import CLI data to Docker"""
+    # Check if any previous imports have been completed
+    import_completed_dir = CONFIG_DIR / "import_completed"
+    has_completed_import = import_completed_dir.exists() and any(import_completed_dir.iterdir()) if import_completed_dir.exists() else False
+
+    return templates.TemplateResponse(
+        "settings/import.html",
+        {
+            "request": request,
+            "page_title": "Import Data",
+            "active_tab": "import",
+            "has_completed_import": has_completed_import
         }
     )

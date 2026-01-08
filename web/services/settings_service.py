@@ -310,16 +310,24 @@ class SettingsService:
         self._plex_users_cache = None
         self._plex_cache_time = None
 
-    def get_plex_libraries(self) -> List[Dict[str, Any]]:
-        """Fetch library sections from Plex server (cached)"""
-        with self._cache_lock:
-            # Return cached data if valid
-            if self._is_plex_cache_valid() and self._plex_libraries_cache is not None:
-                return self._plex_libraries_cache
+    def get_plex_libraries(self, plex_url: Optional[str] = None, plex_token: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Fetch library sections from Plex server (cached)
 
-        settings = self.get_plex_settings()
-        plex_url = settings.get("plex_url", "")
-        plex_token = settings.get("plex_token", "")
+        Args:
+            plex_url: Optional Plex URL (uses saved settings if not provided)
+            plex_token: Optional Plex token (uses saved settings if not provided)
+        """
+        with self._cache_lock:
+            # Return cached data if valid (only when using saved credentials)
+            if plex_url is None and plex_token is None:
+                if self._is_plex_cache_valid() and self._plex_libraries_cache is not None:
+                    return self._plex_libraries_cache
+
+        # Use provided credentials or fall back to saved settings
+        if plex_url is None or plex_token is None:
+            settings = self.get_plex_settings()
+            plex_url = plex_url or settings.get("plex_url", "")
+            plex_token = plex_token or settings.get("plex_token", "")
 
         if not plex_url or not plex_token:
             return []
@@ -330,6 +338,13 @@ class SettingsService:
 
             libraries = []
             for section in plex.library.sections():
+                # Get library locations (paths) for path mapping generation
+                locations = []
+                try:
+                    locations = list(section.locations) if hasattr(section, 'locations') else []
+                except Exception:
+                    pass
+
                 libraries.append({
                     "id": int(section.key),
                     "title": section.title,
@@ -339,7 +354,8 @@ class SettingsService:
                         "show": "TV Shows",
                         "artist": "Music",
                         "photo": "Photos"
-                    }.get(section.type, section.type.title())
+                    }.get(section.type, section.type.title()),
+                    "locations": locations  # Plex paths for this library
                 })
 
             with self._cache_lock:
@@ -354,16 +370,65 @@ class SettingsService:
                     return self._plex_libraries_cache
             return []
 
-    def get_plex_users(self) -> List[Dict[str, Any]]:
-        """Fetch users from Plex server (cached, including main account)"""
-        with self._cache_lock:
-            # Return cached data if valid
-            if self._is_plex_cache_valid() and self._plex_users_cache is not None:
-                return self._plex_users_cache
+    def get_plex_users(self, plex_url: Optional[str] = None, plex_token: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Fetch users from Plex server (cached, including main account)
 
-        settings = self.get_plex_settings()
-        plex_url = settings.get("plex_url", "")
-        plex_token = settings.get("plex_token", "")
+        Args:
+            plex_url: Optional Plex URL (uses saved settings if not provided)
+            plex_token: Optional Plex token (uses saved settings if not provided)
+        """
+        # Check for prefetched users from setup wizard (background fetch)
+        if hasattr(self, '_prefetched_users') and self._prefetched_users:
+            prefetched = self._prefetched_users
+            self._prefetched_users = None  # Clear after use
+
+            # Convert prefetched format to expected format and cache
+            users = []
+            # Add main account first - use provided credentials or saved settings
+            if plex_url is None or plex_token is None:
+                settings = self.get_plex_settings()
+                plex_url = plex_url or settings.get("plex_url", "")
+                plex_token = plex_token or settings.get("plex_token", "")
+            if plex_url and plex_token:
+                try:
+                    from plexapi.server import PlexServer
+                    plex = PlexServer(plex_url, plex_token, timeout=10)
+                    account = plex.myPlexAccount()
+                    users.append({
+                        "username": account.username,
+                        "title": account.title or account.username,
+                        "is_admin": True,
+                        "is_home": True
+                    })
+                except Exception:
+                    pass
+
+            # Add prefetched users
+            for u in prefetched:
+                if u.get('has_access', True):
+                    users.append({
+                        "username": u.get('title', ''),
+                        "title": u.get('title', ''),
+                        "is_admin": False,
+                        "is_home": u.get('is_home', False)
+                    })
+
+            with self._cache_lock:
+                self._plex_users_cache = users
+                self._plex_cache_time = datetime.now()
+            return users
+
+        with self._cache_lock:
+            # Return cached data if valid (only when using saved credentials)
+            if plex_url is None and plex_token is None:
+                if self._is_plex_cache_valid() and self._plex_users_cache is not None:
+                    return self._plex_users_cache
+
+        # Use provided credentials or fall back to saved settings
+        if plex_url is None or plex_token is None:
+            settings = self.get_plex_settings()
+            plex_url = plex_url or settings.get("plex_url", "")
+            plex_token = plex_token or settings.get("plex_token", "")
 
         if not plex_url or not plex_token:
             return []

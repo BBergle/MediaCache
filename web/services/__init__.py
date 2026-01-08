@@ -13,6 +13,7 @@ from web.services.maintenance_service import (
     ActionResult,
     get_maintenance_service,
 )
+from web.services.import_service import ImportService, ImportSummary, get_import_service
 
 __all__ = [
     "CacheService",
@@ -33,4 +34,7 @@ __all__ = [
     "DuplicateFile",
     "ActionResult",
     "get_maintenance_service",
+    "ImportService",
+    "ImportSummary",
+    "get_import_service",
 ]

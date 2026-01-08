@@ -6,10 +6,10 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from web.config import TEMPLATES_DIR, STATIC_DIR, PROJECT_ROOT
-from web.routers import dashboard, cache, settings, operations, logs, api, maintenance
+from web.routers import dashboard, cache, settings, operations, logs, api, maintenance, setup
 from web.services import get_scheduler_service, get_settings_service
 from web.services.web_cache import init_web_cache, get_web_cache_service
 
@@ -72,6 +72,26 @@ app.include_router(operations.router, prefix="/operations", tags=["operations"])
 app.include_router(logs.router, prefix="/logs", tags=["logs"])
 app.include_router(api.router, prefix="/api", tags=["api"])
 app.include_router(maintenance.router, prefix="/maintenance", tags=["maintenance"])
+app.include_router(setup.router, tags=["setup"])
+
+
+# Middleware to redirect to setup wizard if not configured
+@app.middleware("http")
+async def setup_redirect_middleware(request: Request, call_next):
+    """Redirect to setup wizard if PlexCache is not configured"""
+    # Skip redirect for setup pages, static files, and API endpoints
+    path = request.url.path
+    if (path.startswith("/setup") or
+        path.startswith("/static") or
+        path.startswith("/api/health") or
+        path.startswith("/api/status")):
+        return await call_next(request)
+
+    # Check if setup is complete
+    if not setup.is_setup_complete():
+        return RedirectResponse(url="/setup", status_code=307)
+
+    return await call_next(request)
 
 
 @app.exception_handler(404)

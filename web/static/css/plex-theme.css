@@ -1272,9 +1272,8 @@ textarea {
     font-size: 0.8rem;
     line-height: 1.5;
     max-height: 500px;
-    overflow: auto;
-    white-space: pre;
-    word-wrap: normal;
+    overflow-y: auto;
+    overflow-x: hidden;
     max-width: 100%;
 }
 
@@ -1282,6 +1281,7 @@ textarea {
     margin: 0;
     white-space: pre;
     overflow-x: auto;
+    max-width: 100%;
 }
 
 .log-line {

@@ -77,6 +77,7 @@ python3 plexcache_web.py --port 8080     # Custom port
 ```
 
 **Features:**
+- **Setup Wizard** - Guided first-run configuration with Plex OAuth support
 - **Dashboard** - Real-time cache stats, Plex connection status, recent activity feed
 - **Cached Files** - Sortable file browser with filters, eviction controls
 - **Storage** - Drive analytics, breakdowns by source, largest/oldest files
@@ -86,6 +87,54 @@ python3 plexcache_web.py --port 8080     # Custom port
 - **Logs** - Real-time log viewer with search, filters, and live streaming
 
 **Tech Stack:** FastAPI, HTMX, Jinja2, Plex-inspired dark theme
+
+## Docker Installation (Recommended for Unraid)
+
+PlexCache-R is available as a Docker container, ideal for Unraid users.
+
+**Docker Hub:** `brandonhaney/plexcache-r`
+
+### Quick Start
+
+```bash
+docker run -d \
+  --name plexcache-r \
+  -p 5757:5757 \
+  -v /mnt/user/appdata/plexcache:/config \
+  -v /mnt/cache:/mnt/cache \
+  -v /mnt/user0:/mnt/user0 \
+  -v /mnt/user:/mnt/user \
+  -e PUID=99 \
+  -e PGID=100 \
+  -e TZ=America/Los_Angeles \
+  brandonhaney/plexcache-r:latest
+```
+
+### Unraid Installation
+
+1. Go to **Docker** → **Add Container**
+2. Set **Repository**: `brandonhaney/plexcache-r`
+3. Add required volume mappings:
+   - `/config` → `/mnt/user/appdata/plexcache`
+   - `/mnt/cache` → `/mnt/cache` (read-write)
+   - `/mnt/user0` → `/mnt/user0` (read-write)
+   - `/mnt/user` → `/mnt/user` (read-write)
+4. Set **WebUI**: `http://[IP]:[PORT:5757]`
+5. Click **Apply**
+
+> **Important:** All media paths (`/mnt/cache`, `/mnt/user0`, `/mnt/user`) must be **read-write** for PlexCache-R to move files between cache and array.
+
+### First Run
+
+Open `http://[YOUR_IP]:5757` - the Setup Wizard will guide you through:
+- Plex connection (OAuth or manual token)
+- Library selection with cacheable options
+- User selection for OnDeck/Watchlist monitoring
+- Caching behavior configuration
+
+**Important:** Volume paths for `/mnt/cache`, `/mnt/user0`, and `/mnt/user` must match exactly between container and host for Plex path resolution.
+
+See `docker/UNRAID_SETUP.md` for detailed Unraid setup instructions including CA Mover Tuning integration.
 
 ## Installation and Setup
 

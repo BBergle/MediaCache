@@ -318,3 +318,128 @@ async def validate_cron_expression(expression: str):
     """Validate a cron expression (JSON)"""
     scheduler_service = get_scheduler_service()
     return scheduler_service.validate_cron(expression)
+
+
+# =============================================================================
+# Docker API Endpoints
+# =============================================================================
+
+@router.get("/health")
+async def health_check():
+    """
+    Health check endpoint for Docker container monitoring.
+
+    Returns basic health status for container orchestration (Docker, Kubernetes, etc.).
+    Used by Docker HEALTHCHECK and external monitoring tools.
+    """
+    settings_service = get_settings_service()
+    scheduler_service = get_scheduler_service()
+    operation_runner = get_operation_runner()
+
+    # Check Plex connection (cached, won't block)
+    plex_connected = settings_service.check_plex_connection()
+
+    # Get scheduler status
+    schedule_status = scheduler_service.get_status()
+
+    return {
+        "status": "healthy",
+        "version": "3.0.0",
+        "plex_connected": plex_connected,
+        "scheduler_running": schedule_status.get("running", False),
+        "operation_running": operation_runner.is_running,
+    }
+
+
+@router.get("/status")
+async def detailed_status():
+    """
+    Detailed status endpoint for monitoring and debugging.
+
+    Returns comprehensive status information including:
+    - Plex connection status
+    - Scheduler configuration and next run
+    - Current operation status
+    - Cache statistics
+    """
+    settings_service = get_settings_service()
+    scheduler_service = get_scheduler_service()
+    operation_runner = get_operation_runner()
+    cache_service = get_cache_service()
+
+    # Get various status info
+    plex_connected = settings_service.check_plex_connection()
+    schedule_status = scheduler_service.get_status()
+    operation_status = operation_runner.get_status_dict()
+    cache_stats = cache_service.get_cache_stats()
+
+    return {
+        "status": "ok",
+        "plex": {
+            "connected": plex_connected,
+        },
+        "scheduler": {
+            "enabled": schedule_status.get("enabled", False),
+            "running": schedule_status.get("running", False),
+            "schedule_description": schedule_status.get("schedule_description", ""),
+            "next_run": schedule_status.get("next_run"),
+            "next_run_display": schedule_status.get("next_run_display"),
+            "last_run": schedule_status.get("last_run"),
+            "last_run_display": schedule_status.get("last_run_display"),
+        },
+        "operation": operation_status,
+        "cache": {
+            "files": cache_stats.get("cache_files", 0),
+            "size": cache_stats.get("cache_size", "0 B"),
+            "ondeck_count": cache_stats.get("ondeck_count", 0),
+            "watchlist_count": cache_stats.get("watchlist_count", 0),
+        }
+    }
+
+
+@router.post("/run")
+async def trigger_run(dry_run: bool = False, verbose: bool = False):
+    """
+    Trigger an immediate PlexCache operation.
+
+    This endpoint allows external tools and automation to trigger cache operations.
+    The operation runs in the background; poll /api/status to track progress.
+
+    Args:
+        dry_run: If true, simulate without moving files
+        verbose: If true, enable debug logging for this run
+
+    Returns:
+        JSON with success status and message
+    """
+    operation_runner = get_operation_runner()
+
+    if operation_runner.is_running:
+        return {
+            "success": False,
+            "message": "Operation already in progress",
+            "running": True
+        }
+
+    # Start the operation
+    started = operation_runner.start_operation(dry_run=dry_run, verbose=verbose)
+
+    if started:
+        mode = []
+        if dry_run:
+            mode.append("dry-run")
+        if verbose:
+            mode.append("verbose")
+        mode_str = f" ({', '.join(mode)})" if mode else ""
+
+        return {
+            "success": True,
+            "message": f"Operation started{mode_str}",
+            "running": True
+        }
+    else:
+        return {
+            "success": False,
+            "message": "Failed to start operation",
+            "running": False
+        }
