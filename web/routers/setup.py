@@ -229,11 +229,14 @@ async def setup_step3_post(request: Request):
     path_mappings = []
     mapping_index = 0
     while f"mapping_name_{mapping_index}" in form_data:
+        cache_path = form_data.get(f"mapping_cache_path_{mapping_index}", "")
+        host_cache_path = form_data.get(f"mapping_host_cache_path_{mapping_index}", "")
         mapping = {
             "name": form_data.get(f"mapping_name_{mapping_index}", ""),
             "plex_path": form_data.get(f"mapping_plex_path_{mapping_index}", ""),
             "real_path": form_data.get(f"mapping_real_path_{mapping_index}", ""),
-            "cache_path": form_data.get(f"mapping_cache_path_{mapping_index}", ""),
+            "cache_path": cache_path,
+            "host_cache_path": host_cache_path if host_cache_path else cache_path,  # Default to cache_path if not set
             "cacheable": form_data.get(f"mapping_cacheable_{mapping_index}") == "on",
             "enabled": True
         }
@@ -276,12 +279,15 @@ async def setup_step3_post(request: Request):
                 # Generate cache_path from library folder name
                 lib_folder = plex_path_normalized.rstrip('/').split('/')[-1]
                 cache_path = f"{cache_dir_normalized}/{lib_folder}/" if is_cacheable else None
+                # host_cache_path defaults to same as cache_path (user can override in settings)
+                host_cache_path = cache_path
 
                 path_mappings.append({
                     "name": mapping_name,
                     "plex_path": plex_path_normalized,
                     "real_path": real_path,
                     "cache_path": cache_path,
+                    "host_cache_path": host_cache_path,
                     "cacheable": is_cacheable,
                     "enabled": True
                 })

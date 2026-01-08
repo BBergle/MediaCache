@@ -41,7 +41,11 @@ class PathMapping:
         name: Human-readable identifier for logging/diagnostics
         plex_path: Path as Plex sees it (container mount point)
         real_path: Actual filesystem path where PlexCache runs
-        cache_path: Cache destination path (None if not cacheable)
+        cache_path: Cache destination path (None if not cacheable) - container view
+        host_cache_path: Host cache path for Docker (None = same as cache_path)
+            When running in Docker with remapped volumes, the container sees
+            /mnt/cache but the host (Unraid mover) sees /mnt/cache_downloads.
+            This field stores the host-side path for the exclude file.
         cacheable: Whether files from this mapping can be moved to cache
         enabled: Toggle mapping on/off without deleting config
     """
@@ -49,6 +53,7 @@ class PathMapping:
     plex_path: str = ""
     real_path: str = ""
     cache_path: Optional[str] = None
+    host_cache_path: Optional[str] = None  # For Docker: host-side cache path
     cacheable: bool = True
     enabled: bool = True
 
@@ -368,16 +373,23 @@ class ConfigManager:
         # Load multi-path mappings (new format)
         self.paths.path_mappings = []
         for mapping_data in self.settings_data.get('path_mappings', []):
+            cache_path = self._add_trailing_slashes(mapping_data['cache_path']) if mapping_data.get('cache_path') else None
+            host_cache_path = self._add_trailing_slashes(mapping_data['host_cache_path']) if mapping_data.get('host_cache_path') else None
             mapping = PathMapping(
                 name=mapping_data.get('name', 'Unnamed'),
                 plex_path=self._add_trailing_slashes(mapping_data.get('plex_path', '')),
                 real_path=self._add_trailing_slashes(mapping_data.get('real_path', '')),
-                cache_path=self._add_trailing_slashes(mapping_data['cache_path']) if mapping_data.get('cache_path') else None,
+                cache_path=cache_path,
+                host_cache_path=host_cache_path,
                 cacheable=mapping_data.get('cacheable', True),
                 enabled=mapping_data.get('enabled', True)
             )
             self.paths.path_mappings.append(mapping)
-            logging.debug(f"Loaded path mapping: {mapping.name} ({mapping.plex_path} -> {mapping.real_path})")
+            if host_cache_path and host_cache_path != cache_path:
+                logging.debug(f"Loaded path mapping: {mapping.name} ({mapping.plex_path} -> {mapping.real_path})")
+                logging.debug(f"  Cache: {mapping.cache_path} -> Host: {mapping.host_cache_path}")
+            else:
+                logging.debug(f"Loaded path mapping: {mapping.name} ({mapping.plex_path} -> {mapping.real_path})")
     
     def _load_performance_config(self) -> None:
         """Load performance-related configuration."""
@@ -562,6 +574,7 @@ class ConfigManager:
                         'plex_path': m.plex_path,
                         'real_path': m.real_path,
                         'cache_path': m.cache_path,
+                        'host_cache_path': m.host_cache_path,
                         'cacheable': m.cacheable,
                         'enabled': m.enabled
                     }

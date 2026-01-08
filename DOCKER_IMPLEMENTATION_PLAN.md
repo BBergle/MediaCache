@@ -535,3 +535,286 @@ Users configure CA Mover Tuning to read from the mapped host path.
 - [Community Applications Submission Guide](https://forums.unraid.net/topic/38582-plug-in-community-applications/)
 - [Docker Best Practices](https://docs.docker.com/develop/develop-images/dockerfile_best-practices/)
 - [APScheduler Documentation](https://apscheduler.readthedocs.io/)
+
+---
+
+## BUG FIX: Docker Host Path Translation for Exclude File ✅ COMPLETE
+
+### Problem Statement
+
+**Discovered:** 2026-01-08
+
+When PlexCache runs in Docker with volume mounts that remap paths:
+
+- **Docker container sees:** `/mnt/cache/Movies/...`
+- **Unraid host has:** `/mnt/cache_downloads/Movies/...`
+
+PlexCache writes container paths to the exclude file, but the Unraid mover runs on the HOST and can't match the paths. Result: files get moved despite being "excluded".
+
+### Evidence
+
+```bash
+# Docker volume mount (host:container)
+/mnt/cache_downloads:/mnt/cache
+
+# PlexCache logs (container view)
+Added to exclude file: /mnt/cache/Movies/A Merry Little Ex-Mas (2025)/...
+
+# Unraid mover (host view) - CAN'T MATCH!
+Skip file list: .../unraid_mover_exclusions.txt
+# Looks for /mnt/cache/... but host has /mnt/cache_downloads/...
+```
+
+### User Impact
+
+- Files moved off cache unexpectedly
+- Stale entries in timestamps.json and exclude file
+- Maintenance page shows files as "stale"
+
+---
+
+### Solution: Per-Path-Mapping Host Cache Path
+
+#### Why Per-Mapping Instead of Global?
+
+1. **Multiple cache pools** - Unraid is moving toward multiple cache pools/arrays
+2. **Different libraries, different caches** - 4K content on NVMe, regular on SSD
+3. **Future-proof** - Each mapping can have independent host path
+4. **Setup wizard friendly** - Configure during path setup
+
+#### Data Model Change
+
+**Add `host_cache_path` to PathMapping:**
+
+```python
+@dataclass
+class PathMapping:
+    name: str = ""
+    plex_path: str = ""
+    real_path: str = ""
+    cache_path: Optional[str] = None      # Container view (what Docker sees)
+    host_cache_path: Optional[str] = None # Host view (what Unraid mover sees) - NEW
+    cacheable: bool = True
+    enabled: bool = True
+```
+
+#### Settings JSON Example
+
+```json
+{
+  "path_mappings": [
+    {
+      "name": "TV Shows",
+      "plex_path": "/data/TV Shows/",
+      "real_path": "/mnt/user/TV Shows/",
+      "cache_path": "/mnt/cache/TV Shows/",
+      "host_cache_path": "/mnt/cache_downloads/TV Shows/",
+      "cacheable": true,
+      "enabled": true
+    },
+    {
+      "name": "Movies 4K",
+      "plex_path": "/nas/Movies UHD/",
+      "real_path": "/mnt/user/Movies UHD/",
+      "cache_path": "/mnt/cache_nvme/Movies UHD/",
+      "host_cache_path": "/mnt/cache_nvme/Movies UHD/",
+      "cacheable": true,
+      "enabled": true
+    }
+  ]
+}
+```
+
+---
+
+### Implementation Tasks
+
+#### Phase 1: Core Changes ✅
+
+**1.1 Update PathMapping Dataclass**
+- File: `core/config.py`
+- Add `host_cache_path: Optional[str] = None` field
+
+**1.2 Update Config Loading**
+- File: `core/config.py` - `_load_path_config()`
+- Load `host_cache_path` from settings JSON
+
+**1.3 Update Config Saving**
+- File: `core/config.py` - `save_settings()`
+- Include `host_cache_path` when saving path mappings
+
+**1.4 Update FileMover Translation Logic**
+- File: `core/file_operations.py` - `FileMover` class
+- Add `_translate_path_for_exclude()` method
+- Pass path_mappings to FileMover
+
+```python
+def _translate_path_for_exclude(self, path: str) -> str:
+    """Translate container cache path to host cache path using path mappings."""
+    for mapping in self.path_mappings:
+        if not mapping.cache_path or not mapping.host_cache_path:
+            continue
+        if mapping.cache_path == mapping.host_cache_path:
+            continue  # No translation needed
+
+        cache_prefix = mapping.cache_path.rstrip('/')
+        if path.startswith(cache_prefix):
+            host_prefix = mapping.host_cache_path.rstrip('/')
+            translated = path.replace(cache_prefix, host_prefix, 1)
+            logging.debug(f"Exclude path translation: {path} -> {translated}")
+            return translated
+    return path
+```
+
+**1.5 Update app.py**
+- Pass `path_mappings` to FileMover constructor
+
+#### Phase 2: Setup Wizard Changes ✅
+
+**2.1 Update Step 3 (Libraries & Paths)**
+- File: `web/templates/setup/step3_paths.html`
+- Add `host_cache_path` input field (shown when Docker detected)
+- Pre-fill with `cache_path` value as starting point
+
+```
++----------------------------------------------------------+
+| Library: Movies                                          |
++----------------------------------------------------------+
+| Plex Path:       /data/Movies/          (from Plex)      |
+| Real Path:       /mnt/user/Movies/      [__________]     |
+| Cache Path:      /mnt/cache/Movies/     [__________]     |
+|                                                          |
+| [Docker Detected] Host Cache Path:                       |
+| /mnt/cache_downloads/Movies/            [__________]     |
+|                                                          |
+| (i) The Unraid mover sees different paths than Docker.   |
+|     Enter the actual host path to your cache pool.       |
++----------------------------------------------------------+
+```
+
+**2.2 Update Setup Router**
+- File: `web/routers/setup.py`
+- Pass `is_docker` flag to template
+- Handle `host_cache_path` in form submission
+
+**2.3 Update Setup Service**
+- Include `host_cache_path` when building path mappings
+- Default to `cache_path` if not provided (native installs)
+
+#### Phase 3: Settings Page Changes ✅
+
+**3.1 Update Paths Settings Tab**
+- File: `web/templates/settings/paths.html`
+- Add `host_cache_path` column (visible in Docker mode)
+
+**3.2 Update Settings Router**
+- Handle `host_cache_path` when saving
+
+#### Phase 4: Logging & Testing ✅
+
+**4.1 Verbose Logging**
+```
+DEBUG - Loaded path mapping: Movies (/data/Movies/ -> /mnt/user/Movies/)
+DEBUG -   Cache: /mnt/cache/Movies/ -> Host: /mnt/cache_downloads/Movies/
+...
+DEBUG - Exclude path translation: /mnt/cache/Movies/Film.mkv -> /mnt/cache_downloads/Movies/Film.mkv
+```
+
+**4.2 Startup Validation**
+```
+INFO - Docker detected: exclude file will use host paths
+INFO -   /mnt/cache/ -> /mnt/cache_downloads/
+```
+
+---
+
+### Implementation Status: COMPLETE
+
+The per-mapping `host_cache_path` feature has been implemented.
+
+**Files Modified:**
+- `core/config.py` - Added `host_cache_path` field to `PathMapping` dataclass, updated config loading/saving
+- `core/file_operations.py` - Added `_translate_path_for_exclude()` method to `FileMover`, updated `_add_to_exclude_file()`, `_remove_from_exclude_file()`, and `_cleanup_stale_exclude_entries()` to use path translation
+- `web/templates/setup/step3.html` - Added `host_cache_path` input field (shown when Docker detected)
+- `web/routers/setup.py` - Handle `host_cache_path` in Step 3 form submission
+- `web/templates/settings/paths.html` - Added `host_cache_path` field in "Add New Path Mapping" form
+- `web/templates/settings/partials/path_mapping_card.html` - Added `host_cache_path` display and edit fields
+- `web/routers/settings.py` - Handle `host_cache_path` in add/update/delete path mapping routes
+
+---
+
+### Migration Notes
+
+**Existing Docker Users:**
+1. Update to new version
+2. Go to Settings > Paths (or re-run setup wizard)
+3. Fill in `host_cache_path` for each mapping
+4. Run PlexCache to regenerate exclude file with correct paths
+
+**Native Installs:**
+- No action needed
+- `host_cache_path` defaults to same as `cache_path`
+
+---
+
+### Open Questions (Resolved)
+
+1. **Auto-detection?** - No, user should configure explicitly. Auto-detection is risky and error-prone.
+2. **Required field?** - No, defaults to `cache_path` if not provided. Only needed when Docker remaps cache paths.
+3. **Maintenance page?** - Currently uses container paths for file existence checks, which works since the container can see the files. The exclude file is the only place that needs host paths (for Unraid mover).
+
+---
+
+## BUG FIX: Stop Button Not Working ✅ COMPLETE
+
+### Problem Statement
+
+**Discovered:** 2026-01-08
+
+The Stop button on the Dashboard would:
+1. Not appear for scheduled operations (only for manual "Run Now")
+2. Cause the UI to freeze when clicked (deadlock)
+3. Not actually stop the file moving operation
+
+### Root Causes
+
+**Issue 1: Deadlock in stop_operation()**
+- `stop_operation()` acquired `self._lock` and then called `_add_log_message()`
+- `_add_log_message()` also tries to acquire `self._lock`
+- Python's `threading.Lock` is not reentrant → deadlock
+
+**Issue 2: Dashboard didn't show Stop for scheduled runs**
+- On page load with operation running, dashboard showed simple "Operation in progress..." message
+- The full `operation_status.html` component (with Stop button) was only loaded when clicking "Run Now"
+
+**Issue 3: FileMover didn't check stop flag**
+- `FileMover._execute_move_commands()` used `executor.map()` which submits all tasks immediately
+- No mechanism to check stop flag between file moves
+
+### Solution
+
+**Fix 1: Deadlock** (`web/services/operation_runner.py`)
+- Move `_add_log_message()` and `app.request_stop()` calls outside the lock block
+- Store app reference inside lock, signal outside
+
+**Fix 2: Dashboard** (`web/templates/dashboard.html`)
+- Add `hx-get="/operations/status"` with `hx-trigger="load"` when operation is running
+- Dashboard now polls for full status component on load
+
+**Fix 3: FileMover stop check** (`core/file_operations.py`, `core/app.py`)
+- Added `stop_check` callback parameter to `FileMover.__init__()`
+- Changed `_execute_move_commands()` to use `executor.submit()` with stop check between each file
+- `PlexCacheApp` passes `lambda: self.should_stop` as the callback
+
+### Files Modified
+
+- `web/services/operation_runner.py` - Fixed deadlock in `stop_operation()`
+- `web/templates/dashboard.html` - Load operation status component for scheduled runs
+- `core/file_operations.py` - Added `stop_check` callback and stop logic in `_execute_move_commands()`
+- `core/app.py` - Pass `stop_check` callback to `FileMover`
+
+### Testing
+
+Verified working:
+- Ad-hoc run: Stop button appears, logs "Stop requested", operation stops after current phase
+- Scheduled run: Stop button now appears (pending full test)

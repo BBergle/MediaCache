@@ -201,7 +201,7 @@ function showConfirmModal(title, message, action, formData, isDryRun = false) {
     actionBtn.textContent = btnText;
     actionBtn.onclick = function() {
         executeAction(action, formData, isDryRun);
-        closeConfirmModal();
+        // Note: modal is closed by executeAction after fetch completes
     };
 
     modal.style.display = 'flex';

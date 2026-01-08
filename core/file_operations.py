@@ -10,7 +10,7 @@ import threading
 import json
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Set, Optional, Tuple, Dict, TYPE_CHECKING
+from typing import List, Set, Optional, Tuple, Dict, TYPE_CHECKING, Callable
 import re
 
 from core.logging_config import get_console_lock
@@ -2584,7 +2584,8 @@ class FileMover:
     def __init__(self, real_source: str, cache_dir: str, is_unraid: bool,
                  file_utils, debug: bool = False, mover_cache_exclude_file: Optional[str] = None,
                  timestamp_tracker: Optional['CacheTimestampTracker'] = None,
-                 path_modifier: Optional['MultiPathModifier'] = None):
+                 path_modifier: Optional['MultiPathModifier'] = None,
+                 stop_check: Optional[Callable[[], bool]] = None):
         self.real_source = real_source
         self.cache_dir = cache_dir
         self.is_unraid = is_unraid
@@ -2593,6 +2594,7 @@ class FileMover:
         self.mover_cache_exclude_file = mover_cache_exclude_file
         self.timestamp_tracker = timestamp_tracker
         self.path_modifier = path_modifier  # For multi-path support
+        self._stop_check = stop_check  # Callback to check if stop requested
         self._exclude_file_lock = threading.Lock()
         # Progress tracking
         self._progress_lock = threading.Lock()
@@ -2606,6 +2608,8 @@ class FileMover:
         self._source_map: Dict[str, str] = {}
         # Track actual moves by destination for accurate reporting
         self.last_cache_moves_count = 0
+        # Flag to signal stop to running threads
+        self._stop_requested = False
 
     def move_media_files(self, files: List[str], destination: str,
                         max_concurrent_moves_array: int, max_concurrent_moves_cache: int,
@@ -2757,37 +2761,88 @@ class FileMover:
                 move = (user_file_name, cache_path)
         return move
 
+    def _translate_path_for_exclude(self, cache_path: str) -> str:
+        """Translate container cache path to host cache path for exclude file.
+
+        In Docker, the container might see /mnt/cache/Movies/... but the host
+        (where Unraid mover runs) sees /mnt/cache_downloads/Movies/...
+        This method translates paths using the host_cache_path from path_mappings.
+
+        Args:
+            cache_path: The cache path as seen by the container
+
+        Returns:
+            The translated path for the host, or original if no translation needed
+        """
+        if not self.path_modifier:
+            return cache_path
+
+        # Get path mappings from the modifier
+        path_mappings = getattr(self.path_modifier, 'path_mappings', [])
+
+        for mapping in path_mappings:
+            if not mapping.cache_path or not mapping.host_cache_path:
+                continue
+            if mapping.cache_path == mapping.host_cache_path:
+                continue  # No translation needed
+
+            cache_prefix = mapping.cache_path.rstrip('/')
+            if cache_path.startswith(cache_prefix):
+                host_prefix = mapping.host_cache_path.rstrip('/')
+                translated = cache_path.replace(cache_prefix, host_prefix, 1)
+                logging.debug(f"Exclude path translation: {cache_path} -> {translated}")
+                return translated
+
+        return cache_path
+
     def _add_to_exclude_file(self, cache_file_name: str) -> None:
-        """Add a file to the exclude list (thread-safe)."""
+        """Add a file to the exclude list (thread-safe).
+
+        The path is translated to host cache path if running in Docker with
+        different volume mappings (e.g., container sees /mnt/cache but host
+        sees /mnt/cache_downloads).
+        """
         if self.mover_cache_exclude_file:
+            # Translate container path to host path for exclude file
+            exclude_path = self._translate_path_for_exclude(cache_file_name)
+
             with self._exclude_file_lock:
                 # Read existing entries to avoid duplicates
                 existing = set()
                 if os.path.exists(self.mover_cache_exclude_file):
                     with open(self.mover_cache_exclude_file, "r") as f:
                         existing = {line.strip() for line in f if line.strip()}
-                if cache_file_name not in existing:
+                if exclude_path not in existing:
                     with open(self.mover_cache_exclude_file, "a") as f:
-                        f.write(f"{cache_file_name}\n")
-                    logging.debug(f"Added to exclude file: {cache_file_name}")
+                        f.write(f"{exclude_path}\n")
+                    if exclude_path != cache_file_name:
+                        logging.debug(f"Added to exclude file (translated): {exclude_path}")
+                    else:
+                        logging.debug(f"Added to exclude file: {exclude_path}")
                 else:
-                    logging.debug(f"Already in exclude file: {cache_file_name}")
+                    logging.debug(f"Already in exclude file: {exclude_path}")
         else:
             logging.warning(f"No exclude file configured, cannot track: {cache_file_name}")
 
     def _remove_from_exclude_file(self, cache_file_name: str) -> None:
-        """Remove a file from the exclude list (thread-safe)."""
+        """Remove a file from the exclude list (thread-safe).
+
+        The path is translated to host cache path to match what was written.
+        """
         if self.mover_cache_exclude_file and os.path.exists(self.mover_cache_exclude_file):
+            # Translate container path to host path for exclude file
+            exclude_path = self._translate_path_for_exclude(cache_file_name)
+
             with self._exclude_file_lock:
                 try:
                     with open(self.mover_cache_exclude_file, "r") as f:
                         lines = [line.strip() for line in f if line.strip()]
-                    if cache_file_name in lines:
-                        lines.remove(cache_file_name)
+                    if exclude_path in lines:
+                        lines.remove(exclude_path)
                         with open(self.mover_cache_exclude_file, "w") as f:
                             for line in lines:
                                 f.write(f"{line}\n")
-                        logging.debug(f"Removed from exclude file: {cache_file_name}")
+                        logging.debug(f"Removed from exclude file: {exclude_path}")
                 except Exception as e:
                     logging.warning(f"Failed to remove from exclude file: {e}")
 
@@ -2796,12 +2851,17 @@ class FileMover:
 
         When Radarr/Sonarr upgrades a file on the cache, the old filename becomes stale
         in the exclude list. This finds and removes those entries.
+
+        Note: Exclude file entries are in host path format (translated), so we need
+        to translate paths before comparison.
         """
         if not self.mover_cache_exclude_file or not os.path.exists(self.mover_cache_exclude_file):
             return
 
         current_identity = get_media_identity(current_cache_file)
-        current_dir = os.path.dirname(current_cache_file)
+        # Translate to host path format (what's in the exclude file)
+        current_host_path = self._translate_path_for_exclude(current_cache_file)
+        current_dir = os.path.dirname(current_host_path)
 
         with self._exclude_file_lock:
             try:
@@ -2810,8 +2870,8 @@ class FileMover:
 
                 stale_entries = []
                 for entry in lines:
-                    # Skip if it's the current file
-                    if entry == current_cache_file:
+                    # Skip if it's the current file (already in host path format)
+                    if entry == current_host_path:
                         continue
 
                     # Only check entries in the same directory (same media folder)
@@ -2819,6 +2879,7 @@ class FileMover:
                         continue
 
                     # Check if same media identity but file no longer exists
+                    # Note: entry is in host path format, but media identity uses filename only
                     entry_identity = get_media_identity(entry)
                     if entry_identity == current_identity and not os.path.exists(entry):
                         stale_entries.append(entry)
@@ -2879,15 +2940,41 @@ class FileMover:
             # Create tqdm progress bar with data size info
             # ncols=80 keeps bar compact, mininterval=0.5 forces more frequent updates
             import sys
+            from concurrent.futures import as_completed
             total_size_str = format_bytes(total_bytes)
+
+            # Reset stop flag for this batch
+            self._stop_requested = False
+            stopped_early = False
+
             with tqdm(total=total_count, desc=f"Moving to {destination} (0 B / {total_size_str})",
                       unit="file", bar_format="{l_bar}{bar:20}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
                       mininterval=0.5, ncols=80, file=sys.stdout) as pbar:
                 self._tqdm_pbar = pbar
 
                 from functools import partial
+                results = []
                 with ThreadPoolExecutor(max_workers=max_concurrent_moves) as executor:
-                    results = list(executor.map(partial(self._move_file, destination=destination), move_commands))
+                    # Submit tasks one at a time, checking for stop between each
+                    futures = []
+                    for move_cmd in move_commands:
+                        # Check if stop requested (via callback or direct flag)
+                        if self._stop_check and self._stop_check():
+                            self._stop_requested = True
+                        if self._stop_requested:
+                            stopped_early = True
+                            logging.info("Stop requested - cancelling remaining file moves")
+                            break
+                        future = executor.submit(self._move_file, move_cmd, destination)
+                        futures.append(future)
+
+                    # Collect results from submitted futures
+                    for future in as_completed(futures):
+                        try:
+                            results.append(future.result())
+                        except Exception as e:
+                            logging.error(f"Move task failed: {e}")
+                            results.append(1)  # Error code
 
                 errors = [result for result in results if result == 1]
                 partial_successes = [result for result in results if result == 2]
@@ -2897,6 +2984,9 @@ class FileMover:
 
             # Build summary message based on what happened
             issues = []
+            if stopped_early:
+                skipped = total_count - len(results)
+                issues.append(f"stopped early ({skipped} skipped)")
             if errors:
                 issues.append(f"{len(errors)} errors")
             if partial_successes:

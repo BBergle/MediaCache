@@ -25,7 +25,7 @@
                         </button>
                     </div>
                 </div>
-                <div class="grid grid-3" style="font-size: 0.85rem;">
+                <div class="grid grid-2" style="font-size: 0.85rem; margin-bottom: 0.5rem;">
                     <div>
                         <span class="text-muted">Plex Path:</span><br>
                         <code>{{ mapping.plex_path }}</code>
@@ -34,10 +34,18 @@
                         <span class="text-muted">Real Path:</span><br>
                         <code>{{ mapping.real_path }}</code>
                     </div>
+                </div>
+                <div class="grid grid-2" style="font-size: 0.85rem;">
                     <div>
                         <span class="text-muted">Cache Path:</span><br>
                         <code>{{ mapping.cache_path or 'N/A' }}</code>
                     </div>
+                    {% if is_docker and mapping.host_cache_path and mapping.host_cache_path != mapping.cache_path %}
+                    <div>
+                        <span class="text-muted" style="color: var(--plex-orange);">Host Cache:</span><br>
+                        <code>{{ mapping.host_cache_path }}</code>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -76,6 +84,17 @@
                             <input type="text" name="cache_path" value="{{ mapping.cache_path or '' }}">
                         </div>
                     </div>
+
+                    {% if is_docker %}
+                    <div class="form-group mb-2">
+                        <label style="color: var(--plex-orange);">Host Cache Path (Docker)</label>
+                        <input type="text" name="host_cache_path" value="{{ mapping.host_cache_path or mapping.cache_path or '' }}"
+                               placeholder="e.g., /mnt/cache_downloads/Movies/">
+                        <div class="form-hint">
+                            The actual host path the Unraid mover sees. Only needed if Docker remaps your cache path.
+                        </div>
+                    </div>
+                    {% endif %}
 
                     <div class="flex gap-2 items-center">
                         <label class="switch">

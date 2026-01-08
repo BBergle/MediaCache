@@ -463,16 +463,22 @@ class OperationRunner:
         Returns:
             True if stop was requested, False if no operation running
         """
+        app_to_stop = None
         with self._lock:
             if self._state != OperationState.RUNNING:
                 return False
 
             self._stop_requested = True
-            self._add_log_message("Stop requested - stopping after current file...")
+            # Store reference to app so we can signal it outside the lock
+            app_to_stop = self._app_instance
 
-            # Signal the PlexCacheApp to stop if we have a reference
-            if self._app_instance and hasattr(self._app_instance, 'request_stop'):
-                self._app_instance.request_stop()
+        # Log message and signal app outside the lock to avoid deadlock
+        # (_add_log_message also acquires self._lock)
+        self._add_log_message("Stop requested - stopping after current file...")
+
+        # Signal the PlexCacheApp to stop
+        if app_to_stop and hasattr(app_to_stop, 'request_stop'):
+            app_to_stop.request_stop()
 
         return True
 

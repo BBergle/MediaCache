@@ -36,14 +36,9 @@
     </div>
 </header>
 
-<!-- Operation Status -->
-<div id="operation-status" class="mb-2">
-    {% if stats.is_running %}
-    <div class="alert alert-info">
-        <i data-lucide="loader"></i>
-        Operation in progress...
-    </div>
-    {% endif %}
+<!-- Operation Status - polls for status on load if operation is running -->
+<div id="operation-status" class="mb-2"
+     {% if stats.is_running %}hx-get="/operations/status" hx-trigger="load" hx-swap="innerHTML"{% endif %}>
 </div>
 
 <!-- Stats Row - lazy loaded -->

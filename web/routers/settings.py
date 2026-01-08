@@ -219,8 +219,10 @@ async def save_plex_settings(request: Request):
 @router.get("/paths", response_class=HTMLResponse)
 async def settings_paths(request: Request):
     """Path mappings tab"""
+    import os
     settings_service = get_settings_service()
     mappings = settings_service.get_path_mappings()
+    is_docker = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
 
     return templates.TemplateResponse(
         "settings/paths.html",
@@ -228,7 +230,8 @@ async def settings_paths(request: Request):
             "request": request,
             "page_title": "Path Settings",
             "active_tab": "paths",
-            "mappings": mappings
+            "mappings": mappings,
+            "is_docker": is_docker
         }
     )
 
@@ -240,17 +243,24 @@ async def add_path_mapping(
     plex_path: str = Form(...),
     real_path: str = Form(...),
     cache_path: str = Form(""),
+    host_cache_path: str = Form(""),
     cacheable: str = Form(None),
     enabled: str = Form(None)
 ):
     """Add a new path mapping"""
+    import os
     settings_service = get_settings_service()
+    is_docker = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+
+    # Default host_cache_path to cache_path if not provided
+    effective_host_cache_path = host_cache_path if host_cache_path else cache_path
 
     mapping = {
         "name": name,
         "plex_path": plex_path,
         "real_path": real_path,
         "cache_path": cache_path if cache_path else None,
+        "host_cache_path": effective_host_cache_path if effective_host_cache_path else None,
         "cacheable": cacheable == "on",
         "enabled": enabled == "on"
     }
@@ -266,7 +276,8 @@ async def add_path_mapping(
             {
                 "request": request,
                 "mapping": mapping,
-                "index": index
+                "index": index,
+                "is_docker": is_docker
             }
         )
     else:
@@ -281,17 +292,24 @@ async def update_path_mapping(
     plex_path: str = Form(...),
     real_path: str = Form(...),
     cache_path: str = Form(""),
+    host_cache_path: str = Form(""),
     cacheable: str = Form(None),
     enabled: str = Form(None)
 ):
     """Update an existing path mapping"""
+    import os
     settings_service = get_settings_service()
+    is_docker = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+
+    # Default host_cache_path to cache_path if not provided
+    effective_host_cache_path = host_cache_path if host_cache_path else cache_path
 
     mapping = {
         "name": name,
         "plex_path": plex_path,
         "real_path": real_path,
         "cache_path": cache_path if cache_path else None,
+        "host_cache_path": effective_host_cache_path if effective_host_cache_path else None,
         "cacheable": cacheable == "on",
         "enabled": enabled == "on"
     }
@@ -304,7 +322,8 @@ async def update_path_mapping(
             {
                 "request": request,
                 "mapping": mapping,
-                "index": index
+                "index": index,
+                "is_docker": is_docker
             }
         )
     else:
@@ -314,7 +333,9 @@ async def update_path_mapping(
 @router.delete("/paths/{index}", response_class=HTMLResponse)
 async def delete_path_mapping(request: Request, index: int):
     """Delete a path mapping and return the updated list"""
+    import os
     settings_service = get_settings_service()
+    is_docker = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
 
     success = settings_service.delete_path_mapping(index)
 
@@ -323,7 +344,7 @@ async def delete_path_mapping(request: Request, index: int):
         mappings = settings_service.get_path_mappings()
         return templates.TemplateResponse(
             "settings/partials/path_mappings_list.html",
-            {"request": request, "mappings": mappings}
+            {"request": request, "mappings": mappings, "is_docker": is_docker}
         )
     else:
         return HTMLResponse("<div class='alert alert-error'>Failed to delete mapping</div>")

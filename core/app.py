@@ -153,6 +153,10 @@ class PlexCacheApp:
             # Move files
             self._move_files()
 
+            # Check for stop request after moving files
+            if self.should_stop:
+                logging.info("Operation stopped by user")
+                return
 
             # Update Unraid mover exclusion file
             logging.debug("Updating Unraid mover exclusions...")
@@ -416,7 +420,8 @@ class PlexCacheApp:
             debug=self.dry_run,
             mover_cache_exclude_file=str(mover_exclude),
             timestamp_tracker=self.timestamp_tracker,
-            path_modifier=self.file_path_modifier
+            path_modifier=self.file_path_modifier,
+            stop_check=lambda: self.should_stop  # Allow FileMover to check for stop requests
         )
 
     def _init_cache_management(self) -> None:
