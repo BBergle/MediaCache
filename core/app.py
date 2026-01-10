@@ -1203,15 +1203,30 @@ class PlexCacheApp:
         # Perform eviction: restore .plexcached files, remove from exclude list
         files_evicted = 0
         bytes_freed = 0
-        real_source = self.config_manager.paths.real_source
 
         for cache_path in candidates:
             try:
                 file_size = os.path.getsize(cache_path) if os.path.exists(cache_path) else 0
 
-                # Find and restore .plexcached backup
-                array_path = cache_path.replace(cache_dir, real_source, 1)
+                # Find the correct real_path for this cache_path using path_mappings
+                array_path = None
+                if self.config_manager.paths.path_mappings:
+                    for mapping in self.config_manager.paths.path_mappings:
+                        if mapping.enabled and mapping.cache_path and cache_path.startswith(mapping.cache_path):
+                            # Found matching mapping - convert cache path to array path
+                            array_path = cache_path.replace(mapping.cache_path, mapping.real_path, 1)
+                            break
+
+                # Fallback to legacy single-path mode
+                if not array_path and self.config_manager.paths.real_source:
+                    array_path = cache_path.replace(cache_dir, self.config_manager.paths.real_source, 1)
+
+                if not array_path:
+                    logging.warning(f"Could not determine array path for: {cache_path}")
+                    continue
+
                 plexcached_path = array_path + ".plexcached"
+                logging.debug(f"Looking for backup at: {plexcached_path}")
 
                 if os.path.exists(plexcached_path):
                     # Restore: rename .plexcached back to original
