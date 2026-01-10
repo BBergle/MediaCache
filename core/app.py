@@ -1152,23 +1152,32 @@ class PlexCacheApp:
         if not cached_files:
             return (0, 0)
 
-        # Check if we need to evict
+        # Check if we need to evict based on TOTAL drive usage (not just tracked files)
+        # This ensures eviction triggers even when non-PlexCache files fill the drive
         threshold_percent = self.config_manager.cache.cache_eviction_threshold_percent
         threshold_bytes = cache_limit_bytes * threshold_percent / 100
 
-        if plexcache_tracked < threshold_bytes and needed_space_bytes == 0:
-            logging.debug(f"Cache usage ({plexcache_tracked/1e9:.1f}GB) below threshold ({threshold_bytes/1e9:.1f}GB), skipping eviction")
+        # Get actual total drive usage
+        try:
+            disk_usage = shutil.disk_usage(cache_dir)
+            total_drive_usage = disk_usage.used
+        except Exception:
+            total_drive_usage = plexcache_tracked  # Fallback if can't get disk usage
+
+        if total_drive_usage < threshold_bytes and needed_space_bytes == 0:
+            logging.debug(f"Cache usage ({total_drive_usage/1e9:.1f}GB) below threshold ({threshold_bytes/1e9:.1f}GB), skipping eviction")
             return (0, 0)
 
-        # Calculate how much space to free
-        space_to_free = max(needed_space_bytes, plexcache_tracked - threshold_bytes)
+        # Calculate how much space to free based on total drive usage
+        space_to_free = max(needed_space_bytes, total_drive_usage - threshold_bytes)
         if space_to_free <= 0:
             return (0, 0)
 
         if needed_space_bytes > 0:
             logging.info(f"Smart eviction: drive over limit, need to free {space_to_free/1e9:.2f}GB")
         else:
-            logging.info(f"Smart eviction: tracked files over threshold, need to free {space_to_free/1e9:.2f}GB")
+            logging.info(f"Smart eviction: drive usage ({total_drive_usage/1e9:.1f}GB) over threshold ({threshold_bytes/1e9:.1f}GB), need to free {space_to_free/1e9:.2f}GB")
+            logging.debug(f"PlexCache-tracked: {plexcache_tracked/1e9:.1f}GB, Other files: {(total_drive_usage-plexcache_tracked)/1e9:.1f}GB")
 
         # Get eviction candidates based on mode
         if eviction_mode == "smart":
@@ -1182,6 +1191,11 @@ class PlexCacheApp:
         if not candidates:
             logging.info("No low-priority items available for eviction")
             return (0, 0)
+
+        # Check if candidates can free enough space
+        candidate_bytes = sum(os.path.getsize(f) for f in candidates if os.path.exists(f))
+        if candidate_bytes < space_to_free:
+            logging.warning(f"Can only evict {candidate_bytes/1e9:.1f}GB of {space_to_free/1e9:.1f}GB needed - non-PlexCache files may be filling the drive")
 
         # Log what we're evicting
         for cache_path in candidates:
