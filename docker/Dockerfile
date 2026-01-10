@@ -41,7 +41,6 @@ COPY core/ ./core/
 COPY web/ ./web/
 COPY tools/ ./tools/
 COPY plexcache.py .
-COPY plexcache_web.py .
 
 # Copy entrypoint script and make executable
 COPY docker/docker-entrypoint.sh /docker-entrypoint.sh

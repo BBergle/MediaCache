@@ -123,4 +123,4 @@ echo "----------------------------------------"
 
 # Start the web application
 # --host 0.0.0.0 is required for Docker to expose the port
-exec python3 /app/plexcache_web.py --host 0.0.0.0 --port ${WEB_PORT:-5757}
+exec python3 /app/plexcache.py --web --host 0.0.0.0 --port ${WEB_PORT:-5757}
