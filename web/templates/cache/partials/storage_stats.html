@@ -347,7 +347,7 @@
         <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
             <div style="display: flex; align-items: center; gap: 0.5rem;">
                 <i data-lucide="timer"></i>
-                <h2>{% if data.config.eviction_enabled %}Expiring Soon{% else %}Watchlist Expiring{% endif %}</h2>
+                <h2>Watchlist Expiring Soon</h2>
                 {% if not data.config.eviction_enabled %}
                 <span class="badge badge-muted badge-sm" title="Smart eviction is disabled. These items will lose watchlist protection but won't be auto-removed.">Eviction Off</span>
                 {% endif %}
