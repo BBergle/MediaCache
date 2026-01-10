@@ -26,7 +26,7 @@
         <div class="grid grid-3">
             <div class="form-group mb-0">
                 <label for="source-filter">Filter by Source</label>
-                <select id="source-filter" name="source"
+                <select id="source-filter" name="source" class="cache-filter"
                         hx-get="/api/cache/files"
                         hx-target="#cache-table-body"
                         hx-include=".cache-filter">
