@@ -172,6 +172,39 @@ async def restore_plexcached(
     )
 
 
+@router.post("/delete-plexcached", response_class=HTMLResponse)
+async def delete_plexcached(
+    request: Request,
+    paths: List[str] = Form(default=[]),
+    delete_all: bool = Form(default=False),
+    dry_run: bool = Form(default=True)
+):
+    """Delete orphaned .plexcached backups (when no longer needed)"""
+    service = get_maintenance_service()
+
+    if delete_all:
+        result = service.delete_all_plexcached(dry_run=dry_run)
+    else:
+        result = service.delete_plexcached(paths, dry_run=dry_run)
+
+    # Invalidate caches if actual changes were made
+    if not dry_run:
+        _invalidate_caches()
+
+    # Re-run audit to get updated results
+    audit_results = service.run_full_audit()
+
+    return templates.TemplateResponse(
+        "maintenance/partials/action_result.html",
+        {
+            "request": request,
+            "action_result": result,
+            "results": audit_results,
+            "dry_run": dry_run
+        }
+    )
+
+
 @router.post("/fix-with-backup", response_class=HTMLResponse)
 async def fix_with_backup(
     request: Request,

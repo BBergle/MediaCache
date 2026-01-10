@@ -261,19 +261,25 @@
     </div>
     <div class="card-body" style="padding: 0.75rem; background: var(--danger-bg);">
         <p class="text-muted" style="margin: 0 0 0.75rem 0;">
-            These backup files exist on the array but have no corresponding cache file. They should be restored to their original filenames.
+            These backup files exist on the array but have no corresponding cache file. Restore them to recover the files, or delete if no longer needed.
         </p>
         <!-- Bulk Actions -->
         <div class="flex gap-1 mb-1">
             <div id="orphaned-bulk-actions" class="flex gap-1" style="display: none;">
                 <span class="text-muted">Selected: <strong id="orphaned-selected-count">0</strong></span>
                 <button class="btn btn-sm btn-primary" onclick="restoreOrphanedSelected(false)">
-                    <i data-lucide="archive-restore"></i> Restore Selected
+                    <i data-lucide="archive-restore"></i> Restore
+                </button>
+                <button class="btn btn-sm btn-danger" onclick="deleteOrphanedSelected(false)">
+                    <i data-lucide="trash-2"></i> Delete
                 </button>
             </div>
             <div class="flex gap-1" style="margin-left: auto;">
                 <button class="btn btn-sm btn-warning" onclick="restoreAllOrphaned(false)">
                     <i data-lucide="archive-restore"></i> Restore All
+                </button>
+                <button class="btn btn-sm btn-danger" onclick="deleteAllOrphaned(false)">
+                    <i data-lucide="trash-2"></i> Delete All
                 </button>
             </div>
         </div>

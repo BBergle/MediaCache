@@ -195,6 +195,9 @@ function showConfirmModal(title, message, action, formData, isDryRun = false) {
     } else if (action === 'restore-plexcached') {
         btnClass = 'btn btn-primary';
         btnText = 'Restore';
+    } else if (action === 'delete-plexcached') {
+        btnClass = 'btn btn-danger';
+        btnText = 'Delete';
     }
 
     actionBtn.className = btnClass;
@@ -320,6 +323,41 @@ function restoreAllOrphaned(isDryRun = false) {
     `;
 
     showConfirmModal(`${action} All Backups`, message, 'restore-plexcached', formData, isDryRun);
+}
+
+function deleteOrphanedSelected(isDryRun = false) {
+    if (selectedOrphanedBackups.size === 0) return;
+
+    const count = selectedOrphanedBackups.size;
+    const formData = new FormData();
+    selectedOrphanedBackups.forEach(path => formData.append('paths', path));
+
+    const action = isDryRun ? 'Preview' : 'Delete';
+    const message = `
+        <p>You are about to <strong style="color: var(--danger);">permanently delete</strong> <strong>${count}</strong> backup file(s):</p>
+        <ul>
+            ${Array.from(selectedOrphanedBackups).slice(0, 10).map(path =>
+                `<li>${path.split('/').pop()}</li>`
+            ).join('')}
+            ${selectedOrphanedBackups.size > 10 ? `<li>...and ${selectedOrphanedBackups.size - 10} more</li>` : ''}
+        </ul>
+        <p style="color: var(--warning);"><strong>Warning:</strong> This cannot be undone. Only delete if you no longer need these backups.</p>
+    `;
+
+    showConfirmModal(`${action} Backups`, message, 'delete-plexcached', formData, isDryRun);
+}
+
+function deleteAllOrphaned(isDryRun = false) {
+    const formData = new FormData();
+    formData.append('delete_all', 'true');
+
+    const action = isDryRun ? 'Preview' : 'Delete';
+    const message = `
+        <p>You are about to <strong style="color: var(--danger);">permanently delete ALL</strong> orphaned .plexcached backup files.</p>
+        <p style="color: var(--warning);"><strong>Warning:</strong> This cannot be undone. Only delete if you no longer need these backups.</p>
+    `;
+
+    showConfirmModal(`${action} All Backups`, message, 'delete-plexcached', formData, isDryRun);
 }
 
 function cleanExclude(isDryRun = false) {
