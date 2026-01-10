@@ -290,9 +290,18 @@ class MaintenanceService:
             try:
                 stat_info = os.stat(cache_path) if os.path.exists(cache_path) else None
                 size = stat_info.st_size if stat_info else 0
-                # Use modification time (most reliable across platforms)
-                # st_birthtime only exists on some systems, st_mtime is universal
-                file_timestamp = stat_info.st_mtime if stat_info else None
+
+                # Use st_ctime (change time) for age detection on Linux/Unraid.
+                # Radarr/Sonarr preserve the original release mtime when downloading,
+                # but st_ctime is updated when the file is created on this filesystem.
+                # This gives us the actual "download time" not the release date.
+                #
+                # On Windows, st_ctime is creation time (also what we want).
+                # Fall back to st_mtime if st_ctime is somehow unavailable.
+                file_timestamp = stat_info.st_ctime if stat_info else None
+                if not file_timestamp and stat_info:
+                    file_timestamp = stat_info.st_mtime
+
                 created_at = datetime.fromtimestamp(file_timestamp) if file_timestamp else None
                 age_days = (now - created_at).total_seconds() / 86400 if created_at else 999
 

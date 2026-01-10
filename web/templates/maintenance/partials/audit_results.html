@@ -158,7 +158,7 @@
                         <td class="text-muted">
                             {% if file.has_invalid_timestamp %}
                             <span class="badge badge-warning">Bad date</span>
-                            {% elif file.age_days >= 365 %}
+                            {% elif file.age_days >= 999 %}
                             Unknown
                             {% else %}
                             {{ "%.1f"|format(file.age_days) }}d
@@ -228,10 +228,10 @@
                         <td class="text-muted">
                             {% if file.has_invalid_timestamp %}
                             <span class="badge badge-warning">Bad date</span>
-                            {% elif file.age_days >= 365 %}
+                            {% elif file.age_days >= 999 %}
                             Unknown
                             {% else %}
-                            {{ "%.0f"|format(file.age_days) }}d
+                            {{ "%.1f"|format(file.age_days) }}d
                             {% endif %}
                         </td>
                         <td>
