@@ -101,6 +101,21 @@ class SettingsService:
         except IOError:
             return False
 
+    def _sanitize_path(self, path: Optional[str]) -> Optional[str]:
+        """Strip whitespace from path to prevent issues like '/mnt/user0 ' creating bogus directories"""
+        if path is None:
+            return None
+        return path.strip()
+
+    def _sanitize_path_mapping(self, mapping: Dict[str, Any]) -> Dict[str, Any]:
+        """Sanitize all path fields in a path mapping"""
+        sanitized = mapping.copy()
+        path_fields = ["plex_path", "real_path", "cache_path"]
+        for field in path_fields:
+            if field in sanitized and sanitized[field]:
+                sanitized[field] = self._sanitize_path(sanitized[field])
+        return sanitized
+
     def _load_plex_cache_from_file(self):
         """Load Plex data cache from file on startup"""
         try:
@@ -191,25 +206,25 @@ class SettingsService:
         return raw.get("path_mappings", [])
 
     def save_path_mappings(self, mappings: List[Dict[str, Any]]) -> bool:
-        """Save path mappings"""
+        """Save path mappings (sanitizes paths to strip whitespace)"""
         raw = self._load_raw()
-        raw["path_mappings"] = mappings
+        raw["path_mappings"] = [self._sanitize_path_mapping(m) for m in mappings]
         return self._save_raw(raw)
 
     def add_path_mapping(self, mapping: Dict[str, Any]) -> bool:
-        """Add a new path mapping"""
+        """Add a new path mapping (sanitizes paths to strip whitespace)"""
         raw = self._load_raw()
         mappings = raw.get("path_mappings", [])
-        mappings.append(mapping)
+        mappings.append(self._sanitize_path_mapping(mapping))
         raw["path_mappings"] = mappings
         return self._save_raw(raw)
 
     def update_path_mapping(self, index: int, mapping: Dict[str, Any]) -> bool:
-        """Update an existing path mapping by index"""
+        """Update an existing path mapping by index (sanitizes paths to strip whitespace)"""
         raw = self._load_raw()
         mappings = raw.get("path_mappings", [])
         if 0 <= index < len(mappings):
-            mappings[index] = mapping
+            mappings[index] = self._sanitize_path_mapping(mapping)
             raw["path_mappings"] = mappings
             return self._save_raw(raw)
         return False
