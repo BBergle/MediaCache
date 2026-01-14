@@ -67,6 +67,24 @@
                 </label>
             </div>
 
+            <div class="form-group">
+                <label class="switch">
+                    <input type="checkbox" name="create_plexcached_backups"
+                           {% if settings.create_plexcached_backups | default(true) %}checked{% endif %}>
+                    <span>Create .plexcached Backup Files</span>
+                </label>
+                <div class="form-hint">When moving files to cache, keep backup on array (allows recovery if cache fails)</div>
+            </div>
+
+            <div class="form-group">
+                <label for="hardlinked_files">Hardlinked Files Handling</label>
+                <select id="hardlinked_files" name="hardlinked_files">
+                    <option value="skip" {% if settings.hardlinked_files == 'skip' or not settings.hardlinked_files %}selected{% endif %}>Skip (preserve for seeders)</option>
+                    <option value="move" {% if settings.hardlinked_files == 'move' %}selected{% endif %}>Move (break hardlinks)</option>
+                </select>
+                <div class="form-hint">Files with multiple hardlinks (e.g., seeding torrents). Skip preserves links, Move copies the file.</div>
+            </div>
+
             <div class="grid grid-2">
                 <div class="form-group">
                     <label for="cache_retention_hours">Cache Retention (hours)</label>
