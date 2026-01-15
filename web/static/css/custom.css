@@ -312,37 +312,131 @@ footer {
     display: none;
 }
 
-/* Global Operation Banner - shown at top of all pages during operation */
+/* Global Operation Banner - centered toast notification */
 #global-operation-banner {
     position: fixed;
-    top: 0;
-    left: var(--sidebar-width, 240px);
-    right: 0;
-    z-index: 1000;
-    padding: 0 1rem;
+    top: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 9999;
     pointer-events: none;
+}
+
+#global-operation-banner:empty {
+    display: none;
 }
 
 #global-operation-banner > * {
     pointer-events: auto;
 }
 
-#global-operation-banner .alert {
-    margin: 0.5rem 0 0 0;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+.global-op-banner {
+    background: #1a1d1f;
+    border: 2px solid #e5a00d;
+    border-radius: 12px;
+    padding: 0.75rem 1.25rem;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255,255,255,0.05);
+    animation: toastSlideDown 0.3s ease-out;
+    min-width: 320px;
+    max-width: 600px;
 }
 
-/* Adjust for collapsed sidebar - banner is outside app-container, so check body class */
-body.sidebar-collapsed #global-operation-banner,
-.sidebar-collapsed-init #global-operation-banner {
-    left: var(--sidebar-collapsed, 60px);
+.global-op-banner-success {
+    border-color: #2ecc71;
 }
 
-/* Mobile: full width */
+.global-op-banner-error {
+    border-color: #e74c3c;
+}
+
+@keyframes toastSlideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.global-op-banner-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.global-op-banner-left {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    color: #fff;
+}
+
+.global-op-banner-left strong {
+    color: #fff;
+    font-size: 0.95rem;
+}
+
+.global-op-banner-left .text-muted {
+    color: rgba(255,255,255,0.6);
+}
+
+.global-op-banner-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
+.global-op-banner-actions .btn {
+    padding: 0.4rem 0.75rem;
+    font-size: 0.85rem;
+}
+
+.global-op-dismiss {
+    padding: 0.25rem;
+    opacity: 0.7;
+    transition: opacity 0.2s;
+    border-radius: 4px;
+}
+
+.global-op-dismiss:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+/* Ghost button style for dismiss */
+.btn-ghost {
+    background: transparent;
+    border: none;
+    color: #fff;
+    cursor: pointer;
+}
+
+/* Mobile adjustments */
 @media (max-width: 768px) {
     #global-operation-banner {
-        left: 0;
-        top: 60px; /* Below mobile header */
-        padding: 0 0.5rem;
+        top: 70px;
+        left: 0.5rem;
+        right: 0.5rem;
+        transform: none;
+    }
+
+    .global-op-banner {
+        min-width: auto;
+        max-width: none;
+        width: 100%;
+    }
+
+    .global-op-banner-content {
+        flex-wrap: wrap;
+    }
+
+    .global-op-banner-actions {
+        width: 100%;
+        justify-content: flex-end;
+        margin-top: 0.5rem;
     }
 }
