@@ -90,10 +90,6 @@
                     <input type="checkbox" id="live-updates">
                     <span>Live Updates</span>
                 </label>
-                <span id="live-badge" class="live-badge" style="display: none;">
-                    <span class="live-dot"></span>
-                    LIVE
-                </span>
             </div>
         </div>
     </div>
@@ -410,14 +406,7 @@ document.addEventListener('htmx:afterSwap', function(evt) {
 
 // ==================== Live Updates ====================
 const liveUpdatesToggle = document.getElementById('live-updates');
-const liveBadge = document.getElementById('live-badge');
 let liveUpdatesInterval = null;
-
-function updateLiveBadge(isLive) {
-    if (liveBadge) {
-        liveBadge.style.display = isLive ? 'inline-flex' : 'none';
-    }
-}
 
 function refreshLogs() {
     // Clear stale DOM references from search state before refresh
@@ -441,7 +430,6 @@ function refreshLogs() {
 function startLiveUpdates() {
     if (liveUpdatesInterval) return;
     liveUpdatesInterval = setInterval(refreshLogs, 5000); // Every 5 seconds
-    updateLiveBadge(true);
 }
 
 function stopLiveUpdates() {
@@ -449,7 +437,6 @@ function stopLiveUpdates() {
         clearInterval(liveUpdatesInterval);
         liveUpdatesInterval = null;
     }
-    updateLiveBadge(false);
 }
 
 liveUpdatesToggle.addEventListener('change', function() {

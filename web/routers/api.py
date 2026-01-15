@@ -520,3 +520,22 @@ async def trigger_run(dry_run: bool = False, verbose: bool = False):
             "message": "Failed to start operation",
             "running": False
         }
+
+
+@router.get("/operation-indicator", response_class=HTMLResponse)
+async def get_operation_indicator(request: Request):
+    """Return global operation indicator HTML - used for header status across all pages"""
+    operation_runner = get_operation_runner()
+    is_running = operation_runner.is_running
+
+    if is_running:
+        return templates.TemplateResponse(
+            "components/global_operation_indicator.html",
+            {"request": request, "is_running": True}
+        )
+    else:
+        # Return empty div that continues polling less frequently
+        return templates.TemplateResponse(
+            "components/global_operation_indicator.html",
+            {"request": request, "is_running": False}
+        )
