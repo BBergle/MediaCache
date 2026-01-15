@@ -90,6 +90,10 @@
                     <input type="checkbox" id="live-updates">
                     <span>Live Updates</span>
                 </label>
+                <span id="live-badge" class="live-badge" style="display: none;">
+                    <span class="live-dot"></span>
+                    LIVE
+                </span>
             </div>
         </div>
     </div>
@@ -129,11 +133,13 @@ function savePreferences() {
 }
 
 function loadPreferences() {
+    // Check for ?live=true query parameter (e.g., from operation banner link)
+    const urlParams = new URLSearchParams(window.location.search);
+    const liveFromUrl = urlParams.get('live') === 'true';
+
     try {
         const saved = localStorage.getItem(PREFS_KEY);
-        if (!saved) return;
-
-        const prefs = JSON.parse(saved);
+        const prefs = saved ? JSON.parse(saved) : {};
 
         if (prefs.lines) {
             document.getElementById('log-lines').value = prefs.lines;
@@ -144,14 +150,20 @@ function loadPreferences() {
         if (typeof prefs.autoScroll === 'boolean') {
             document.getElementById('auto-scroll').checked = prefs.autoScroll;
         }
-        if (typeof prefs.liveUpdates === 'boolean') {
-            document.getElementById('live-updates').checked = prefs.liveUpdates;
-            if (prefs.liveUpdates) {
-                startLiveUpdates();
-            }
+
+        // URL parameter takes precedence over saved preference
+        const shouldEnableLive = liveFromUrl || prefs.liveUpdates;
+        if (shouldEnableLive) {
+            document.getElementById('live-updates').checked = true;
+            startLiveUpdates();
         }
     } catch (e) {
         console.warn('Failed to load log viewer preferences:', e);
+        // Still check URL param even if localStorage fails
+        if (liveFromUrl) {
+            document.getElementById('live-updates').checked = true;
+            startLiveUpdates();
+        }
     }
 }
 
@@ -398,7 +410,14 @@ document.addEventListener('htmx:afterSwap', function(evt) {
 
 // ==================== Live Updates ====================
 const liveUpdatesToggle = document.getElementById('live-updates');
+const liveBadge = document.getElementById('live-badge');
 let liveUpdatesInterval = null;
+
+function updateLiveBadge(isLive) {
+    if (liveBadge) {
+        liveBadge.style.display = isLive ? 'inline-flex' : 'none';
+    }
+}
 
 function refreshLogs() {
     // Clear stale DOM references from search state before refresh
@@ -422,6 +441,7 @@ function refreshLogs() {
 function startLiveUpdates() {
     if (liveUpdatesInterval) return;
     liveUpdatesInterval = setInterval(refreshLogs, 5000); // Every 5 seconds
+    updateLiveBadge(true);
 }
 
 function stopLiveUpdates() {
@@ -429,6 +449,7 @@ function stopLiveUpdates() {
         clearInterval(liveUpdatesInterval);
         liveUpdatesInterval = null;
     }
+    updateLiveBadge(false);
 }
 
 liveUpdatesToggle.addEventListener('change', function() {

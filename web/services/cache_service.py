@@ -52,6 +52,25 @@ class CacheService:
         """Load settings file"""
         return self._load_json_file(self.settings_file)
 
+    def _get_cache_dir(self, settings: Dict = None) -> str:
+        """Get the cache directory, preferring path_mappings over cache_dir setting.
+
+        This ensures consistency between what the UI shows and what the script uses.
+        The script uses path_mappings[].cache_path for actual file operations, so
+        disk usage stats should use the same path.
+        """
+        if settings is None:
+            settings = self._load_settings()
+
+        # First check path_mappings for an enabled, cacheable mapping
+        path_mappings = settings.get("path_mappings", [])
+        for mapping in path_mappings:
+            if mapping.get("enabled", True) and mapping.get("cacheable") and mapping.get("cache_path"):
+                return mapping.get("cache_path")
+
+        # Fall back to cache_dir setting
+        return settings.get("cache_dir", "")
+
     def _translate_container_to_host_path(self, path: str) -> str:
         """Translate container cache path to host path for exclude file.
 
@@ -570,8 +589,8 @@ class CacheService:
             except OSError:
                 pass
 
-        # Get actual cache drive usage
-        cache_dir = settings.get("cache_dir", "")
+        # Get actual cache drive usage (use path_mappings cache_path for consistency)
+        cache_dir = self._get_cache_dir(settings)
         disk_used = 0
         disk_total = 0
         usage_percent = 0
@@ -664,8 +683,8 @@ class CacheService:
         # Get all cached files with metadata
         all_files = self.get_all_cached_files()
 
-        # Storage Overview
-        cache_dir = settings.get("cache_dir", "")
+        # Storage Overview (use path_mappings cache_path for consistency)
+        cache_dir = self._get_cache_dir(settings)
         disk_used = 0
         disk_total = 0
         disk_free = 0
@@ -1020,8 +1039,8 @@ class CacheService:
         eviction_threshold = settings.get("cache_eviction_threshold_percent", 95)
         eviction_min_priority = settings.get("eviction_min_priority", 60)
 
-        # Calculate current drive usage
-        cache_dir = settings.get("cache_dir", "")
+        # Calculate current drive usage (use path_mappings cache_path for consistency)
+        cache_dir = self._get_cache_dir(settings)
         current_usage_percent = 0
         disk_used = 0
         disk_total = 0
@@ -1074,7 +1093,7 @@ class CacheService:
         import shutil
 
         settings = self._load_settings()
-        cache_dir = settings.get("cache_dir", "")
+        cache_dir = self._get_cache_dir(settings)
 
         # Get current drive usage
         disk_used = 0

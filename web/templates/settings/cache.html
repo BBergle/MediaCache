@@ -157,6 +157,38 @@
                 <div class="form-hint">How long to keep Recent Activity entries on the Dashboard</div>
             </div>
 
+            <hr style="border-color: var(--plex-border); margin: 1.5rem 0;">
+
+            <h3 style="font-size: 1rem; color: var(--plex-orange); margin-bottom: 1rem;">
+                <i data-lucide="sliders" style="width: 18px; height: 18px; vertical-align: middle;"></i>
+                Advanced
+            </h3>
+
+            <div class="form-group">
+                <label class="switch">
+                    <input type="checkbox" name="exit_if_active_session"
+                           {% if settings.exit_if_active_session %}checked{% endif %}>
+                    <span>Skip Run if Plex Has Active Playback</span>
+                </label>
+                <div class="form-hint">Exit without processing if someone is currently watching. Prevents moving files during playback.</div>
+            </div>
+
+            <div class="grid grid-2">
+                <div class="form-group">
+                    <label for="max_concurrent_moves_cache">Concurrent Moves to Cache</label>
+                    <input type="number" id="max_concurrent_moves_cache" name="max_concurrent_moves_cache"
+                           value="{{ settings.max_concurrent_moves_cache | default(5) }}" min="1" max="10">
+                    <div class="form-hint">Max parallel file operations when moving TO cache (default: 5)</div>
+                </div>
+
+                <div class="form-group">
+                    <label for="max_concurrent_moves_array">Concurrent Moves to Array</label>
+                    <input type="number" id="max_concurrent_moves_array" name="max_concurrent_moves_array"
+                           value="{{ settings.max_concurrent_moves_array | default(2) }}" min="1" max="10">
+                    <div class="form-hint">Max parallel file operations when moving TO array (default: 2)</div>
+                </div>
+            </div>
+
             <div class="form-group mb-0">
                 <button type="submit" class="btn btn-primary">
                     <i data-lucide="save"></i>

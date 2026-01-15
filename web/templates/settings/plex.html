@@ -83,75 +83,19 @@
     </div>
 </div>
 
+<!-- Multi-User Support moved to Users tab -->
 <div class="card">
     <div class="card-header">
         <i data-lucide="users"></i>
         <h2>Multi-User Support</h2>
     </div>
     <div class="card-body">
-        <div class="form-group">
-            <label class="switch">
-                <input type="checkbox" name="users_toggle" id="users_toggle"
-                       {% if settings.users_toggle %}checked{% endif %}
-                       onchange="document.getElementById('user-list-section').style.display = this.checked ? 'block' : 'none'">
-                <span>Enable Multi-User Support</span>
-            </label>
-            <div class="form-hint">Cache media from all Plex Home users, not just the admin account</div>
-        </div>
-
-        <div id="user-list-section" style="{% if not settings.users_toggle %}display: none;{% endif %}">
-            <div class="form-group mb-0">
-                <label>User Permissions</label>
-                <div class="form-hint mb-1">Select which data sources to include for each user</div>
-                {% if users %}
-                    <div class="user-list user-list-scrollable">
-                        <div class="user-list-header">
-                            <span class="user-col">User</span>
-                            <span class="toggle-col">OnDeck</span>
-                            <span class="toggle-col">Watchlist</span>
-                        </div>
-                        <div class="user-list-body">
-                            {% for user in users %}
-                            <div class="user-row {% if user.is_admin %}user-admin{% endif %}">
-                                <span class="user-col">
-                                    <span class="user-name">{{ user.title }}</span>
-                                    {% if user.is_admin %}
-                                        <span class="badge badge-muted">Admin</span>
-                                    {% elif user.is_home %}
-                                        <span class="badge badge-info">Home</span>
-                                    {% endif %}
-                                </span>
-                                <span class="toggle-col">
-                                    <label class="toggle-switch">
-                                        <input type="checkbox" name="include_ondeck" value="{{ user.username }}"
-                                               {% if user.username not in settings.skip_ondeck %}checked{% endif %}
-                                               {% if user.is_admin %}disabled checked{% endif %}>
-                                        <span class="toggle-slider"></span>
-                                    </label>
-                                </span>
-                                <span class="toggle-col">
-                                    <label class="toggle-switch">
-                                        <input type="checkbox" name="include_watchlist" value="{{ user.username }}"
-                                               {% if user.username not in settings.skip_watchlist %}checked{% endif %}
-                                               {% if user.is_admin %}disabled checked{% endif %}>
-                                        <span class="toggle-slider"></span>
-                                    </label>
-                                </span>
-                            </div>
-                            {% endfor %}
-                        </div>
-                    </div>
-                    <div class="form-hint mt-1">Toggle OFF to exclude a user's OnDeck or Watchlist data from caching</div>
-                {% else %}
-                    <div class="no-libraries">
-                        <i data-lucide="alert-circle"></i>
-                        {% if plex_error %}
-                            <span>{{ plex_error }}</span>
-                        {% else %}
-                            <span>Unable to fetch users. Check Plex URL and token.</span>
-                        {% endif %}
-                    </div>
-                {% endif %}
+        <div class="alert alert-info mb-0" style="display: flex; align-items: center; gap: 0.75rem;">
+            <i data-lucide="info" style="flex-shrink: 0; width: 20px; height: 20px;"></i>
+            <div>
+                User preferences have moved to the
+                <a href="/settings/users" style="color: var(--plex-orange); font-weight: 500;">Users tab</a>.
+                Sync users from Plex and configure per-user OnDeck/Watchlist settings there.
             </div>
         </div>
     </div>

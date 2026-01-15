@@ -256,7 +256,11 @@ class SettingsService:
             "eviction_min_priority": raw.get("eviction_min_priority", 60),
             "remote_watchlist_toggle": raw.get("remote_watchlist_toggle", False),
             "remote_watchlist_rss_url": raw.get("remote_watchlist_rss_url", ""),
-            "activity_retention_hours": raw.get("activity_retention_hours", 24)
+            "activity_retention_hours": raw.get("activity_retention_hours", 24),
+            # Advanced settings
+            "max_concurrent_moves_array": raw.get("max_concurrent_moves_array", 2),
+            "max_concurrent_moves_cache": raw.get("max_concurrent_moves_cache", 5),
+            "exit_if_active_session": raw.get("exit_if_active_session", False)
         }
 
     def save_cache_settings(self, settings: Dict[str, Any]) -> bool:
@@ -281,7 +285,11 @@ class SettingsService:
             "eviction_min_priority": ("eviction_min_priority", safe_int),
             "remote_watchlist_toggle": ("remote_watchlist_toggle", lambda x: x == "on" or x is True),
             "remote_watchlist_rss_url": ("remote_watchlist_rss_url", str),
-            "activity_retention_hours": ("activity_retention_hours", safe_int)
+            "activity_retention_hours": ("activity_retention_hours", safe_int),
+            # Advanced settings
+            "max_concurrent_moves_array": ("max_concurrent_moves_array", safe_int),
+            "max_concurrent_moves_cache": ("max_concurrent_moves_cache", safe_int),
+            "exit_if_active_session": ("exit_if_active_session", lambda x: x == "on" or x is True)
         }
 
         for form_field, (setting_key, converter) in field_mapping.items():
@@ -602,6 +610,166 @@ class SettingsService:
         """Get the last Plex connection error message"""
         return getattr(self, '_last_plex_error', None)
 
+    def get_user_settings(self) -> Dict[str, Any]:
+        """Get user-related settings including the full users list."""
+        raw = self._load_raw()
+        return {
+            "users_toggle": raw.get("users_toggle", True),
+            "users": raw.get("users", []),
+            "skip_ondeck": raw.get("skip_ondeck", []),
+            "skip_watchlist": raw.get("skip_watchlist", []),
+            "remote_watchlist_toggle": raw.get("remote_watchlist_toggle", False),
+            "remote_watchlist_rss_url": raw.get("remote_watchlist_rss_url", "")
+        }
+
+    def sync_users_from_plex(self) -> Dict[str, Any]:
+        """Sync users from Plex API, preserving skip preferences.
+
+        Returns:
+            Dict with: success, users, added_count, removed_count, error
+        """
+        settings = self.get_plex_settings()
+        plex_url = settings.get("plex_url", "")
+        plex_token = settings.get("plex_token", "")
+
+        if not plex_url or not plex_token:
+            return {"success": False, "error": "Missing Plex URL or token. Configure in Plex settings first."}
+
+        try:
+            from plexapi.server import PlexServer
+
+            plex = PlexServer(plex_url, plex_token, timeout=15)
+            account = plex.myPlexAccount()
+            machine_id = plex.machineIdentifier
+
+            raw = self._load_raw()
+            existing_users = {u.get("title"): u for u in raw.get("users", [])}
+            existing_skip_ondeck = set(raw.get("skip_ondeck", []))
+            existing_skip_watchlist = set(raw.get("skip_watchlist", []))
+
+            new_users = []
+            added_count = 0
+
+            # Add main account (admin)
+            admin_name = account.title or account.username
+            admin_existing = existing_users.get(admin_name, {})
+            new_users.append({
+                "title": admin_name,
+                "id": getattr(account, "id", None),
+                "uuid": getattr(account, "uuid", None),
+                "token": plex_token,
+                "is_local": True,
+                "is_admin": True,
+                "skip_ondeck": admin_existing.get("skip_ondeck", False),
+                "skip_watchlist": admin_existing.get("skip_watchlist", False)
+            })
+            if admin_name not in existing_users:
+                added_count += 1
+
+            # Add shared users
+            for user in account.users():
+                name = user.title
+                try:
+                    token = user.get_token(machine_id)
+                    if token is None:
+                        continue
+                except Exception:
+                    continue
+
+                # Extract user ID and UUID
+                user_id = getattr(user, "id", None)
+                user_uuid = None
+                thumb = getattr(user, "thumb", "")
+                if thumb and "/users/" in thumb:
+                    try:
+                        user_uuid = thumb.split("/users/")[1].split("/")[0]
+                    except (IndexError, AttributeError):
+                        pass
+
+                is_home = getattr(user, "home", False)
+                is_local = bool(is_home)
+
+                # Preserve existing preferences - check both by name and by username in skip lists
+                existing = existing_users.get(name, {})
+                skip_ondeck = existing.get("skip_ondeck", name in existing_skip_ondeck)
+                # All users can have watchlist disabled (local via API, remote via RSS filtering)
+                skip_watchlist = existing.get("skip_watchlist", name in existing_skip_watchlist)
+
+                if name not in existing_users:
+                    added_count += 1
+
+                new_users.append({
+                    "title": name,
+                    "id": user_id,
+                    "uuid": user_uuid,
+                    "token": token,
+                    "is_local": is_local,
+                    "is_admin": False,
+                    "skip_ondeck": skip_ondeck,
+                    "skip_watchlist": skip_watchlist
+                })
+
+            # Detect removed users
+            current_names = {u["title"] for u in new_users}
+            removed_count = len(set(existing_users.keys()) - current_names)
+
+            # Save updated users and rebuild skip lists
+            raw["users"] = new_users
+            raw["skip_ondeck"] = [u["title"] for u in new_users if u.get("skip_ondeck")]
+            # All users can have watchlist disabled (local via API, remote via RSS filtering)
+            raw["skip_watchlist"] = [u["title"] for u in new_users if u.get("skip_watchlist")]
+            self._save_raw(raw)
+
+            # Clear error on success
+            self._last_plex_error = None
+
+            return {
+                "success": True,
+                "users": new_users,
+                "added_count": added_count,
+                "removed_count": removed_count
+            }
+
+        except Exception as e:
+            error_msg = str(e)
+            if "Connection refused" in error_msg or "Errno 111" in error_msg:
+                error = "Cannot connect to Plex server. Is it running?"
+            elif "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
+                error = "Connection timed out. Check your Plex URL."
+            elif "401" in error_msg or "Unauthorized" in error_msg:
+                error = "Invalid Plex token. Try re-authenticating."
+            else:
+                error = f"Plex error: {error_msg[:100]}"
+
+            self._last_plex_error = error
+            return {"success": False, "error": error}
+
+    def save_user_settings(self, users: List[Dict[str, Any]], users_toggle: bool,
+                           remote_watchlist_toggle: bool = False,
+                           remote_watchlist_rss_url: str = "") -> bool:
+        """Save user preferences and rebuild skip lists.
+
+        Args:
+            users: List of user dicts with skip_ondeck/skip_watchlist flags
+            users_toggle: Whether multi-user support is enabled
+            remote_watchlist_toggle: Whether remote watchlist RSS is enabled
+            remote_watchlist_rss_url: RSS URL for remote watchlists
+        """
+        raw = self._load_raw()
+
+        # Update users array
+        raw["users"] = users
+        raw["users_toggle"] = users_toggle
+        raw["remote_watchlist_toggle"] = remote_watchlist_toggle
+        raw["remote_watchlist_rss_url"] = remote_watchlist_rss_url
+
+        # Rebuild skip lists from user preferences (use title/username for skip lists)
+        raw["skip_ondeck"] = [u["title"] for u in users if u.get("skip_ondeck")]
+        # All users can have watchlist disabled (local via API, remote via RSS filtering)
+        raw["skip_watchlist"] = [u["title"] for u in users if u.get("skip_watchlist")]
+
+        return self._save_raw(raw)
+
     def get_last_run_time(self) -> Optional[str]:
         """Get the last time PlexCache ran.
 
@@ -690,6 +858,157 @@ class SettingsService:
         except Exception as e:
             logger.error(f"Failed to refresh Plex cache: {e}")
             return False
+
+    def export_settings(self, include_sensitive: bool = True) -> Dict[str, Any]:
+        """Export all settings as a dictionary.
+
+        Args:
+            include_sensitive: If False, removes tokens and webhook URLs
+
+        Returns:
+            Settings dictionary ready for JSON serialization
+        """
+        import copy
+        settings = copy.deepcopy(self._load_raw())
+
+        if not include_sensitive:
+            # Remove main Plex token
+            if "PLEX_TOKEN" in settings:
+                settings["PLEX_TOKEN"] = ""
+
+            # Remove user tokens
+            for user in settings.get("users", []):
+                if "token" in user:
+                    user["token"] = ""
+
+            # Remove webhook URL (may contain API keys)
+            if "webhook_url" in settings:
+                settings["webhook_url"] = ""
+
+        return settings
+
+    def validate_import_settings(self, settings_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate imported settings structure.
+
+        Args:
+            settings_data: Settings dictionary to validate
+
+        Returns:
+            Dict with: valid (bool), errors (list), warnings (list)
+        """
+        errors = []
+        warnings = []
+
+        # Check if it's a dict
+        if not isinstance(settings_data, dict):
+            errors.append("Settings must be a JSON object (dictionary)")
+            return {"valid": False, "errors": errors, "warnings": warnings}
+
+        # Check for empty settings
+        if not settings_data:
+            errors.append("Settings file is empty")
+            return {"valid": False, "errors": errors, "warnings": warnings}
+
+        # Check for required Plex settings (warn if missing)
+        if not settings_data.get("PLEX_URL"):
+            warnings.append("Missing PLEX_URL - will need to configure Plex connection")
+        if not settings_data.get("PLEX_TOKEN"):
+            warnings.append("Missing PLEX_TOKEN - will need to re-authenticate with Plex")
+
+        # Check path mappings structure
+        path_mappings = settings_data.get("path_mappings", [])
+        if path_mappings:
+            if not isinstance(path_mappings, list):
+                errors.append("path_mappings must be a list")
+            else:
+                for i, mapping in enumerate(path_mappings):
+                    if not isinstance(mapping, dict):
+                        errors.append(f"Path mapping {i + 1} must be an object")
+                    elif not mapping.get("plex_path") or not mapping.get("real_path"):
+                        warnings.append(f"Path mapping '{mapping.get('name', i + 1)}' missing plex_path or real_path")
+
+        # Check users structure
+        users = settings_data.get("users", [])
+        if users:
+            if not isinstance(users, list):
+                errors.append("users must be a list")
+            else:
+                users_without_tokens = sum(1 for u in users if not u.get("token"))
+                if users_without_tokens > 0:
+                    warnings.append(f"{users_without_tokens} user(s) missing tokens - will need to sync users")
+
+        # Check cache limit format
+        cache_limit = settings_data.get("cache_limit", "")
+        if cache_limit and not any(cache_limit.upper().endswith(suffix) for suffix in ["GB", "TB", "MB"]):
+            warnings.append(f"cache_limit '{cache_limit}' may not be a valid format (expected e.g., '250GB')")
+
+        # Check for unknown top-level keys (informational)
+        known_keys = {
+            "PLEX_URL", "PLEX_TOKEN", "valid_sections", "path_mappings", "users",
+            "users_toggle", "skip_ondeck", "skip_watchlist", "watchlist_toggle",
+            "watchlist_episodes", "watchlist_retention_days", "watched_move",
+            "create_plexcached_backups", "hardlinked_files", "cache_retention_hours",
+            "cache_limit", "cache_eviction_mode", "cache_eviction_threshold_percent",
+            "eviction_min_priority", "remote_watchlist_toggle", "remote_watchlist_rss_url",
+            "notification_type", "unraid_level", "unraid_levels", "webhook_url",
+            "webhook_level", "webhook_levels", "max_log_files", "keep_error_logs_days",
+            "days_to_monitor", "number_episodes", "activity_retention_hours",
+            # Advanced settings
+            "max_concurrent_moves_array", "max_concurrent_moves_cache", "exit_if_active_session",
+            # Legacy keys that may exist
+            "plex_source", "real_source", "nas_library_folders", "plex_library_folders"
+        }
+        unknown_keys = set(settings_data.keys()) - known_keys
+        if unknown_keys:
+            warnings.append(f"Unknown settings will be preserved: {', '.join(sorted(unknown_keys)[:5])}")
+
+        return {
+            "valid": len(errors) == 0,
+            "errors": errors,
+            "warnings": warnings
+        }
+
+    def import_settings(self, settings_data: Dict[str, Any], merge: bool = False) -> Dict[str, Any]:
+        """Import settings from dictionary.
+
+        Args:
+            settings_data: Settings dictionary to import
+            merge: If True, merge with existing (imported values win).
+                   If False, replace entirely.
+
+        Returns:
+            Dict with: success (bool), message (str)
+        """
+        try:
+            if merge:
+                # Load existing and merge
+                current = self._load_raw()
+                # Deep merge for nested structures
+                for key, value in settings_data.items():
+                    if key == "path_mappings" and isinstance(value, list):
+                        # For path mappings, replace entirely if provided
+                        current[key] = value
+                    elif key == "users" and isinstance(value, list):
+                        # For users, replace entirely if provided
+                        current[key] = value
+                    else:
+                        current[key] = value
+                settings_to_save = current
+            else:
+                # Replace entirely
+                settings_to_save = settings_data
+
+            success = self._save_raw(settings_to_save)
+
+            if success:
+                # Invalidate caches since settings changed
+                self.invalidate_plex_cache()
+                return {"success": True, "message": "Settings imported successfully"}
+            else:
+                return {"success": False, "message": "Failed to save settings file"}
+
+        except Exception as e:
+            return {"success": False, "message": f"Import error: {str(e)}"}
 
 
 # Singleton instance

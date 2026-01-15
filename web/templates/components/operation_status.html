@@ -11,14 +11,20 @@
                 {% endif %}
             </div>
         </div>
-        <button type="button" class="btn btn-sm btn-danger"
-                hx-post="/operations/stop"
-                hx-target="#operation-status"
-                hx-swap="innerHTML"
-                title="Stop operation after current file completes">
-            <i data-lucide="square" style="width: 14px; height: 14px;"></i>
-            Stop
-        </button>
+        <div class="flex items-center gap-2">
+            <a href="/logs?live=true" class="btn btn-sm btn-secondary" title="View live logs">
+                <i data-lucide="file-text" style="width: 14px; height: 14px;"></i>
+                View Logs
+            </a>
+            <button type="button" class="btn btn-sm btn-danger"
+                    hx-post="/operations/stop"
+                    hx-target="#operation-status"
+                    hx-swap="innerHTML"
+                    title="Stop operation after current file completes">
+                <i data-lucide="square" style="width: 14px; height: 14px;"></i>
+                Stop
+            </button>
+        </div>
     </div>
 </div>
 <script>lucide.createIcons();</script>
