@@ -417,7 +417,8 @@ class PlexCacheApp:
             cache_retention_hours=self.config_manager.cache.cache_retention_hours,
             ondeck_tracker=self.ondeck_tracker,
             watchlist_tracker=self.watchlist_tracker,
-            path_modifier=self.file_path_modifier
+            path_modifier=self.file_path_modifier,
+            is_docker=self.system_detector.is_docker
         )
 
         self.file_mover = FileMover(
@@ -447,6 +448,72 @@ class PlexCacheApp:
             number_episodes=self.config_manager.plex.number_episodes
         )
 
+    def _migrate_exclude_file_paths(self, exclude_file: Path) -> None:
+        """Migrate exclude file entries from container paths to host paths (Docker only).
+
+        When running in Docker, the container sees paths like /mnt/cache/... but the host
+        (where Unraid mover runs) sees /mnt/cache_downloads/.... This method translates
+        existing entries to use host paths so the Unraid mover recognizes them.
+
+        This migration is:
+        - Automatic: runs on startup without user intervention
+        - Safe: only translates paths, doesn't delete entries
+        - Idempotent: already-translated paths won't match container prefix
+        """
+        if not self.system_detector.is_docker:
+            return
+
+        if not exclude_file.exists():
+            return
+
+        # Build translation map from path_mappings: container_prefix -> host_prefix
+        translations = {}
+        for mapping in self.config_manager.paths.path_mappings:
+            if mapping.cache_path and mapping.host_cache_path:
+                if mapping.cache_path != mapping.host_cache_path:
+                    container_prefix = mapping.cache_path.rstrip('/')
+                    host_prefix = mapping.host_cache_path.rstrip('/')
+                    translations[container_prefix] = host_prefix
+
+        if not translations:
+            return  # No translations needed
+
+        # Read existing entries
+        try:
+            with open(exclude_file, 'r') as f:
+                entries = [line.strip() for line in f if line.strip()]
+        except (IOError, OSError) as e:
+            logging.warning(f"Could not read exclude file for migration: {e}")
+            return
+
+        if not entries:
+            return
+
+        # Translate entries that still have container paths
+        migrated_count = 0
+        translated_entries = []
+
+        for entry in entries:
+            translated = entry
+            for container_prefix, host_prefix in translations.items():
+                if entry.startswith(container_prefix):
+                    translated = entry.replace(container_prefix, host_prefix, 1)
+                    migrated_count += 1
+                    break
+            translated_entries.append(translated)
+
+        # Only write if we actually migrated something
+        if migrated_count > 0:
+            try:
+                with open(exclude_file, 'w') as f:
+                    for entry in translated_entries:
+                        f.write(f"{entry}\n")
+                logging.info(f"Migrated {migrated_count} exclude file entries to host paths")
+                for container_prefix, host_prefix in translations.items():
+                    logging.debug(f"  Translated: {container_prefix} -> {host_prefix}")
+            except (IOError, OSError) as e:
+                logging.error(f"Could not write migrated exclude file: {e}")
+
     def _initialize_components(self) -> None:
         """Initialize components that depend on configuration."""
         logging.debug("Initializing application components...")
@@ -467,6 +534,9 @@ class PlexCacheApp:
         if not mover_exclude.exists():
             mover_exclude.touch()
             logging.info(f"Created mover exclude file: {mover_exclude}")
+
+        # Migrate exclude file paths from container to host paths (Docker only)
+        self._migrate_exclude_file_paths(mover_exclude)
 
         # Initialize trackers
         self._init_trackers(mover_exclude, timestamp_file)

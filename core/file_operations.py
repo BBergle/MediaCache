@@ -1948,7 +1948,8 @@ class FileFilter:
                  cache_retention_hours: int = 12,
                  ondeck_tracker: Optional['OnDeckTracker'] = None,
                  watchlist_tracker: Optional['WatchlistTracker'] = None,
-                 path_modifier: Optional['MultiPathModifier'] = None):
+                 path_modifier: Optional['MultiPathModifier'] = None,
+                 is_docker: bool = False):
         self.real_source = real_source
         self.cache_dir = cache_dir
         self.is_unraid = is_unraid
@@ -1958,20 +1959,53 @@ class FileFilter:
         self.ondeck_tracker = ondeck_tracker
         self.watchlist_tracker = watchlist_tracker
         self.path_modifier = path_modifier  # For multi-path support
+        self.is_docker = is_docker  # For path translation in Docker
         self.last_already_cached_count = 0  # Track files already on cache during filtering
+
+    def _translate_to_host_path(self, cache_path: str) -> str:
+        """Translate container cache path to host cache path for exclude file.
+
+        In Docker, the container sees /mnt/cache but the host (Unraid mover)
+        sees /mnt/cache_downloads. This translates using host_cache_path from path_mappings.
+        """
+        if not self.is_docker or not self.path_modifier:
+            return cache_path
+
+        # MultiPathModifier stores mappings in 'mappings' attribute, not 'path_mappings'
+        path_mappings = getattr(self.path_modifier, 'mappings', [])
+
+        for mapping in path_mappings:
+            if not mapping.cache_path or not mapping.host_cache_path:
+                continue
+            if mapping.cache_path == mapping.host_cache_path:
+                continue  # No translation needed
+
+            cache_prefix = mapping.cache_path.rstrip('/')
+            if cache_path.startswith(cache_prefix):
+                host_prefix = mapping.host_cache_path.rstrip('/')
+                translated = cache_path.replace(cache_prefix, host_prefix, 1)
+                return translated
+
+        return cache_path
 
     def _add_to_exclude_file(self, cache_file_name: str) -> None:
         """Add a file to the exclude list."""
         if self.mover_cache_exclude_file:
+            # Translate container path to host path for exclude file (Docker)
+            exclude_path = self._translate_to_host_path(cache_file_name)
+
             # Read existing entries to avoid duplicates
             existing = set()
             if os.path.exists(self.mover_cache_exclude_file):
                 with open(self.mover_cache_exclude_file, "r") as f:
                     existing = {line.strip() for line in f if line.strip()}
-            if cache_file_name not in existing:
+            if exclude_path not in existing:
                 with open(self.mover_cache_exclude_file, "a") as f:
-                    f.write(f"{cache_file_name}\n")
-                logging.debug(f"Added to exclude file: {cache_file_name}")
+                    f.write(f"{exclude_path}\n")
+                if exclude_path != cache_file_name:
+                    logging.debug(f"Added to exclude file (translated): {exclude_path}")
+                else:
+                    logging.debug(f"Added to exclude file: {exclude_path}")
 
     def filter_files(self, files: List[str], destination: str,
                     media_to_cache: Optional[List[str]] = None,
@@ -2820,15 +2854,20 @@ class FileMover:
                 move = (user_file_name, cache_path)
         return move
 
-    def _translate_path_for_exclude(self, cache_path: str) -> str:
-        """Translate container cache path to host cache path for exclude file.
+    def _translate_to_host_path(self, cache_path: str, log_translation: bool = False) -> str:
+        """Translate container cache path to host cache path.
 
         In Docker, the container might see /mnt/cache/Movies/... but the host
         (where Unraid mover runs) sees /mnt/cache_downloads/Movies/...
         This method translates paths using the host_cache_path from path_mappings.
 
+        Used for:
+        - Exclude file entries (so Unraid mover sees correct paths)
+        - Log display (so users see actual host paths, not container paths)
+
         Args:
             cache_path: The cache path as seen by the container
+            log_translation: If True, log debug message when translation occurs
 
         Returns:
             The translated path for the host, or original if no translation needed
@@ -2836,8 +2875,8 @@ class FileMover:
         if not self.path_modifier:
             return cache_path
 
-        # Get path mappings from the modifier
-        path_mappings = getattr(self.path_modifier, 'path_mappings', [])
+        # MultiPathModifier stores mappings in 'mappings' attribute
+        path_mappings = getattr(self.path_modifier, 'mappings', [])
 
         for mapping in path_mappings:
             if not mapping.cache_path or not mapping.host_cache_path:
@@ -2849,7 +2888,8 @@ class FileMover:
             if cache_path.startswith(cache_prefix):
                 host_prefix = mapping.host_cache_path.rstrip('/')
                 translated = cache_path.replace(cache_prefix, host_prefix, 1)
-                logging.debug(f"Exclude path translation: {cache_path} -> {translated}")
+                if log_translation:
+                    logging.debug(f"Path translation: {cache_path} -> {translated}")
                 return translated
 
         return cache_path
@@ -2863,7 +2903,7 @@ class FileMover:
         """
         if self.mover_cache_exclude_file:
             # Translate container path to host path for exclude file
-            exclude_path = self._translate_path_for_exclude(cache_file_name)
+            exclude_path = self._translate_to_host_path(cache_file_name)
 
             with self._exclude_file_lock:
                 # Read existing entries to avoid duplicates
@@ -2890,7 +2930,7 @@ class FileMover:
         """
         if self.mover_cache_exclude_file and os.path.exists(self.mover_cache_exclude_file):
             # Translate container path to host path for exclude file
-            exclude_path = self._translate_path_for_exclude(cache_file_name)
+            exclude_path = self._translate_to_host_path(cache_file_name)
 
             with self._exclude_file_lock:
                 try:
@@ -2919,7 +2959,7 @@ class FileMover:
 
         current_identity = get_media_identity(current_cache_file)
         # Translate to host path format (what's in the exclude file)
-        current_host_path = self._translate_path_for_exclude(current_cache_file)
+        current_host_path = self._translate_to_host_path(current_cache_file)
         current_dir = os.path.dirname(current_host_path)
 
         with self._exclude_file_lock:
@@ -3156,8 +3196,12 @@ class FileMover:
                 self.file_utils.create_directory_with_permissions(cache_dir, array_file)
                 logging.debug(f"Created cache directory: {cache_dir}")
 
-            logging.debug(f"Starting copy: {array_file} -> {cache_file_name}")
-            self.file_utils.copy_file_with_permissions(array_file, cache_file_name, verbose=True)
+            # For Docker: translate cache path to host path for log display
+            display_dest = self._translate_to_host_path(cache_file_name) if self.file_utils.is_docker else None
+            logging.debug(f"Starting copy: {array_file} -> {display_dest or cache_file_name}")
+            self.file_utils.copy_file_with_permissions(
+                array_file, cache_file_name, verbose=True, display_dest=display_dest
+            )
             logging.debug(f"Copy complete: {os.path.basename(array_file)}")
 
             # Validate copy succeeded
@@ -3487,7 +3531,11 @@ class FileMover:
                     operation_type = "Moved"  # Copy operation
                     logging.info(f"In-place upgrade detected ({format_bytes(plexcached_size)} -> {format_bytes(cache_size)}): {os.path.basename(cache_file)}")
                     os.remove(plexcached_file)
-                    self.file_utils.copy_file_with_permissions(cache_file, array_file, verbose=True)
+                    # For Docker: translate cache path to host path for log display
+                    display_src = self._translate_to_host_path(cache_file) if self.file_utils.is_docker else None
+                    self.file_utils.copy_file_with_permissions(
+                        cache_file, array_file, verbose=True, display_src=display_src
+                    )
                     logging.debug(f"Copied upgraded file to array: {array_file}")
 
                     # Verify copy succeeded
@@ -3521,7 +3569,11 @@ class FileMover:
 
                     # Copy the upgraded cache file to array (preserving ownership)
                     cache_size = os.path.getsize(cache_file)
-                    self.file_utils.copy_file_with_permissions(cache_file, array_file, verbose=True)
+                    # For Docker: translate cache path to host path for log display
+                    display_src = self._translate_to_host_path(cache_file) if self.file_utils.is_docker else None
+                    self.file_utils.copy_file_with_permissions(
+                        cache_file, array_file, verbose=True, display_src=display_src
+                    )
                     logging.debug(f"Copied upgraded file to array: {array_file}")
 
                     # Verify copy succeeded
@@ -3537,7 +3589,11 @@ class FileMover:
                     operation_type = "Moved"  # Copy operation (no backup)
                     logging.debug(f"No .plexcached found, copying from cache to array: {cache_file}")
                     cache_size = os.path.getsize(cache_file)
-                    self.file_utils.copy_file_with_permissions(cache_file, array_file, verbose=True)
+                    # For Docker: translate cache path to host path for log display
+                    display_src = self._translate_to_host_path(cache_file) if self.file_utils.is_docker else None
+                    self.file_utils.copy_file_with_permissions(
+                        cache_file, array_file, verbose=True, display_src=display_src
+                    )
                     logging.debug(f"Copied to array: {array_file}")
 
                     # Verify copy succeeded by comparing file sizes

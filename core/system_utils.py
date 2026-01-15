@@ -297,9 +297,27 @@ class FileUtils:
         
         return size, unit
     
-    def copy_file_with_permissions(self, src: str, dest: str, verbose: bool = False) -> int:
-        """Copy a file preserving original ownership and permissions (Linux only)."""
-        logging.debug(f"Copying file from {src} to {dest}")
+    def copy_file_with_permissions(
+        self,
+        src: str,
+        dest: str,
+        verbose: bool = False,
+        display_src: str = None,
+        display_dest: str = None
+    ) -> int:
+        """Copy a file preserving original ownership and permissions (Linux only).
+
+        Args:
+            src: Source file path
+            dest: Destination file path
+            verbose: If True, log detailed ownership info
+            display_src: Optional path to show in logs instead of src (for Docker host paths)
+            display_dest: Optional path to show in logs instead of dest (for Docker host paths)
+        """
+        # Use display paths for logging if provided (Docker shows host paths)
+        log_src = display_src or src
+        log_dest = display_dest or dest
+        logging.debug(f"Copying file from {log_src} to {log_dest}")
 
         try:
             if self.is_linux:
@@ -328,18 +346,18 @@ class FileUtils:
                 if verbose:
                     # Log ownership details for debugging
                     dest_stat = os.stat(dest)
-                    logging.debug(f"File copied: {src} -> {dest}")
+                    logging.debug(f"File copied: {log_src} -> {log_dest}")
                     logging.debug(f"  Preserved ownership: uid={dest_stat.st_uid}, gid={dest_stat.st_gid}")
                     logging.debug(f"  Mode: {oct(dest_stat.st_mode)}")
                 else:
-                    logging.debug(f"File copied with permissions preserved: {dest}")
+                    logging.debug(f"File copied with permissions preserved: {log_dest}")
             else:  # Windows logic
                 shutil.copy2(src, dest)
-                logging.debug(f"File copied (Windows): {src} -> {dest}")
+                logging.debug(f"File copied (Windows): {log_src} -> {log_dest}")
 
             return 0
         except (FileNotFoundError, PermissionError, Exception) as e:
-            logging.error(f"Error copying file from {src} to {dest}: {str(e)}")
+            logging.error(f"Error copying file from {log_src} to {log_dest}: {str(e)}")
             raise RuntimeError(f"Error copying file: {str(e)}")
 
     def create_directory_with_permissions(self, path: str, src_file_for_permissions: str) -> None:
