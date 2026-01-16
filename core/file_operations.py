@@ -1350,19 +1350,21 @@ class PlexcachedMigration:
         files_needing_migration = []
 
         for cache_file in cache_files:
-            if not os.path.isfile(cache_file):
+            # In Docker, exclude file has host paths but we need container paths for file operations
+            check_path = self._translate_from_host_path(cache_file)
+            if not os.path.isfile(check_path):
                 logging.debug(f"Cache file no longer exists, skipping: {cache_file}")
                 continue
 
             # Derive array path from cache path using path_mappings if available
             if self.path_modifier:
-                array_file, mapping = self.path_modifier.convert_cache_to_real(cache_file)
+                array_file, mapping = self.path_modifier.convert_cache_to_real(check_path)
                 if array_file is None:
                     logging.debug(f"No path mapping found for cache file, skipping: {cache_file}")
                     continue
             else:
                 # Legacy fallback: simple string replacement
-                array_file = cache_file.replace(self.cache_dir, self.real_source, 1)
+                array_file = check_path.replace(self.cache_dir, self.real_source, 1)
 
             # On Unraid, check user0 (direct array) for .plexcached
             # This is the authoritative location - .plexcached should be on array
@@ -1394,14 +1396,14 @@ class PlexcachedMigration:
                     logging.debug(f"Original exists on array, no migration needed: {cache_file}")
                     continue
 
-            # This file needs migration
-            files_needing_migration.append((cache_file, array_file_check, plexcached_file))
+            # This file needs migration (use container path for file operations)
+            files_needing_migration.append((check_path, array_file_check, plexcached_file))
 
         # Calculate total size
         total_bytes = 0
-        for cache_file, _, _ in files_needing_migration:
+        for container_path, _, _ in files_needing_migration:
             try:
-                total_bytes += os.path.getsize(cache_file)
+                total_bytes += os.path.getsize(container_path)
             except OSError:
                 pass
 
@@ -2316,7 +2318,9 @@ class FileFilter:
 
             # Check each cached file
             for cache_file in cache_files:
-                if not os.path.exists(cache_file):
+                # In Docker, exclude file has host paths but we need container paths to check existence
+                check_path = self._translate_from_host_path(cache_file)
+                if not os.path.exists(check_path):
                     logging.debug(f"Cache file no longer exists: {cache_file}")
                     cache_paths_to_remove.append(cache_file)
                     continue
@@ -2337,24 +2341,24 @@ class FileFilter:
                         logging.debug(f"Movie still needed, keeping in cache: {media_name}")
                         continue
 
-                # Check retention period
+                # Check retention period (use container path for timestamp lookup)
                 if self.timestamp_tracker and self.cache_retention_hours > 0:
-                    if self.timestamp_tracker.is_within_retention_period(cache_file, self.cache_retention_hours):
-                        remaining = self.timestamp_tracker.get_retention_remaining(cache_file, self.cache_retention_hours)
+                    if self.timestamp_tracker.is_within_retention_period(check_path, self.cache_retention_hours):
+                        remaining = self.timestamp_tracker.get_retention_remaining(check_path, self.cache_retention_hours)
                         display_name = self._extract_display_name(cache_file)
                         retention_holds.append((media_name, remaining, display_name))
                         remaining_str = f"{remaining:.0f}h" if remaining >= 1 else f"{remaining * 60:.0f}m"
                         logging.debug(f"Retention hold ({remaining_str} left): {display_name}")
                         continue
 
-                # Move file back to array
+                # Move file back to array (use container path for path conversion)
                 if self.path_modifier:
-                    array_file, _ = self.path_modifier.convert_cache_to_real(cache_file)
+                    array_file, _ = self.path_modifier.convert_cache_to_real(check_path)
                     if array_file is None:
                         logging.warning(f"Could not convert cache path to array path: {cache_file}")
                         continue
                 else:
-                    array_file = cache_file.replace(self.cache_dir, self.real_source, 1)
+                    array_file = check_path.replace(self.cache_dir, self.real_source, 1)
 
                 display_name = self._extract_display_name(cache_file)
                 logging.debug(f"Media no longer needed, will move back to array: {display_name} - {cache_file}")
