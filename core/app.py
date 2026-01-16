@@ -391,7 +391,8 @@ class PlexCacheApp:
             real_source=self.config_manager.paths.real_source,
             script_folder=self.config_manager.paths.script_folder,
             is_unraid=self.system_detector.is_unraid,
-            path_modifier=self.file_path_modifier
+            path_modifier=self.file_path_modifier,
+            is_docker=self.system_detector.is_docker
         )
         if migration.needs_migration():
             logging.info("Running one-time migration for .plexcached backups...")

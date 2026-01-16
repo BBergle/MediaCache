@@ -1299,7 +1299,8 @@ class PlexcachedMigration:
 
     def __init__(self, exclude_file: str, cache_dir: str, real_source: str,
                  script_folder: str, is_unraid: bool = False,
-                 path_modifier: Optional['MultiPathModifier'] = None):
+                 path_modifier: Optional['MultiPathModifier'] = None,
+                 is_docker: bool = False):
         """Initialize the migration helper.
 
         Args:
@@ -1309,6 +1310,7 @@ class PlexcachedMigration:
             script_folder: Folder where the script lives (for flag file)
             is_unraid: Whether running on Unraid (affects path handling)
             path_modifier: MultiPathModifier for multi-path setups (uses path_mappings)
+            is_docker: Whether running in Docker (affects path translation)
         """
         self.exclude_file = exclude_file
         self.cache_dir = cache_dir
@@ -1316,6 +1318,7 @@ class PlexcachedMigration:
         self.flag_file = os.path.join(script_folder, self.MIGRATION_FLAG)
         self.is_unraid = is_unraid
         self.path_modifier = path_modifier
+        self.is_docker = is_docker
 
     def needs_migration(self) -> bool:
         """Check if migration has already been completed."""
@@ -1336,6 +1339,31 @@ class PlexcachedMigration:
             duplicates_removed = len(all_lines) - len(cache_files)
 
         return cache_files, duplicates_removed
+
+    def _translate_from_host_path(self, host_path: str) -> str:
+        """Translate host cache path back to container cache path for file existence checks.
+
+        In Docker, the exclude file contains host paths like /mnt/cache_downloads but
+        the container sees /mnt/cache. This reverse-translates for os.path.exists() checks.
+        """
+        if not self.is_docker or not self.path_modifier:
+            return host_path
+
+        path_mappings = getattr(self.path_modifier, 'mappings', [])
+
+        for mapping in path_mappings:
+            if not mapping.cache_path or not mapping.host_cache_path:
+                continue
+            if mapping.cache_path == mapping.host_cache_path:
+                continue  # No translation needed
+
+            host_prefix = mapping.host_cache_path.rstrip('/')
+            if host_path.startswith(host_prefix):
+                cache_prefix = mapping.cache_path.rstrip('/')
+                translated = host_path.replace(host_prefix, cache_prefix, 1)
+                return translated
+
+        return host_path
 
     def _find_files_needing_migration(self, cache_files: List[str]) -> Tuple[List[Tuple[str, str, str]], int]:
         """Find files that need .plexcached backup creation.
