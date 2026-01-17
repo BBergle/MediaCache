@@ -12,6 +12,7 @@ from fastapi.templating import Jinja2Templates
 
 from web.config import TEMPLATES_DIR, CONFIG_DIR
 from web.services import get_settings_service, get_scheduler_service
+from core.system_utils import get_disk_usage
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -491,7 +492,7 @@ async def settings_cache(request: Request):
 
     if cache_dir:
         try:
-            disk_usage = shutil.disk_usage(cache_dir)
+            disk_usage = get_disk_usage(cache_dir)
             drive_info["total_bytes"] = disk_usage.total
             # Format size
             total_gb = disk_usage.total / (1024**3)

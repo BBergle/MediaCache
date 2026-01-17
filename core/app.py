@@ -15,7 +15,7 @@ import os
 
 from core.config import ConfigManager
 from core.logging_config import LoggingManager
-from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock
+from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock, get_disk_usage
 from core.plex_api import PlexManager, OnDeckItem
 from core.file_operations import MultiPathModifier, SubtitleFinder, FileFilter, FileMover, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration
 
@@ -1173,7 +1173,7 @@ class PlexCacheApp:
 
         # Get total cache drive usage
         try:
-            disk_usage = shutil.disk_usage(cache_dir)
+            disk_usage = get_disk_usage(cache_dir)
             drive_usage_bytes = disk_usage.used
             drive_usage_gb = drive_usage_bytes / (1024**3)
         except Exception as e:
@@ -1249,7 +1249,7 @@ class PlexCacheApp:
         threshold_bytes = cache_limit_bytes * threshold_percent / 100
 
         try:
-            disk_usage = shutil.disk_usage(cache_dir)
+            disk_usage = get_disk_usage(cache_dir)
             total_drive_usage = disk_usage.used
         except Exception:
             return media_files  # Can't check, allow caching
@@ -1338,7 +1338,7 @@ class PlexCacheApp:
 
         # Get actual total drive usage
         try:
-            disk_usage = shutil.disk_usage(cache_dir)
+            disk_usage = get_disk_usage(cache_dir)
             total_drive_usage = disk_usage.used
         except Exception:
             total_drive_usage = plexcache_tracked  # Fallback if can't get disk usage
@@ -1510,7 +1510,7 @@ class PlexCacheApp:
             cache_limit_bytes, _ = self._get_effective_cache_limit(cache_dir)
             if cache_limit_bytes > 0:
                 try:
-                    disk_usage = shutil.disk_usage(cache_dir)
+                    disk_usage = get_disk_usage(cache_dir)
                     if disk_usage.used > cache_limit_bytes:
                         needed_space = int(disk_usage.used - cache_limit_bytes)
                         logging.debug(f"Drive over limit by {needed_space/1e9:.2f}GB, will try to evict")

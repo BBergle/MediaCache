@@ -6,10 +6,22 @@ Handles OS detection, system-specific operations, and path conversions.
 import os
 import platform
 import shutil
+import subprocess
 import atexit
 import fcntl
-from typing import Tuple, Optional
+from typing import Tuple, Optional, NamedTuple
 import logging
+
+
+# ============================================================================
+# Disk Usage Types
+# ============================================================================
+
+class DiskUsage(NamedTuple):
+    """Disk usage statistics compatible with shutil.disk_usage() return type."""
+    total: int
+    used: int
+    free: int
 
 
 # ============================================================================
@@ -61,6 +73,91 @@ def get_disk_free_space_bytes(path: str) -> int:
     stat = os.statvfs(path)
     # f_bavail = blocks available to non-superuser (more accurate than f_bfree)
     return stat.f_bavail * stat.f_frsize
+
+
+def get_disk_usage(path: str) -> DiskUsage:
+    """Get disk usage with ZFS pool-aware reporting.
+
+    On ZFS filesystems, statvfs() reports dataset-level stats which can be
+    misleading (e.g., showing 1.7TB total when the pool is 3.7TB). This function
+    detects ZFS and queries pool-level stats instead.
+
+    Args:
+        path: Any path on the filesystem to check.
+
+    Returns:
+        DiskUsage namedtuple with total, used, and free bytes.
+        Falls back to shutil.disk_usage() if ZFS detection fails.
+    """
+    # Try ZFS-aware detection first
+    zfs_stats = _get_zfs_pool_stats(path)
+    if zfs_stats:
+        return zfs_stats
+
+    # Fallback to standard statvfs
+    usage = shutil.disk_usage(path)
+    return DiskUsage(usage.total, usage.used, usage.free)
+
+
+def _get_zfs_pool_stats(path: str) -> Optional[DiskUsage]:
+    """Get ZFS pool-level stats if path is on ZFS.
+
+    Args:
+        path: Path to check.
+
+    Returns:
+        DiskUsage with pool-level stats, or None if not ZFS or detection fails.
+    """
+    try:
+        # Detect filesystem type using df -T
+        result = subprocess.run(
+            ['df', '-T', path],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode != 0 or 'zfs' not in result.stdout.lower():
+            return None
+
+        # Extract dataset name (e.g., "hex-drive/media" or "hex-drive")
+        lines = result.stdout.strip().split('\n')
+        if len(lines) < 2:
+            return None
+
+        # First column is the filesystem/dataset name
+        dataset = lines[1].split()[0]
+
+        # Extract pool name (everything before first / or the whole thing)
+        pool_name = dataset.split('/')[0]
+
+        # Get pool stats using zpool list -Hp (parseable, no header)
+        # Output format: NAME SIZE ALLOC FREE CKPOINT EXPANDSZ FRAG CAP DEDUP HEALTH ALTROOT
+        result = subprocess.run(
+            ['zpool', 'list', '-Hp', pool_name],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode != 0:
+            return None
+
+        # Parse tab-separated output
+        parts = result.stdout.strip().split('\t')
+        if len(parts) < 4:
+            return None
+
+        # SIZE, ALLOC, FREE are columns 1, 2, 3 (0-indexed: NAME=0, SIZE=1, ALLOC=2, FREE=3)
+        total = int(parts[1])
+        used = int(parts[2])
+        free = int(parts[3])
+
+        logging.debug(f"ZFS pool '{pool_name}' detected: total={total/1e12:.2f}TB, used={used/1e12:.2f}TB, free={free/1e12:.2f}TB")
+
+        return DiskUsage(total, used, free)
+
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError, IndexError) as e:
+        # zpool command not available, timeout, or parse error
+        logging.debug(f"ZFS detection failed for {path}: {e}")
+        return None
+    except Exception as e:
+        logging.debug(f"Unexpected error in ZFS detection for {path}: {e}")
+        return None
 
 
 def get_disk_number_from_path(disk_path: str) -> Optional[str]:

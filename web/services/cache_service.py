@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 
 from web.config import PROJECT_ROOT, DATA_DIR, CONFIG_DIR, SETTINGS_FILE
+from core.system_utils import get_disk_usage
 
 
 @dataclass
@@ -597,7 +598,7 @@ class CacheService:
 
         if cache_dir and os.path.exists(cache_dir):
             try:
-                disk = shutil.disk_usage(cache_dir)
+                disk = get_disk_usage(cache_dir)
                 disk_used = disk.used
                 disk_total = disk.total
                 usage_percent = int((disk.used / disk.total) * 100)
@@ -691,7 +692,7 @@ class CacheService:
 
         if cache_dir and os.path.exists(cache_dir):
             try:
-                disk = shutil.disk_usage(cache_dir)
+                disk = get_disk_usage(cache_dir)
                 disk_used = disk.used
                 disk_total = disk.total
                 disk_free = disk.free
@@ -1047,7 +1048,7 @@ class CacheService:
 
         if cache_dir and os.path.exists(cache_dir):
             try:
-                disk = shutil.disk_usage(cache_dir)
+                disk = get_disk_usage(cache_dir)
                 disk_used = disk.used
                 disk_total = disk.total
                 current_usage_percent = round((disk.used / disk.total) * 100, 1)
@@ -1100,7 +1101,7 @@ class CacheService:
         disk_total = 0
         if cache_dir and os.path.exists(cache_dir):
             try:
-                disk = shutil.disk_usage(cache_dir)
+                disk = get_disk_usage(cache_dir)
                 disk_used = disk.used
                 disk_total = disk.total
             except (OSError, AttributeError):
