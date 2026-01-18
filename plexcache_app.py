@@ -331,7 +331,7 @@ class PlexCacheApp:
         """Initialize timestamp, watchlist, and OnDeck trackers."""
 
         # ---------------------------------------------------------------------
-        # One-time migration: rename old exclude file to new name
+        # One-time migration sanity check for renamed exclude file
         # ---------------------------------------------------------------------
         old_exclude_file = os.path.join(
             self.config_manager.paths.script_folder,
@@ -341,17 +341,35 @@ class PlexCacheApp:
             self.config_manager.paths.script_folder,
             "plexcache_cached_files.txt"
         )
-    
-        if os.path.exists(old_exclude_file) and not os.path.exists(new_cached_file):
+        
+        old_exists = os.path.exists(old_exclude_file)
+        new_exists = os.path.exists(new_cached_file)
+        
+        if old_exists and new_exists:
             try:
-                os.rename(old_exclude_file, new_cached_file)
+                os.remove(old_exclude_file)
                 logging.info(
-                    f"Migrated legacy exclude file: {old_exclude_file} → {new_cached_file}"
+                    f"Legacy exclude file found alongside new file. "
+                    f"Removed old file: {old_exclude_file}"
                 )
             except Exception as e:
                 logging.error(
-                    f"Failed to migrate legacy exclude file '{old_exclude_file}': {e}"
+                    f"Failed to remove legacy exclude file '{old_exclude_file}': {e}"
                 )
+                raise
+        
+        elif old_exists and not new_exists:
+            logging.critical(
+                f"Outdated configuration detected: legacy exclude file "
+                f"'{old_exclude_file}' exists but new file '{new_cached_file}' does not.\n"
+                f"Please rename the file manually to continue."
+            )
+            raise RuntimeError(
+                "Legacy exclude file detected without corresponding new file. "
+                "Manual migration required."
+            )
+        
+        # If only new file exists or neither exist: no action needed
         
         # Run one-time migration to create .plexcached backups
         migration = PlexcachedMigration(
