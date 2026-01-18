@@ -136,7 +136,7 @@ class CacheService:
 
         if unit_index == 0:
             return f"{int(size)} B"
-        return f"{size:.1f} {units[unit_index]}"
+        return f"{size:.2f} {units[unit_index]}"
 
     def _parse_cache_limit(self, limit_str: str) -> int:
         """Parse cache limit string to bytes (e.g., '250GB' -> bytes)"""

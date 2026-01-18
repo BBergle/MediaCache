@@ -48,13 +48,13 @@ def format_bytes(bytes_value: int) -> str:
     if bytes_value < 1024:
         return f"{bytes_value} B"
     elif bytes_value < 1024 ** 2:
-        return f"{bytes_value / 1024:.1f} KB"
+        return f"{bytes_value / 1024:.2f} KB"
     elif bytes_value < 1024 ** 3:
-        return f"{bytes_value / (1024 ** 2):.1f} MB"
+        return f"{bytes_value / (1024 ** 2):.2f} MB"
     elif bytes_value < 1024 ** 4:
-        return f"{bytes_value / (1024 ** 3):.1f} GB"
+        return f"{bytes_value / (1024 ** 3):.2f} GB"
     else:
-        return f"{bytes_value / (1024 ** 4):.1f} TB"
+        return f"{bytes_value / (1024 ** 4):.2f} TB"
 
 
 def get_media_identity(filepath: str) -> str:

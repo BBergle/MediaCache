@@ -239,7 +239,7 @@ function formatBytes(bytes) {
     if (gb >= 1024) {
         return (gb / 1024).toFixed(2) + ' TB';
     }
-    return gb.toFixed(1) + ' GB';
+    return gb.toFixed(2) + ' GB';
 }
 
 function parseSizeBytes(value) {

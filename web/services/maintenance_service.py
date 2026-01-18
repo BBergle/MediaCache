@@ -246,7 +246,7 @@ class MaintenanceService:
 
         if unit_index == 0:
             return f"{int(size)} B"
-        return f"{size:.1f} {units[unit_index]}"
+        return f"{size:.2f} {units[unit_index]}"
 
     def get_cache_files(self) -> Set[str]:
         """Get all media files currently on cache"""
