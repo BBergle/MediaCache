@@ -596,14 +596,15 @@ class LoggingManager:
             self.logs_folder.mkdir(parents=True, exist_ok=True)
 
         # Create or update the symbolic link to the latest log file
+        # Use relative path (just filename) so symlink works from both inside container and host
         try:
             if latest_log_file.exists() or latest_log_file.is_symlink():
                 latest_log_file.unlink()
-            latest_log_file.symlink_to(log_file)
+            latest_log_file.symlink_to(log_file.name)
         except FileExistsError:
             # If still exists for some reason, remove and retry
             latest_log_file.unlink()
-            latest_log_file.symlink_to(log_file)
+            latest_log_file.symlink_to(log_file.name)
 
         
     def _set_log_level(self) -> None:
