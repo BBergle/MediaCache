@@ -164,37 +164,6 @@ class CacheService:
             return f"{int(size)} B"
         return f"{size:.2f} {units[unit_index]}"
 
-    def _parse_cache_limit(self, limit_str: str) -> int:
-        """Parse cache limit string to bytes (e.g., '250GB' -> bytes)"""
-        if not limit_str:
-            return 250 * 1024**3  # Default 250GB
-
-        limit_str = limit_str.strip().upper()
-
-        # Handle percentage - return 0 to indicate we need disk check
-        if '%' in limit_str:
-            return 0
-
-        # Parse size string
-        multipliers = {
-            'B': 1,
-            'KB': 1024,
-            'MB': 1024**2,
-            'GB': 1024**3,
-            'TB': 1024**4
-        }
-
-        for unit, mult in multipliers.items():
-            if limit_str.endswith(unit):
-                try:
-                    value = float(limit_str[:-len(unit)].strip())
-                    return int(value * mult)
-                except ValueError:
-                    pass
-
-        # Default fallback
-        return 250 * 1024**3
-
     def get_cached_files_list(self) -> List[str]:
         """Get list of cached file paths from timestamps.json (primary) or exclude file (fallback)"""
         # Primary: Use timestamps.json as the source of truth for cached files
@@ -1337,8 +1306,8 @@ class CacheService:
 
             with open(self.exclude_file, 'w', encoding='utf-8') as f:
                 f.writelines(new_lines)
-        except IOError:
-            pass
+        except IOError as e:
+            logging.warning(f"Could not update exclude file: {e}")
 
     def _remove_from_timestamps(self, cache_path: str):
         """Remove a path from the timestamps file"""
@@ -1354,8 +1323,10 @@ class CacheService:
 
                 with open(self.timestamps_file, 'w', encoding='utf-8') as f:
                     json.dump(timestamps, f, indent=2)
-        except (IOError, json.JSONDecodeError):
-            pass
+            else:
+                logging.debug(f"Path not found in timestamps (may already be removed): {cache_path}")
+        except (IOError, json.JSONDecodeError) as e:
+            logging.warning(f"Could not update timestamps file: {e}")
 
 
 # Singleton instance
