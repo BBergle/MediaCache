@@ -145,9 +145,22 @@ Please check out our [Wiki section](https://github.com/StudioNirin/PlexCache-R/w
 
 ## Notes
 
-This script might be compatible with other systems, especially Linux-based ones, although I have primarily tested it on Unraid with plex as docker container. While I cannot support every case, it's worth checking the GitHub issues to see if your specific case has already been discussed. Particularly worth checking the original Bexem repo issues page. 
+This script might be compatible with other systems, especially Linux-based ones, although I have primarily tested it on Unraid with plex as docker container. While I cannot support every case, it's worth checking the GitHub issues to see if your specific case has already been discussed. Particularly worth checking the original Bexem repo issues page.
 I will still try to help out, but please note that I make no promises in providing assistance for every scenario.
 **It is highly advised to use the setup script.**
+
+## Known Limitations
+
+### Remote/Network Storage
+
+**The `.plexcached` backup system does NOT work with remote or network-attached storage** (e.g., Synology NAS mounted via SMB/NFS).
+
+Why this is a problem:
+- The Unraid mover only moves files on the local array, not remote mounts
+- `.plexcached` backups on remote storage won't protect against anything
+- Remote NAS is typically "always-on" anyway, so there's no array spinup savings
+
+**Recommendation:** In the setup wizard or settings, set libraries on remote storage as **non-cacheable** (`enabled: false` in path_mappings). This prevents PlexCache-R from attempting to manage files it cannot properly protect.
 
 ## Disclaimer
 
