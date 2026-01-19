@@ -1127,7 +1127,10 @@ class PlexCacheApp:
             # Negative value indicates percentage
             percent = abs(cache_limit_bytes)
             try:
-                total_drive_size = self.file_utils.get_total_drive_size(cache_dir)
+                # Use manual override if configured (important for ZFS)
+                drive_size_override = self.config_manager.cache.cache_drive_size_bytes
+                disk_usage = get_disk_usage(cache_dir, drive_size_override)
+                total_drive_size = disk_usage.total
                 limit_bytes = int(total_drive_size * percent / 100)
                 limit_readable = f"{percent}% of {total_drive_size / (1024**3):.1f}GB = {limit_bytes / (1024**3):.1f}GB"
                 return (limit_bytes, limit_readable)
