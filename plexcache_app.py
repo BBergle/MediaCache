@@ -98,13 +98,12 @@ class PlexCacheApp:
             if self.verbose:
                 self._log_startup_diagnostics()
 
-            try:
-                # Migrate old exclude file name before any initialization
-                self._migrate_exclude_file()
-                
-                logging.debug("Initializing components...")
-                self._initialize_components()
-            
+            if self.verbose:
+                self._log_startup_diagnostics()
+
+            # Migrate old exclude file name before any initialization
+            self._migrate_exclude_file()
+
             # Initialize components that depend on config
             logging.debug("Initializing components...")
             self._initialize_components()
