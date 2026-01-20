@@ -33,12 +33,13 @@ class UnprotectedFile:
 
 @dataclass
 class OrphanedBackup:
-    """.plexcached file on array with no corresponding cache file"""
+    """.plexcached file on array with no corresponding cache file or redundant backup"""
     plexcached_path: str
     original_filename: str
     size: int
     size_display: str
     restore_path: str
+    backup_type: str = "orphaned"  # "orphaned" (no cache, no original) or "redundant" (original exists)
 
 
 @dataclass
@@ -448,7 +449,11 @@ class MaintenanceService:
         return results
 
     def _get_orphaned_plexcached(self, auto_cleanup_superseded: bool = True) -> List[OrphanedBackup]:
-        """Find .plexcached files on array with no corresponding cache file.
+        """Find .plexcached files on array that need cleanup.
+
+        Returns two types of backups:
+        - "orphaned": No cache file AND no original on array (needs restore or delete)
+        - "redundant": No cache file BUT original exists on array (safe to delete)
 
         Args:
             auto_cleanup_superseded: If True, automatically delete .plexcached backups
@@ -456,7 +461,7 @@ class MaintenanceService:
         """
         cache_dirs, array_dirs = self._get_paths()
         cache_files = self.get_cache_files()
-        orphaned = []
+        backups_to_cleanup = []
         superseded_deleted = 0
 
         for i, array_dir in enumerate(array_dirs):
@@ -477,8 +482,31 @@ class MaintenanceService:
                         cache_path = os.path.join(cache_dir, relative_path)
                         cache_directory = os.path.dirname(cache_path)
 
-                        # Check if orphaned: no cache copy AND no restored original
-                        if cache_path not in cache_files and not os.path.exists(original_array_path):
+                        # Skip if file is still actively cached (has cache copy)
+                        if cache_path in cache_files:
+                            continue
+
+                        # Check if original exists on array
+                        original_exists = os.path.exists(original_array_path)
+
+                        if original_exists:
+                            # Redundant backup: original was restored but .plexcached not cleaned up
+                            # Safe to delete - the original file is already on the array
+                            try:
+                                size = os.path.getsize(plexcached_path)
+                            except OSError:
+                                size = 0
+
+                            backups_to_cleanup.append(OrphanedBackup(
+                                plexcached_path=plexcached_path,
+                                original_filename=original_name,
+                                size=size,
+                                size_display=self._format_size(size),
+                                restore_path=original_array_path,
+                                backup_type="redundant"
+                            ))
+                        else:
+                            # Orphaned backup: no cache file AND no original
                             # Check if this backup has been superseded by a newer version
                             # (e.g., Sonarr/Radarr upgraded from HDTV to WEB-DL)
                             if auto_cleanup_superseded:
@@ -490,7 +518,7 @@ class MaintenanceService:
                                     try:
                                         os.remove(plexcached_path)
                                         superseded_deleted += 1
-                                        continue  # Don't add to orphaned list
+                                        continue  # Don't add to list
                                     except OSError:
                                         pass  # If delete fails, treat as orphaned
 
@@ -499,12 +527,13 @@ class MaintenanceService:
                             except OSError:
                                 size = 0
 
-                            orphaned.append(OrphanedBackup(
+                            backups_to_cleanup.append(OrphanedBackup(
                                 plexcached_path=plexcached_path,
                                 original_filename=original_name,
                                 size=size,
                                 size_display=self._format_size(size),
-                                restore_path=original_array_path
+                                restore_path=original_array_path,
+                                backup_type="orphaned"
                             ))
 
         if superseded_deleted > 0:
@@ -512,8 +541,8 @@ class MaintenanceService:
             logging.info(f"Auto-cleaned {superseded_deleted} superseded .plexcached backup(s) "
                         "(replaced by Sonarr/Radarr upgrades)")
 
-        orphaned.sort(key=lambda f: f.size, reverse=True)
-        return orphaned
+        backups_to_cleanup.sort(key=lambda f: f.size, reverse=True)
+        return backups_to_cleanup
 
     def _find_replacement_file(self, original_name: str, cache_directory: str,
                                cache_files: Set[str]) -> Optional[str]:
@@ -602,7 +631,13 @@ class MaintenanceService:
                 affected += 1
             else:
                 try:
-                    os.rename(plexcached_path, original_path)
+                    # Check if original already exists (redundant backup scenario)
+                    if os.path.exists(original_path):
+                        # Original exists - just delete the redundant backup
+                        os.remove(plexcached_path)
+                        logging.debug(f"Deleted redundant .plexcached (original exists): {plexcached_path}")
+                    else:
+                        os.rename(plexcached_path, original_path)
                     affected += 1
                 except OSError as e:
                     errors.append(f"{os.path.basename(plexcached_path)}: {str(e)}")
@@ -615,10 +650,20 @@ class MaintenanceService:
             errors=errors
         )
 
-    def restore_all_plexcached(self, dry_run: bool = True) -> ActionResult:
-        """Restore all orphaned .plexcached files"""
-        orphaned = self._get_orphaned_plexcached(auto_cleanup_superseded=False)
-        paths = [o.plexcached_path for o in orphaned]
+    def restore_all_plexcached(self, dry_run: bool = True, orphaned_only: bool = False) -> ActionResult:
+        """Restore all orphaned .plexcached files
+
+        Args:
+            dry_run: If True, only simulate the restore
+            orphaned_only: If True, only restore truly orphaned backups (not redundant ones)
+        """
+        backups = self._get_orphaned_plexcached(auto_cleanup_superseded=False)
+
+        if orphaned_only:
+            # Filter to only include truly orphaned backups (not redundant)
+            backups = [b for b in backups if b.backup_type == "orphaned"]
+
+        paths = [b.plexcached_path for b in backups]
         return self.restore_plexcached(paths, dry_run)
 
     def delete_plexcached(self, paths: List[str], dry_run: bool = True) -> ActionResult:
@@ -733,9 +778,17 @@ class MaintenanceService:
             else:
                 try:
                     if has_backup and backup_path:
-                        # Restore the .plexcached backup first
                         original_array_path = backup_path[:-11]  # Remove .plexcached suffix
-                        os.rename(backup_path, original_array_path)
+
+                        # Check if original already exists (redundant backup scenario)
+                        if os.path.exists(original_array_path):
+                            # Original already restored - just delete the redundant .plexcached
+                            os.remove(backup_path)
+                            logging.debug(f"Deleted redundant .plexcached backup: {backup_path}")
+                        else:
+                            # Restore the .plexcached backup (rename to original)
+                            os.rename(backup_path, original_array_path)
+
                         # Delete cache copy
                         if os.path.exists(cache_path):
                             os.remove(cache_path)

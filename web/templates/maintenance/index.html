@@ -151,11 +151,19 @@ function updateOrphanedActions() {
     const count = selectedOrphanedBackups.size;
     const bulkActions = document.getElementById('orphaned-bulk-actions');
     const countSpan = document.getElementById('orphaned-selected-count');
+    const restoreBtn = document.getElementById('restore-selected-btn');
 
     if (bulkActions) {
         if (count > 0) {
             bulkActions.style.display = 'flex';
             countSpan.textContent = count;
+
+            // Only show restore button if at least one orphaned (not redundant) backup is selected
+            if (restoreBtn) {
+                const hasOrphanedSelected = Array.from(document.querySelectorAll('.orphaned-checkbox:checked'))
+                    .some(cb => cb.dataset.type === 'orphaned');
+                restoreBtn.style.display = hasOrphanedSelected ? '' : 'none';
+            }
         } else {
             bulkActions.style.display = 'none';
         }
@@ -286,18 +294,29 @@ function executeAction(action, formData, isDryRun) {
 function restoreOrphanedSelected(isDryRun = false) {
     if (selectedOrphanedBackups.size === 0) return;
 
-    const count = selectedOrphanedBackups.size;
+    // Filter to only include orphaned backups (not redundant)
+    const orphanedPaths = Array.from(document.querySelectorAll('.orphaned-checkbox:checked'))
+        .filter(cb => cb.dataset.type === 'orphaned')
+        .map(cb => cb.value);
+
+    if (orphanedPaths.length === 0) {
+        showInfoModal('No Orphaned Backups',
+            '<p>No orphaned backups are selected. Redundant backups cannot be restored because the original file already exists.</p>');
+        return;
+    }
+
+    const count = orphanedPaths.length;
     const formData = new FormData();
-    selectedOrphanedBackups.forEach(path => formData.append('paths', path));
+    orphanedPaths.forEach(path => formData.append('paths', path));
 
     const action = isDryRun ? 'Preview' : 'Restore';
     const message = `
-        <p>You are about to ${isDryRun ? 'preview restoring' : 'restore'} <strong>${count}</strong> backup file(s):</p>
+        <p>You are about to ${isDryRun ? 'preview restoring' : 'restore'} <strong>${count}</strong> orphaned backup file(s):</p>
         <ul>
-            ${Array.from(selectedOrphanedBackups).slice(0, 10).map(path =>
+            ${orphanedPaths.slice(0, 10).map(path =>
                 `<li>${path.split('/').pop()}</li>`
             ).join('')}
-            ${selectedOrphanedBackups.size > 10 ? `<li>...and ${selectedOrphanedBackups.size - 10} more</li>` : ''}
+            ${orphanedPaths.length > 10 ? `<li>...and ${orphanedPaths.length - 10} more</li>` : ''}
         </ul>
         <p>This will rename .plexcached files back to their original filenames on the array.</p>
     `;
@@ -308,14 +327,16 @@ function restoreOrphanedSelected(isDryRun = false) {
 function restoreAllOrphaned(isDryRun = false) {
     const formData = new FormData();
     formData.append('restore_all', 'true');
+    formData.append('orphaned_only', 'true');  // Only restore orphaned, not redundant
 
     const action = isDryRun ? 'Preview' : 'Restore';
     const message = `
-        <p>You are about to ${isDryRun ? 'preview restoring' : 'restore'} <strong>ALL</strong> orphaned .plexcached backup files.</p>
-        <p>This will rename all .plexcached files back to their original filenames on the array.</p>
+        <p>You are about to ${isDryRun ? 'preview restoring' : 'restore'} <strong>ALL orphaned</strong> .plexcached backup files.</p>
+        <p>This will rename .plexcached files back to their original filenames on the array.</p>
+        <p class="text-muted" style="margin-top: 0.5rem;"><em>Note: Redundant backups (where the original already exists) will not be affected.</em></p>
     `;
 
-    showConfirmModal(`${action} All Backups`, message, 'restore-plexcached', formData, isDryRun);
+    showConfirmModal(`${action} All Orphaned`, message, 'restore-plexcached', formData, isDryRun);
 }
 
 function deleteOrphanedSelected(isDryRun = false) {

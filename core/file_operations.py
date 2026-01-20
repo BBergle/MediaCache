@@ -3637,9 +3637,17 @@ class FileMover:
                             return 1
                 else:
                     # Same size (or cache missing), just rename back (fast)
-                    operation_type = "Restored"  # Fast rename
-                    os.rename(plexcached_file, array_file)
-                    logging.debug(f"Restored array file: {plexcached_file} -> {array_file}")
+                    # But first check if array file already exists (redundant backup scenario)
+                    if os.path.isfile(array_file):
+                        # Array file already exists (restored by another process or manual copy)
+                        # Just delete the redundant .plexcached backup
+                        operation_type = "Restored"  # Array already has it
+                        os.remove(plexcached_file)
+                        logging.debug(f"Deleted redundant .plexcached (array file exists): {plexcached_file}")
+                    else:
+                        operation_type = "Restored"  # Fast rename
+                        os.rename(plexcached_file, array_file)
+                        logging.debug(f"Restored array file: {plexcached_file} -> {array_file}")
 
             # Scenario 2: Check for filename-change upgrade (different .plexcached with same media identity)
             elif os.path.isfile(cache_file):

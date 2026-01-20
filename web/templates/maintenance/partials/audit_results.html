@@ -68,10 +68,10 @@
             {% else %}
             <i data-lucide="file-question"></i>
             {% endif %}
-            Orphaned Backups
+            Backup Cleanup
         </div>
         <div class="stat-value">{{ results.orphaned_plexcached|length }}</div>
-        <div class="stat-label">{% if results.orphaned_plexcached|length == 0 %}none found{% else %}need restore{% endif %}</div>
+        <div class="stat-label">{% if results.orphaned_plexcached|length == 0 %}none found{% else %}need attention{% endif %}</div>
     </div>
 
     <div class="stat-card">
@@ -252,22 +252,35 @@
 </div>
 {% endif %}
 
-<!-- Orphaned .plexcached Backups Section -->
+<!-- Backup Cleanup Section (.plexcached files needing attention) -->
 {% if results.orphaned_plexcached %}
+{% set orphaned_count = results.orphaned_plexcached|selectattr('backup_type', 'equalto', 'orphaned')|list|length %}
+{% set redundant_count = results.orphaned_plexcached|selectattr('backup_type', 'equalto', 'redundant')|list|length %}
 <div class="card mb-2">
     <div class="card-header" style="background: var(--danger-bg);">
         <i data-lucide="file-question"></i>
-        <h2>Orphaned .plexcached Backups ({{ results.orphaned_plexcached|length }})</h2>
+        <h2>Backup Cleanup ({{ results.orphaned_plexcached|length }})</h2>
+        <div class="flex gap-1" style="margin-left: auto;">
+            {% if orphaned_count > 0 %}<span class="badge badge-warning">{{ orphaned_count }} orphaned</span>{% endif %}
+            {% if redundant_count > 0 %}<span class="badge badge-info">{{ redundant_count }} redundant</span>{% endif %}
+        </div>
     </div>
     <div class="card-body" style="padding: 0.75rem; background: var(--danger-bg);">
         <p class="text-muted" style="margin: 0 0 0.75rem 0;">
+            {% if orphaned_count > 0 and redundant_count > 0 %}
+            <strong>Orphaned:</strong> Backup exists but no original or cache file - restore to recover, or delete if unneeded.<br>
+            <strong>Redundant:</strong> Original already restored to array - backup can be safely deleted.
+            {% elif orphaned_count > 0 %}
             These backup files exist on the array but have no corresponding cache file. Restore them to recover the files, or delete if no longer needed.
+            {% else %}
+            These backup files are redundant - the original has already been restored to the array. They can be safely deleted to free up space.
+            {% endif %}
         </p>
         <!-- Bulk Actions -->
         <div class="flex gap-1 mb-1">
             <div id="orphaned-bulk-actions" class="flex gap-1" style="display: none;">
                 <span class="text-muted">Selected: <strong id="orphaned-selected-count">0</strong></span>
-                <button class="btn btn-sm btn-primary" onclick="restoreOrphanedSelected(false)">
+                <button id="restore-selected-btn" class="btn btn-sm btn-primary" onclick="restoreOrphanedSelected(false)" style="{% if orphaned_count == 0 %}display: none;{% endif %}">
                     <i data-lucide="archive-restore"></i> Restore
                 </button>
                 <button class="btn btn-sm btn-danger" onclick="deleteOrphanedSelected(false)">
@@ -275,9 +288,11 @@
                 </button>
             </div>
             <div class="flex gap-1" style="margin-left: auto;">
+                {% if orphaned_count > 0 %}
                 <button class="btn btn-sm btn-warning" onclick="restoreAllOrphaned(false)">
-                    <i data-lucide="archive-restore"></i> Restore All
+                    <i data-lucide="archive-restore"></i> Restore All Orphaned
                 </button>
+                {% endif %}
                 <button class="btn btn-sm btn-danger" onclick="deleteAllOrphaned(false)">
                     <i data-lucide="trash-2"></i> Delete All
                 </button>
@@ -298,21 +313,33 @@
                         <th class="sortable" data-sort="size" data-table="orphaned" onclick="sortTable('orphaned', 'size')">
                             Size <span class="sort-icon"></span>
                         </th>
-                        <th>Restore To</th>
+                        <th>Type</th>
+                        <th>Status</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for backup in results.orphaned_plexcached %}
-                    <tr data-filename="{{ backup.original_filename|lower }}" data-size="{{ backup.size }}">
+                    <tr data-filename="{{ backup.original_filename|lower }}" data-size="{{ backup.size }}" data-type="{{ backup.backup_type }}">
                         <td>
-                            <input type="checkbox" class="orphaned-checkbox" value="{{ backup.plexcached_path }}" onchange="toggleOrphanedFile(this)">
+                            <input type="checkbox" class="orphaned-checkbox" value="{{ backup.plexcached_path }}" data-type="{{ backup.backup_type }}" onchange="toggleOrphanedFile(this)">
                         </td>
-                        <td title="{{ backup.plexcached_path }}" style="max-width: 350px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        <td title="{{ backup.plexcached_path }}" style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                             {{ backup.plexcached_path.split('/') | last }}
                         </td>
                         <td class="text-muted">{{ backup.size_display }}</td>
-                        <td class="text-muted" title="{{ backup.restore_path }}" style="max-width: 350px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                            {{ backup.original_filename }}
+                        <td>
+                            {% if backup.backup_type == 'orphaned' %}
+                            <span class="badge badge-warning">Orphaned</span>
+                            {% else %}
+                            <span class="badge badge-info">Redundant</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-muted" style="max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                            {% if backup.backup_type == 'orphaned' %}
+                            <span title="No original on array - restore needed">No original</span>
+                            {% else %}
+                            <span title="Original exists at {{ backup.restore_path }}">Original exists</span>
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}

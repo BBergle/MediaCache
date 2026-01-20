@@ -147,13 +147,14 @@ async def restore_plexcached(
     request: Request,
     paths: List[str] = Form(default=[]),
     restore_all: bool = Form(default=False),
+    orphaned_only: bool = Form(default=False),
     dry_run: bool = Form(default=True)
 ):
     """Restore orphaned .plexcached backups"""
     service = get_maintenance_service()
 
     if restore_all:
-        result = service.restore_all_plexcached(dry_run=dry_run)
+        result = service.restore_all_plexcached(dry_run=dry_run, orphaned_only=orphaned_only)
     else:
         result = service.restore_plexcached(paths, dry_run=dry_run)
 
