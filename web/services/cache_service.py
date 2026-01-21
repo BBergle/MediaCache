@@ -843,6 +843,7 @@ class CacheService:
         eviction_threshold_percent_of_drive = 0
         eviction_over_threshold = False
         eviction_over_by = 0
+        eviction_approaching = False
 
         if cache_limit_bytes > 0:
             eviction_threshold_bytes = int(cache_limit_bytes * eviction_threshold_setting / 100)
@@ -853,6 +854,22 @@ class CacheService:
             if disk_used > eviction_threshold_bytes:
                 eviction_over_threshold = True
                 eviction_over_by = disk_used - eviction_threshold_bytes
+            # Check if approaching threshold (within 90% of threshold)
+            elif disk_used > eviction_threshold_bytes * 0.9:
+                eviction_approaching = True
+
+        # Calculate "other files" (non-PlexCache) usage for stacked bar
+        other_drive_size = max(0, disk_used - total_cached_size)
+        other_drive_percent = calc_percent(other_drive_size, disk_total) if disk_total > 0 else 0
+
+        # Determine cache status for context-aware coloring
+        # "safe" = green, "approaching" = orange, "over" = red
+        if eviction_over_threshold:
+            cache_bar_status = "over"
+        elif eviction_approaching:
+            cache_bar_status = "approaching"
+        else:
+            cache_bar_status = "safe"
 
         # Configuration
         eviction_mode = settings.get("cache_eviction_mode", "none")
@@ -898,8 +915,14 @@ class CacheService:
                 "eviction_threshold_setting": eviction_threshold_setting,
                 "eviction_threshold_percent_of_drive": eviction_threshold_percent_of_drive,
                 "eviction_over_threshold": eviction_over_threshold,
+                "eviction_approaching": eviction_approaching,
                 "eviction_over_by": eviction_over_by,
-                "eviction_over_by_display": self._format_size(eviction_over_by) if eviction_over_by > 0 else None
+                "eviction_over_by_display": self._format_size(eviction_over_by) if eviction_over_by > 0 else None,
+                # Stacked bar data
+                "other_drive_size": other_drive_size,
+                "other_drive_size_display": self._format_size(other_drive_size),
+                "other_drive_percent": other_drive_percent,
+                "cache_bar_status": cache_bar_status  # "safe", "approaching", or "over"
             },
             # Breakdown by source
             "breakdown": {
