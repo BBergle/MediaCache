@@ -45,24 +45,60 @@ logging.addLevelName(SUMMARY, 'SUMMARY')
 
 # Track whether warnings or errors occurred during this run
 # Used to conditionally show summary when notification level is "warning" or "error"
-_had_warnings_or_errors = False
+_had_warnings = False
+_had_errors = False
+_warning_messages = []
+_error_messages = []
 
 
 def reset_warning_error_flag():
-    """Reset the warning/error tracking flag. Call at start of each run."""
-    global _had_warnings_or_errors
-    _had_warnings_or_errors = False
+    """Reset the warning/error tracking flags. Call at start of each run."""
+    global _had_warnings, _had_errors, _warning_messages, _error_messages
+    _had_warnings = False
+    _had_errors = False
+    _warning_messages = []
+    _error_messages = []
 
 
-def mark_warning_or_error():
-    """Mark that a warning or error occurred during this run."""
-    global _had_warnings_or_errors
-    _had_warnings_or_errors = True
+def mark_warning(message: str = None):
+    """Mark that a warning occurred during this run."""
+    global _had_warnings, _warning_messages
+    _had_warnings = True
+    if message and message not in _warning_messages:
+        _warning_messages.append(message)
+
+
+def mark_error(message: str = None):
+    """Mark that an error occurred during this run."""
+    global _had_errors, _error_messages
+    _had_errors = True
+    if message and message not in _error_messages:
+        _error_messages.append(message)
 
 
 def had_warnings_or_errors():
     """Check if any warnings or errors occurred during this run."""
-    return _had_warnings_or_errors
+    return _had_warnings or _had_errors
+
+
+def had_warnings():
+    """Check if any warnings occurred during this run."""
+    return _had_warnings
+
+
+def had_errors():
+    """Check if any errors occurred during this run."""
+    return _had_errors
+
+
+def get_warning_messages():
+    """Get list of warning messages from this run."""
+    return _warning_messages.copy()
+
+
+def get_error_messages():
+    """Get list of error messages from this run."""
+    return _error_messages.copy()
 
 
 class VerboseMessageFilter(logging.Filter):
@@ -120,17 +156,22 @@ class UnraidHandler(logging.Handler):
         if not self.notify_cmd_base:
             return
 
-        # Track if warnings or errors occurred (for conditional summary)
-        if record.levelno >= logging.WARNING and record.levelno != SUMMARY:
-            mark_warning_or_error()
+        # Track warnings and errors separately (for conditional summary)
+        if record.levelno >= logging.ERROR and record.levelno != SUMMARY:
+            mark_error(record.getMessage())
+        elif record.levelno >= logging.WARNING and record.levelno != SUMMARY:
+            mark_warning(record.getMessage())
 
         if record.levelno == SUMMARY:
             # Send summary if:
             # 1. "summary" is explicitly enabled, OR
-            # 2. "warning" or "error" is enabled AND warnings/errors occurred this run
+            # 2. "warning" is enabled AND warnings/errors occurred, OR
+            # 3. "error" is enabled AND errors occurred (not just warnings)
             should_send = "summary" in self.enabled_levels
-            if not should_send and ("warning" in self.enabled_levels or "error" in self.enabled_levels):
+            if not should_send and "warning" in self.enabled_levels:
                 should_send = had_warnings_or_errors()
+            if not should_send and "error" in self.enabled_levels:
+                should_send = had_errors()
             if should_send:
                 self.send_summary_unraid_notification(record)
         elif record.levelno >= logging.ERROR:
@@ -222,18 +263,23 @@ class WebhookHandler(logging.Handler):
         self._summary_data = data
 
     def emit(self, record):
-        # Track if warnings or errors occurred (for conditional summary)
-        if record.levelno >= logging.WARNING and record.levelno != SUMMARY:
-            mark_warning_or_error()
+        # Track warnings and errors separately (for conditional summary)
+        if record.levelno >= logging.ERROR and record.levelno != SUMMARY:
+            mark_error(record.getMessage())
+        elif record.levelno >= logging.WARNING and record.levelno != SUMMARY:
+            mark_warning(record.getMessage())
 
         # Check which notification types are enabled
         if record.levelno == SUMMARY:
             # Send summary if:
             # 1. "summary" is explicitly enabled, OR
-            # 2. "warning" or "error" is enabled AND warnings/errors occurred this run
+            # 2. "warning" is enabled AND warnings/errors occurred, OR
+            # 3. "error" is enabled AND errors occurred (not just warnings)
             should_send = "summary" in self.enabled_levels
-            if not should_send and ("warning" in self.enabled_levels or "error" in self.enabled_levels):
+            if not should_send and "warning" in self.enabled_levels:
                 should_send = had_warnings_or_errors()
+            if not should_send and "error" in self.enabled_levels:
+                should_send = had_errors()
             if should_send:
                 self._send_summary(record)
         elif record.levelno >= logging.ERROR:
@@ -378,6 +424,36 @@ class WebhookHandler(logging.Handler):
             fields.append({
                 "name": "Summary",
                 "value": record.msg or "No files moved",
+                "inline": False
+            })
+
+        # Add errors/warnings if any occurred (include in summary notification)
+        error_msgs = get_error_messages()
+        warning_msgs = get_warning_messages()
+
+        if error_msgs or warning_msgs:
+            # Add spacer before issues
+            fields.append({"name": "\u200b", "value": "\u200b", "inline": False})
+
+        if error_msgs:
+            # Truncate long messages and limit count
+            error_text = "\n".join(f"• {msg[:100]}{'...' if len(msg) > 100 else ''}" for msg in error_msgs[:3])
+            if len(error_msgs) > 3:
+                error_text += f"\n... and {len(error_msgs) - 3} more"
+            fields.append({
+                "name": f"❌ Errors ({len(error_msgs)})",
+                "value": error_text,
+                "inline": False
+            })
+
+        if warning_msgs:
+            # Truncate long messages and limit count
+            warning_text = "\n".join(f"• {msg[:100]}{'...' if len(msg) > 100 else ''}" for msg in warning_msgs[:3])
+            if len(warning_msgs) > 3:
+                warning_text += f"\n... and {len(warning_msgs) - 3} more"
+            fields.append({
+                "name": f"⚠️ Warnings ({len(warning_msgs)})",
+                "value": warning_text,
                 "inline": False
             })
 
