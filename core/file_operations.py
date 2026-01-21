@@ -2988,6 +2988,38 @@ class FileMover:
 
         return cache_path
 
+    def _translate_from_host_path(self, host_path: str) -> str:
+        """Translate host cache path back to container cache path.
+
+        Reverse of _translate_to_host_path. Used when reading entries from the
+        exclude file (which are in host path format) and needing to check file
+        existence inside the container.
+
+        Args:
+            host_path: The host path (as stored in exclude file)
+
+        Returns:
+            The container path for file operations, or original if no translation needed
+        """
+        if not self.path_modifier:
+            return host_path
+
+        path_mappings = getattr(self.path_modifier, 'mappings', [])
+
+        for mapping in path_mappings:
+            if not mapping.cache_path or not mapping.host_cache_path:
+                continue
+            if mapping.cache_path == mapping.host_cache_path:
+                continue  # No translation needed
+
+            host_prefix = mapping.host_cache_path.rstrip('/')
+            if host_path.startswith(host_prefix):
+                cache_prefix = mapping.cache_path.rstrip('/')
+                translated = host_path.replace(host_prefix, cache_prefix, 1)
+                return translated
+
+        return host_path
+
     def _add_to_exclude_file(self, cache_file_name: str) -> None:
         """Add a file to the exclude list (thread-safe).
 
@@ -3072,9 +3104,10 @@ class FileMover:
                         continue
 
                     # Check if same media identity but file no longer exists
-                    # Note: entry is in host path format, but media identity uses filename only
+                    # Note: entry is in host path format, need container path for existence check
                     entry_identity = get_media_identity(entry)
-                    if entry_identity == current_identity and not os.path.exists(entry):
+                    container_path = self._translate_from_host_path(entry)
+                    if entry_identity == current_identity and not os.path.exists(container_path):
                         stale_entries.append(entry)
 
                 if stale_entries:
