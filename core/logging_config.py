@@ -153,13 +153,38 @@ class UnraidHandler(logging.Handler):
 
     def __init__(self, enabled_levels: Optional[List[str]] = None):
         super().__init__()
-        self.notify_cmd_base = "/usr/local/emhttp/webGui/scripts/notify"
+        # Check both possible locations for the Unraid notify script
+        notify_paths = [
+            "/usr/local/emhttp/plugins/dynamix/scripts/notify",  # Current Unraid location
+            "/usr/local/emhttp/webGui/scripts/notify",  # Legacy location
+        ]
+        self.notify_cmd_base = None
+        self._use_php_wrapper = False
+
+        for path in notify_paths:
+            if os.path.isfile(path):
+                self.notify_cmd_base = path
+                # Check if script uses PHP short open tag (<?), which requires php -d short_open_tag=1
+                # The shebang is on line 1, so check the first few lines for <?
+                try:
+                    with open(path, 'r') as f:
+                        for _ in range(5):  # Check first 5 lines
+                            line = f.readline()
+                            if line.startswith('<?php'):
+                                break  # Full tag, no wrapper needed
+                            if line.startswith('<?'):
+                                self._use_php_wrapper = True
+                                break
+                except Exception:
+                    pass
+                break
+
         self._summary_data: Optional[dict] = None
         # List of enabled notification types: "summary", "error", "warning"
         self.enabled_levels = enabled_levels if enabled_levels else ["summary"]
-        if not os.path.isfile(self.notify_cmd_base) or not os.access(self.notify_cmd_base, os.X_OK):
-            logging.warning(f"{self.notify_cmd_base} does not exist or is not executable. Unraid notifications will not be sent.")
-            self.notify_cmd_base = None
+        if not self.notify_cmd_base:
+            logging.warning("Unraid notify script not found. Unraid notifications will not be sent. "
+                          "For Docker, mount: /usr/local/emhttp/plugins/dynamix/scripts/notify")
 
     def set_summary_data(self, data: dict) -> None:
         """Set structured summary data for checking errors-only mode."""
@@ -199,9 +224,89 @@ class UnraidHandler(logging.Handler):
             if "warning" in self.enabled_levels:
                 self.send_unraid_notification(record)
 
+    def _build_notify_cmd(self, event: str, subject: str, description: str, icon: str) -> str:
+        """Build the notify command, using PHP wrapper if needed for short open tags."""
+        # Escape double quotes in the description to prevent command injection
+        description = description.replace('"', '\\"')
+        subject = subject.replace('"', '\\"')
+
+        if self._use_php_wrapper:
+            # Script uses <? short tag, need to run via php with short_open_tag enabled
+            return f'php -d short_open_tag=1 {self.notify_cmd_base} -e "{event}" -s "{subject}" -d "{description}" -i "{icon}"'
+        else:
+            return f'{self.notify_cmd_base} -e "{event}" -s "{subject}" -d "{description}" -i "{icon}"'
+
+    def _format_bytes(self, bytes_value: int) -> str:
+        """Format bytes into human-readable string."""
+        if bytes_value < 1024:
+            return f"{bytes_value} B"
+        elif bytes_value < 1024 * 1024:
+            return f"{bytes_value / 1024:.1f} KB"
+        elif bytes_value < 1024 * 1024 * 1024:
+            return f"{bytes_value / (1024 * 1024):.2f} MB"
+        else:
+            return f"{bytes_value / (1024 * 1024 * 1024):.2f} GB"
+
+    def _format_duration(self, seconds: float) -> str:
+        """Format duration into human-readable string."""
+        if seconds < 60:
+            return f"{int(seconds)}s"
+        elif seconds < 3600:
+            mins = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{mins}m {secs}s" if secs > 0 else f"{mins}m"
+        else:
+            hours = int(seconds // 3600)
+            mins = int((seconds % 3600) // 60)
+            return f"{hours}h {mins}m" if mins > 0 else f"{hours}h"
+
     def send_summary_unraid_notification(self, record):
         icon = 'normal'
-        notify_cmd = f'{self.notify_cmd_base} -e "PlexCache" -s "Summary" -d "{record.msg}" -i "{icon}"'
+
+        # Build detailed description from summary data
+        if self._summary_data:
+            data = self._summary_data
+            parts = []
+
+            # Dry run prefix
+            if data.get('dry_run'):
+                parts.append("[DRY RUN]")
+
+            # Cached files
+            if data.get('cached_count', 0) > 0:
+                cached_str = f"Cached: {data['cached_count']} file{'s' if data['cached_count'] != 1 else ''}"
+                if data.get('cached_bytes', 0) > 0:
+                    cached_str += f" ({self._format_bytes(data['cached_bytes'])})"
+                parts.append(cached_str)
+
+            # Restored files
+            if data.get('restored_count', 0) > 0:
+                restored_str = f"Restored: {data['restored_count']} file{'s' if data['restored_count'] != 1 else ''}"
+                if data.get('restored_bytes', 0) > 0:
+                    restored_str += f" ({self._format_bytes(data['restored_bytes'])})"
+                parts.append(restored_str)
+
+            # Already cached
+            if data.get('already_cached', 0) > 0:
+                parts.append(f"Already cached: {data['already_cached']} files")
+
+            # Duration
+            if data.get('duration_seconds', 0) > 0:
+                parts.append(f"Duration: {self._format_duration(data['duration_seconds'])}")
+
+            # Status
+            if data.get('had_errors'):
+                icon = 'alert'
+                parts.append("Errors occurred!")
+            elif data.get('had_warnings'):
+                icon = 'warning'
+                parts.append("Warnings occurred")
+
+            description = " | ".join(parts) if parts else record.msg
+        else:
+            description = record.msg
+
+        notify_cmd = self._build_notify_cmd("PlexCache", "Summary", description, icon)
         subprocess.call(notify_cmd, shell=True)
 
     def send_unraid_notification(self, record):
@@ -215,11 +320,7 @@ class UnraidHandler(logging.Handler):
         }
 
         icon = level_to_icon.get(record.levelname, 'normal')
-
-        # Prepare the command with necessary arguments
-        notify_cmd = f'{self.notify_cmd_base} -e "PlexCache" -s "{record.levelname}" -d "{record.msg}" -i "{icon}"'
-
-        # Execute the command
+        notify_cmd = self._build_notify_cmd("PlexCache", record.levelname, record.msg, icon)
         subprocess.call(notify_cmd, shell=True)
 
 
@@ -774,14 +875,13 @@ class LoggingManager:
         notification_type = notification_config.notification_type.lower()
         
         # Determine notification type
+        # "system" = auto-detect: use Unraid if available (non-Docker), otherwise nothing
+        # "both", "unraid", "webhook" = explicit selection (handlers self-check availability)
         if notification_type == "system":
             if is_unraid and not is_docker:
                 notification_type = "unraid"
             else:
                 notification_type = ""
-        elif notification_type == "both":
-            if is_unraid and is_docker:
-                notification_type = "webhook"
         
         # Set up Unraid handler
         if notification_type in ["both", "unraid"]:
