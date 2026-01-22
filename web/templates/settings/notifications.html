@@ -36,6 +36,12 @@
                         <span class="form-hint" style="margin-left: 0.5rem; font-weight: normal;">Send summary after each run</span>
                     </label>
                     <label class="checkbox-label">
+                        <input type="checkbox" name="unraid_levels" value="activity"
+                               {% if 'activity' in settings.unraid_levels %}checked{% endif %}>
+                        <span>Activity</span>
+                        <span class="form-hint" style="margin-left: 0.5rem; font-weight: normal;">Send summary only when files are moved</span>
+                    </label>
+                    <label class="checkbox-label">
                         <input type="checkbox" name="unraid_levels" value="error"
                                {% if 'error' in settings.unraid_levels or settings.unraid_level == 'error' %}checked{% endif %}>
                         <span>Errors</span>
@@ -89,6 +95,12 @@
                                {% if 'summary' in settings.webhook_levels or (settings.webhook_level == 'summary' and not settings.webhook_levels) %}checked{% endif %}>
                         <span>Summary</span>
                         <span class="form-hint" style="margin-left: 0.5rem; font-weight: normal;">Send summary after each run</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="webhook_levels" value="activity"
+                               {% if 'activity' in settings.webhook_levels %}checked{% endif %}>
+                        <span>Activity</span>
+                        <span class="form-hint" style="margin-left: 0.5rem; font-weight: normal;">Send summary only when files are moved</span>
                     </label>
                     <label class="checkbox-label">
                         <input type="checkbox" name="webhook_levels" value="error"

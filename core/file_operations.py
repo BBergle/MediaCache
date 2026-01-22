@@ -3428,6 +3428,7 @@ class FileMover:
 
             # Log successful move - both to logging (for web UI) and tqdm (for CLI progress bar)
             from tqdm import tqdm
+            from core.logging_config import mark_file_activity
             file_size = os.path.getsize(cache_file_name)
             size_str = format_bytes(file_size)
             display_name = os.path.basename(cache_file_name)
@@ -3435,6 +3436,9 @@ class FileMover:
             logging.info(f"  [Cached] {display_name} ({size_str})")
             with get_console_lock():
                 tqdm.write(f"Successfully cached: {display_name} ({size_str})")
+
+            # Mark that file activity occurred (for notification level filtering)
+            mark_file_activity()
 
             return 0
         except Exception as e:
@@ -3760,6 +3764,10 @@ class FileMover:
                 except OSError:
                     size_str = "-"
                 logging.info(f"  [{operation_type}] {display_name} ({size_str})")
+
+                # Mark that file activity occurred (for notification level filtering)
+                from core.logging_config import mark_file_activity
+                mark_file_activity()
 
                 return 0
             else:

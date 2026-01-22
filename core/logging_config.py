@@ -47,15 +47,17 @@ logging.addLevelName(SUMMARY, 'SUMMARY')
 # Used to conditionally show summary when notification level is "warning" or "error"
 _had_warnings = False
 _had_errors = False
+_had_file_activity = False  # Track if any files were moved (cached or restored)
 _warning_messages = []
 _error_messages = []
 
 
 def reset_warning_error_flag():
-    """Reset the warning/error tracking flags. Call at start of each run."""
-    global _had_warnings, _had_errors, _warning_messages, _error_messages
+    """Reset the warning/error/activity tracking flags. Call at start of each run."""
+    global _had_warnings, _had_errors, _had_file_activity, _warning_messages, _error_messages
     _had_warnings = False
     _had_errors = False
+    _had_file_activity = False
     _warning_messages = []
     _error_messages = []
 
@@ -89,6 +91,17 @@ def had_warnings():
 def had_errors():
     """Check if any errors occurred during this run."""
     return _had_errors
+
+
+def mark_file_activity():
+    """Mark that files were moved (cached or restored) during this run."""
+    global _had_file_activity
+    _had_file_activity = True
+
+
+def had_file_activity():
+    """Check if any files were moved during this run."""
+    return _had_file_activity
 
 
 def get_warning_messages():
@@ -165,9 +178,12 @@ class UnraidHandler(logging.Handler):
         if record.levelno == SUMMARY:
             # Send summary if:
             # 1. "summary" is explicitly enabled, OR
-            # 2. "warning" is enabled AND warnings/errors occurred, OR
-            # 3. "error" is enabled AND errors occurred (not just warnings)
+            # 2. "activity" is enabled AND files were moved, OR
+            # 3. "warning" is enabled AND warnings/errors occurred, OR
+            # 4. "error" is enabled AND errors occurred (not just warnings)
             should_send = "summary" in self.enabled_levels
+            if not should_send and "activity" in self.enabled_levels:
+                should_send = had_file_activity()
             if not should_send and "warning" in self.enabled_levels:
                 should_send = had_warnings_or_errors()
             if not should_send and "error" in self.enabled_levels:
@@ -273,9 +289,12 @@ class WebhookHandler(logging.Handler):
         if record.levelno == SUMMARY:
             # Send summary if:
             # 1. "summary" is explicitly enabled, OR
-            # 2. "warning" is enabled AND warnings/errors occurred, OR
-            # 3. "error" is enabled AND errors occurred (not just warnings)
+            # 2. "activity" is enabled AND files were moved, OR
+            # 3. "warning" is enabled AND warnings/errors occurred, OR
+            # 4. "error" is enabled AND errors occurred (not just warnings)
             should_send = "summary" in self.enabled_levels
+            if not should_send and "activity" in self.enabled_levels:
+                should_send = had_file_activity()
             if not should_send and "warning" in self.enabled_levels:
                 should_send = had_warnings_or_errors()
             if not should_send and "error" in self.enabled_levels:
@@ -817,11 +836,17 @@ class LoggingManager:
         """Get enabled notification levels, with backward compatibility for legacy config.
 
         Args:
-            levels_list: New list-based config (e.g., ["summary", "error"])
+            levels_list: New list-based config (e.g., ["summary", "error", "activity"])
             legacy_level: Old string-based config (e.g., "summary", "error", "warning")
 
         Returns:
             List of enabled levels
+
+        Available levels:
+            - "summary": Always send summary after each run
+            - "activity": Only send summary when files were moved (cached or restored)
+            - "warning": Send summary when warnings or errors occurred
+            - "error": Send summary only when errors occurred (not just warnings)
         """
         # If new list config is provided and not empty, use it
         if levels_list:
@@ -834,6 +859,7 @@ class LoggingManager:
         legacy_level = legacy_level.lower()
 
         # Convert legacy level to list format
+        # Note: "activity" is not part of legacy conversion (new feature)
         # "summary" -> ["summary"] (only summary)
         # "error" -> ["error"] (only errors, no summary)
         # "warning" -> ["warning", "error"] (warnings and errors)
