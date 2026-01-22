@@ -24,7 +24,7 @@ The original PlexCache app only worked for local users for most features, due to
 - (New v2) - Cache retention policies, with automatic removals based on age/priority settings.
 - (New v3) - **Web UI Dashboard** - Browser-based interface for monitoring and configuration.
 - (New v3) - **Scheduled Runs** - Automatic execution with interval or cron scheduling.
-- (New v3) - **Enhanced Webhooks** - Discord and Slack rich message formatting (summary-only to prevent spam).
+- (New v3) - **Enhanced Webhooks** - Discord and Slack rich message formatting with granular notification levels (Summary, Activity, Errors, Warnings).
 - (New v3) - **Stop Button** - Abort running operations gracefully from the Web UI.
 - (New v3) - **Smart Error Handling** - Migration stops early on critical errors (disk full, permissions).
 - Move watched media present on the cache drive back to the array.
@@ -35,7 +35,7 @@ The original PlexCache app only worked for local users for most features, due to
 - Use caching system to avoid wastful memory usage and cpu cycles.
 - Use of multitasking to optimize file transfer time.
 - Exit the script if any active session or skip the currently playing media.
-- Send Webhook messages according to set log level (untested).
+- Send Webhook/Unraid notifications with configurable trigger levels.
 - (New v2) - Unraid Mover exclusion file. This file also allows for manual custom entries. 
 
 
