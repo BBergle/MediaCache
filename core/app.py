@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import List, Set, Optional, Tuple
 import os
 
+from core import __version__
 from core.config import ConfigManager
 from core.logging_config import LoggingManager, reset_warning_error_flag
 from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock, get_disk_usage
@@ -282,7 +283,9 @@ class PlexCacheApp:
         )
         self.logging_manager.setup_logging()
         logging.info("")
-        logging.info("=== PlexCache-R ===")
+        # Log version and build info for debugging
+        build_commit = os.environ.get('GIT_COMMIT', 'dev')
+        logging.info(f"=== PlexCache-R v{__version__} (build: {build_commit}) ===")
 
     def _setup_notification_handlers(self) -> None:
         """Set up notification handlers after config is loaded."""

@@ -10,12 +10,16 @@ LABEL org.opencontainers.image.url="https://github.com/StudioNirin/PlexCache-R"
 LABEL org.opencontainers.image.source="https://github.com/StudioNirin/PlexCache-R"
 LABEL org.opencontainers.image.vendor="Brandon Haney"
 
+# Build args for version tracking
+ARG GIT_COMMIT=unknown
+
 # Environment defaults
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     TZ=America/Los_Angeles \
     WEB_PORT=5757 \
-    LOG_LEVEL=INFO
+    LOG_LEVEL=INFO \
+    GIT_COMMIT=$GIT_COMMIT
 
 # Install system dependencies
 # php-cli is needed for Unraid's notify script (optional mount for Unraid notifications)

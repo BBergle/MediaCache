@@ -3,5 +3,5 @@
 This package contains the core application modules for PlexCache-R.
 """
 
-__version__ = "2.1.0"
+__version__ = "3.1.0"
 __author__ = "StudioNirin"
