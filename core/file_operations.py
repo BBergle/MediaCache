@@ -3781,18 +3781,23 @@ class FileMover:
                     cache_size = os.path.getsize(cache_file)
                     # For Docker: translate cache path to host path for log display
                     display_src = self._translate_to_host_path(cache_file) if self.file_utils.is_docker else None
+                    # CRITICAL: Copy to /mnt/user0/ (array direct), NOT /mnt/user/ (FUSE)
+                    # If we copy to /mnt/user/, Unraid's cache policy may put the file
+                    # back on cache (if shareUseCache=yes), causing data loss
+                    array_direct_file = get_array_direct_path(array_file)
+                    array_direct_dir = os.path.dirname(array_direct_file)
+                    os.makedirs(array_direct_dir, exist_ok=True)
                     self.file_utils.copy_file_with_permissions(
-                        cache_file, array_file, verbose=True, display_src=display_src
+                        cache_file, array_direct_file, verbose=True, display_src=display_src
                     )
-                    logging.debug(f"Copied to array: {array_file}")
+                    logging.debug(f"Copied to array: {array_direct_file}")
 
                     # Verify copy succeeded by comparing file sizes
-                    # Use array-direct path to confirm file actually landed on array
-                    if os.path.isfile(get_array_direct_path(array_file)):
-                        array_size = os.path.getsize(get_array_direct_path(array_file))
+                    if os.path.isfile(array_direct_file):
+                        array_size = os.path.getsize(array_direct_file)
                         if cache_size != array_size:
                             logging.error(f"Size mismatch after copy! Cache: {cache_size}, Array: {array_size}. Keeping cache file.")
-                            os.remove(array_file)
+                            os.remove(array_direct_file)
                             return 1
 
             # Delete cache copy only if array file truly exists on array

@@ -1445,17 +1445,22 @@ class CacheService:
                 # No backup and no array copy - must copy from cache first to prevent data loss
                 if array_path:
                     import shutil
-                    array_dir = os.path.dirname(array_path)
-                    os.makedirs(array_dir, exist_ok=True)
-                    shutil.copy2(cache_path, array_path)
-                    # Verify copy succeeded
-                    if os.path.exists(array_path):
+                    # CRITICAL: Copy to /mnt/user0/ (array direct), NOT /mnt/user/ (FUSE)
+                    # If we copy to /mnt/user/, Unraid's cache policy may put the file
+                    # back on cache (if shareUseCache=yes), causing data loss when we
+                    # delete the "original" cache file.
+                    array_direct_path = get_array_direct_path(array_path)
+                    array_direct_dir = os.path.dirname(array_direct_path)
+                    os.makedirs(array_direct_dir, exist_ok=True)
+                    shutil.copy2(cache_path, array_direct_path)
+                    # Verify copy succeeded on array
+                    if os.path.exists(array_direct_path):
                         cache_size = os.path.getsize(cache_path)
-                        array_size = os.path.getsize(array_path)
+                        array_size = os.path.getsize(array_direct_path)
                         if cache_size == array_size:
                             array_confirmed = True
                         else:
-                            os.remove(array_path)  # Remove failed copy
+                            os.remove(array_direct_path)  # Remove failed copy
                             result["message"] = "Size mismatch during copy - eviction aborted to prevent data loss"
                             return result
                     else:

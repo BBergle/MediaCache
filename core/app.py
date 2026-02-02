@@ -1668,10 +1668,13 @@ class PlexCacheApp:
                             if os.path.exists(cache_path):
                                 import shutil
                                 try:
-                                    # Ensure array directory exists
-                                    os.makedirs(array_dir, exist_ok=True)
-                                    shutil.copy2(cache_path, array_path)
-                                    logging.info(f"Created array copy before eviction: {os.path.basename(array_path)}")
+                                    # CRITICAL: Copy to /mnt/user0/ (array direct), NOT /mnt/user/ (FUSE)
+                                    # If we copy to /mnt/user/, Unraid's cache policy may put the file
+                                    # back on cache (if shareUseCache=yes), causing data loss
+                                    array_direct_dir = os.path.dirname(array_direct_path)
+                                    os.makedirs(array_direct_dir, exist_ok=True)
+                                    shutil.copy2(cache_path, array_direct_path)
+                                    logging.info(f"Created array copy before eviction: {os.path.basename(array_direct_path)}")
                                     # Verify copy succeeded using array-direct path
                                     if os.path.exists(array_direct_path):
                                         cache_size = os.path.getsize(cache_path)
@@ -1680,7 +1683,7 @@ class PlexCacheApp:
                                             array_restored = True
                                         else:
                                             logging.error(f"Size mismatch! Skipping eviction to prevent data loss.")
-                                            os.remove(array_path)
+                                            os.remove(array_direct_path)
                                             continue
                                     else:
                                         logging.error(f"Copy appeared to succeed but file not found on array. Skipping eviction.")
