@@ -3229,47 +3229,84 @@ class FileMover:
             # Reset stop flag for this batch
             self._stop_requested = False
             stopped_early = False
+            cancelled_count = 0
 
             with tqdm(total=total_count, desc=f"Moving to {destination} (0 B / {total_size_str})",
                       unit="file", bar_format="{l_bar}{bar:20}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
                       mininterval=0.5, ncols=80, file=sys.stdout) as pbar:
                 self._tqdm_pbar = pbar
 
-                from functools import partial
+                from concurrent.futures import wait, FIRST_COMPLETED
                 results = []
+
                 with ThreadPoolExecutor(max_workers=max_concurrent_moves) as executor:
-                    # Submit tasks one at a time, checking for stop between each
-                    futures = []
-                    for move_cmd in move_commands:
-                        # Check if stop requested (via callback or direct flag)
+                    # Throttled submission: only keep max_workers tasks in flight
+                    # This allows stop requests to take effect quickly
+                    pending = set()
+                    cmd_iter = iter(move_commands)
+                    all_submitted = False
+
+                    while True:
+                        # Check for stop request
                         if self._stop_check and self._stop_check():
                             self._stop_requested = True
                         if self._stop_requested:
                             stopped_early = True
-                            logging.info("Stop requested - cancelling remaining file moves")
+                            # Cancel any pending (not-yet-started) futures
+                            for f in pending:
+                                if f.cancel():
+                                    cancelled_count += 1
+                            logging.info(f"Stop requested - cancelling remaining file moves")
                             break
-                        future = executor.submit(self._move_file, move_cmd, destination)
-                        futures.append(future)
 
-                    # Collect results from submitted futures
-                    for future in as_completed(futures):
-                        try:
-                            results.append(future.result())
-                        except Exception as e:
-                            logging.error(f"Move task failed: {e}")
-                            results.append(1)  # Error code
+                        # Submit new tasks up to max_workers (only if not all submitted)
+                        while not all_submitted and len(pending) < max_concurrent_moves:
+                            try:
+                                move_cmd = next(cmd_iter)
+                                future = executor.submit(self._move_file, move_cmd, destination)
+                                pending.add(future)
+                            except StopIteration:
+                                all_submitted = True
+                                break
+
+                        # Exit if no pending tasks
+                        if not pending:
+                            break
+
+                        # Wait for at least one task to complete (with 1s timeout for stop checks)
+                        done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+                        for future in done:
+                            try:
+                                results.append(future.result())
+                            except Exception as e:
+                                logging.error(f"Move task failed: {e}")
+                                results.append(1)  # Error code
+
+                    # Collect any remaining results if we stopped early
+                    if stopped_early and pending:
+                        # Wait briefly for in-progress tasks to finish
+                        done, still_pending = wait(pending, timeout=0.1)
+                        for future in done:
+                            try:
+                                results.append(future.result())
+                            except Exception as e:
+                                results.append(1)
 
                 errors = [result for result in results if result == 1]
                 partial_successes = [result for result in results if result == 2]
                 skipped_space = [result for result in results if result == 3]
+                stopped_copies = [result for result in results if result == 4]
 
             self._tqdm_pbar = None
 
             # Build summary message based on what happened
             issues = []
             if stopped_early:
-                skipped = total_count - len(results)
-                issues.append(f"stopped early ({skipped} skipped)")
+                skipped = total_count - len(results) - cancelled_count
+                if skipped > 0 or cancelled_count > 0:
+                    issues.append(f"stopped ({cancelled_count} cancelled, {skipped} skipped)")
+            if stopped_copies:
+                issues.append(f"{len(stopped_copies)} copies cancelled mid-transfer")
             if errors:
                 issues.append(f"{len(errors)} errors")
             if partial_successes:
@@ -3383,8 +3420,18 @@ class FileMover:
             # For Docker: translate cache path to host path for log display
             display_dest = self._translate_to_host_path(cache_file_name) if self.file_utils.is_docker else None
             logging.debug(f"Starting copy: {array_file} -> {display_dest or cache_file_name}")
+
+            # Build stop check that checks both callback and direct flag
+            def combined_stop_check():
+                if self._stop_requested:
+                    return True
+                if self._stop_check and self._stop_check():
+                    return True
+                return False
+
             self.file_utils.copy_file_with_permissions(
-                array_file, cache_file_name, verbose=True, display_dest=display_dest
+                array_file, cache_file_name, verbose=True, display_dest=display_dest,
+                stop_check=combined_stop_check
             )
             logging.debug(f"Copy complete: {os.path.basename(array_file)}")
 
@@ -3498,6 +3545,11 @@ class FileMover:
             mark_file_activity()
 
             return 0
+        except InterruptedError as e:
+            # Copy was cancelled by stop request - clean up partial file
+            logging.info(f"Copy cancelled (stop requested): {os.path.basename(cache_file_name)}")
+            self._cleanup_failed_cache_copy(array_file, cache_file_name)
+            return 4  # Stopped by user
         except Exception as e:
             logging.error(f"Error copying to cache: {type(e).__name__}: {e}")
             # Attempt cleanup on failure
@@ -3720,8 +3772,18 @@ class FileMover:
                     os.remove(plexcached_file)
                     # For Docker: translate cache path to host path for log display
                     display_src = self._translate_to_host_path(cache_file) if self.file_utils.is_docker else None
+
+                    # Build stop check for cancellable copy
+                    def combined_stop_check():
+                        if self._stop_requested:
+                            return True
+                        if self._stop_check and self._stop_check():
+                            return True
+                        return False
+
                     self.file_utils.copy_file_with_permissions(
-                        cache_file, array_file, verbose=True, display_src=display_src
+                        cache_file, array_file, verbose=True, display_src=display_src,
+                        stop_check=combined_stop_check
                     )
                     logging.debug(f"Copied upgraded file to array: {array_file}")
 
@@ -3768,8 +3830,18 @@ class FileMover:
                     cache_size = os.path.getsize(cache_file)
                     # For Docker: translate cache path to host path for log display
                     display_src = self._translate_to_host_path(cache_file) if self.file_utils.is_docker else None
+
+                    # Build stop check for cancellable copy
+                    def combined_stop_check():
+                        if self._stop_requested:
+                            return True
+                        if self._stop_check and self._stop_check():
+                            return True
+                        return False
+
                     self.file_utils.copy_file_with_permissions(
-                        cache_file, array_file, verbose=True, display_src=display_src
+                        cache_file, array_file, verbose=True, display_src=display_src,
+                        stop_check=combined_stop_check
                     )
                     logging.debug(f"Copied upgraded file to array: {array_file}")
 
@@ -3795,8 +3867,18 @@ class FileMover:
                     array_direct_file = get_array_direct_path(array_file)
                     array_direct_dir = os.path.dirname(array_direct_file)
                     os.makedirs(array_direct_dir, exist_ok=True)
+
+                    # Build stop check for cancellable copy
+                    def combined_stop_check():
+                        if self._stop_requested:
+                            return True
+                        if self._stop_check and self._stop_check():
+                            return True
+                        return False
+
                     self.file_utils.copy_file_with_permissions(
-                        cache_file, array_direct_file, verbose=True, display_src=display_src
+                        cache_file, array_direct_file, verbose=True, display_src=display_src,
+                        stop_check=combined_stop_check
                     )
                     logging.debug(f"Copied to array: {array_direct_file}")
 
@@ -3842,6 +3924,23 @@ class FileMover:
                 logging.error(f"Failed to create array file: {array_file}")
                 return 1
 
+        except InterruptedError as e:
+            # Copy was cancelled by stop request - clean up partial array file
+            logging.info(f"Copy cancelled (stop requested): {os.path.basename(cache_file)}")
+            # Try to clean up partial array file if it exists
+            if 'array_direct_file' in dir() and os.path.isfile(array_direct_file):
+                try:
+                    os.remove(array_direct_file)
+                    logging.debug(f"Cleaned up partial array file: {array_direct_file}")
+                except OSError:
+                    pass
+            elif os.path.isfile(array_file):
+                try:
+                    os.remove(array_file)
+                    logging.debug(f"Cleaned up partial array file: {array_file}")
+                except OSError:
+                    pass
+            return 4  # Stopped by user
         except Exception as e:
             logging.error(f"Error restoring to array: {type(e).__name__}: {e}")
             return 1

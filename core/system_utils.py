@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import atexit
 import fcntl
-from typing import Tuple, Optional, NamedTuple
+from typing import Tuple, Optional, NamedTuple, Callable
 import logging
 
 
@@ -428,7 +428,9 @@ class FileUtils:
         dest: str,
         verbose: bool = False,
         display_src: str = None,
-        display_dest: str = None
+        display_dest: str = None,
+        stop_check: Callable[[], bool] = None,
+        chunk_size: int = 10 * 1024 * 1024  # 10MB chunks for stop checks
     ) -> int:
         """Copy a file preserving original ownership and permissions (Linux only).
 
@@ -438,9 +440,17 @@ class FileUtils:
             verbose: If True, log detailed ownership info
             display_src: Optional path to show in logs instead of src (for Docker host paths)
             display_dest: Optional path to show in logs instead of dest (for Docker host paths)
+            stop_check: Optional callback that returns True if copy should be cancelled.
+                        Checked between chunks to allow mid-copy cancellation.
+            chunk_size: Size of chunks for copy (default 10MB). Smaller = more responsive
+                        to stop requests but slightly slower copy speed.
 
         If PUID/PGID environment variables are set, those values are used for ownership.
         Otherwise, the source file's ownership is preserved.
+
+        Raises:
+            InterruptedError: If stop_check returns True during copy (copy cancelled).
+            RuntimeError: If copy fails for other reasons.
         """
         # Use display paths for logging if provided (Docker shows host paths)
         log_src = display_src or src
@@ -459,8 +469,23 @@ class FileUtils:
                 target_uid = self.puid if self.puid is not None else src_uid
                 target_gid = self.pgid if self.pgid is not None else src_gid
 
-                # Copy the file (preserves metadata like timestamps)
-                shutil.copy2(src, dest)
+                # Chunked copy with stop check support
+                # This allows cancelling mid-copy for large files
+                with open(src, 'rb') as fsrc:
+                    with open(dest, 'wb') as fdest:
+                        while True:
+                            # Check for stop request between chunks
+                            if stop_check and stop_check():
+                                logging.debug(f"Copy cancelled by stop request: {log_dest}")
+                                raise InterruptedError("Copy cancelled by user request")
+
+                            chunk = fsrc.read(chunk_size)
+                            if not chunk:
+                                break
+                            fdest.write(chunk)
+
+                # Copy metadata (timestamps, etc.) - equivalent to what copy2 does
+                shutil.copystat(src, dest)
 
                 # Set ownership and permissions (shutil.copy2 doesn't preserve uid/gid)
                 original_umask = os.umask(0)
@@ -484,10 +509,27 @@ class FileUtils:
                 else:
                     logging.debug(f"File copied with permissions preserved: {log_dest}")
             else:  # Windows logic
-                shutil.copy2(src, dest)
+                # Windows: use chunked copy for stop check support
+                if stop_check:
+                    with open(src, 'rb') as fsrc:
+                        with open(dest, 'wb') as fdest:
+                            while True:
+                                if stop_check and stop_check():
+                                    logging.debug(f"Copy cancelled by stop request: {log_dest}")
+                                    raise InterruptedError("Copy cancelled by user request")
+                                chunk = fsrc.read(chunk_size)
+                                if not chunk:
+                                    break
+                                fdest.write(chunk)
+                    shutil.copystat(src, dest)
+                else:
+                    shutil.copy2(src, dest)
                 logging.debug(f"File copied (Windows): {log_src} -> {log_dest}")
 
             return 0
+        except InterruptedError:
+            # Re-raise interruption so caller can handle cleanup
+            raise
         except (FileNotFoundError, PermissionError, Exception) as e:
             logging.error(f"Error copying file from {log_src} to {log_dest}: {str(e)}")
             raise RuntimeError(f"Error copying file: {str(e)}")
