@@ -4033,6 +4033,8 @@ class PlexcachedRestorer:
                 logging.warning(f"Search path does not exist: {search_path}")
                 continue
             for root, dirs, files in os.walk(search_path):
+                # Skip hidden directories (dot-prefixed like .Trash, .Recycle.Bin)
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
                 for filename in files:
                     if filename.endswith(PLEXCACHED_EXTENSION):
                         plexcached_files.append(os.path.join(root, filename))

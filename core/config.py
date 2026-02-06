@@ -173,6 +173,15 @@ class CacheConfig:
     # "move" - Cache hard-linked files; seed copy preserved via remaining hard link
     hardlinked_files: str = "skip"
 
+    # Excluded folders: skip these directories during cache scanning
+    # Hidden directories (dot-prefixed like .Trash, .Recycle.Bin) are always skipped automatically
+    # Use this for non-dot-prefixed folders like Synology @Recycle, #recycle, etc.
+    excluded_folders: Optional[List[str]] = None
+
+    def __post_init__(self):
+        if self.excluded_folders is None:
+            self.excluded_folders = []
+
 
 @dataclass
 class PerformanceConfig:
@@ -399,6 +408,14 @@ class ConfigManager:
             logging.warning(f"Invalid hardlinked_files '{hardlinked_files}', using 'skip'")
             hardlinked_files = 'skip'
         self.cache.hardlinked_files = hardlinked_files
+
+        # Load excluded folders for directory scanning
+        excluded_folders = self.settings_data.get('excluded_folders', [])
+        if isinstance(excluded_folders, list):
+            # Filter out empty strings
+            self.cache.excluded_folders = [f for f in excluded_folders if f and isinstance(f, str)]
+        else:
+            self.cache.excluded_folders = []
 
     def _load_path_config(self) -> None:
         """Load path-related configuration."""

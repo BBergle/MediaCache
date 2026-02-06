@@ -197,6 +197,20 @@ class MaintenanceService:
 
         return path
 
+    def _should_skip_directory(self, dirname: str) -> bool:
+        """Check if directory should be skipped during scanning.
+
+        Always skips hidden directories (dot-prefixed like .Trash, .Recycle.Bin).
+        Also skips user-configured excluded folders from settings.
+        """
+        # Always skip hidden directories (dot-prefixed)
+        if dirname.startswith('.'):
+            return True
+        # Check user-configured excluded folders
+        settings = self._load_settings()
+        excluded = settings.get('excluded_folders', [])
+        return dirname in excluded
+
     def _get_paths(self) -> tuple:
         """Get cache and array directory paths from settings"""
         if self._cache_dirs and self._array_dirs:
@@ -264,6 +278,8 @@ class MaintenanceService:
         for cache_dir in cache_dirs:
             if os.path.exists(cache_dir):
                 for root, dirs, files in os.walk(cache_dir):
+                    # Prune excluded directories (modifying dirs in-place skips them)
+                    dirs[:] = [d for d in dirs if not self._should_skip_directory(d)]
                     for f in files:
                         if f.lower().endswith(extensions):
                             cache_files.add(os.path.join(root, f))
@@ -473,6 +489,8 @@ class MaintenanceService:
             cache_dir = cache_dirs[i]
 
             for root, dirs, files in os.walk(array_dir):
+                # Prune excluded directories
+                dirs[:] = [d for d in dirs if not self._should_skip_directory(d)]
                 for f in files:
                     if f.endswith('.plexcached'):
                         plexcached_path = os.path.join(root, f)
@@ -1136,6 +1154,9 @@ class MaintenanceService:
             if os.path.exists(cache_dir):
                 for root, dirs, files in os.walk(cache_dir, topdown=False):
                     for d in dirs:
+                        # Don't delete excluded directories
+                        if self._should_skip_directory(d):
+                            continue
                         dir_path = os.path.join(root, d)
                         try:
                             if not os.listdir(dir_path):

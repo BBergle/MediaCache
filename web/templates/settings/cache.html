@@ -136,6 +136,42 @@
             <hr style="border-color: var(--plex-border); margin: 1.5rem 0;">
 
             <h3 style="font-size: 1rem; color: var(--plex-orange); margin-bottom: 1rem;">
+                <i data-lucide="folder-x" style="width: 18px; height: 18px; vertical-align: middle;"></i>
+                Scanning
+            </h3>
+
+            <div class="form-hint" style="margin-bottom: 1rem;">
+                Hidden directories (dot-prefixed like <code>.Trash</code>, <code>.Recycle.Bin</code>) are always skipped automatically.
+                Add additional folder names below for non-dot-prefixed directories to exclude from scanning.
+            </div>
+
+            <div class="form-group">
+                <label>Excluded Folders</label>
+                <div id="excluded-folders-list">
+                    {% for folder in settings.excluded_folders or [] %}
+                    <div class="excluded-folder-row" style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem; align-items: center;">
+                        <input type="text" name="excluded_folders" value="{{ folder }}"
+                               placeholder="e.g., @Recycle" style="flex: 1;">
+                        <button type="button" class="btn btn-sm" onclick="removeExcludedFolder(this)"
+                                style="padding: 0.4rem 0.6rem; background: var(--plex-bg-lighter); border: 1px solid var(--plex-border); color: var(--plex-text-secondary); cursor: pointer;">
+                            <i data-lucide="x" style="width: 14px; height: 14px;"></i>
+                        </button>
+                    </div>
+                    {% endfor %}
+                </div>
+                <button type="button" class="btn btn-sm" onclick="addExcludedFolder()"
+                        style="margin-top: 0.25rem; padding: 0.4rem 0.8rem; background: var(--plex-bg-lighter); border: 1px solid var(--plex-border); color: var(--plex-text-secondary); cursor: pointer;">
+                    <i data-lucide="plus" style="width: 14px; height: 14px; vertical-align: middle;"></i>
+                    Add Folder
+                </button>
+                <div class="form-hint" style="margin-top: 0.5rem;">
+                    Common examples: <code>@Recycle</code>, <code>#recycle</code>, <code>@eaDir</code>
+                </div>
+            </div>
+
+            <hr style="border-color: var(--plex-border); margin: 1.5rem 0;">
+
+            <h3 style="font-size: 1rem; color: var(--plex-orange); margin-bottom: 1rem;">
                 <i data-lucide="trash-2" style="width: 18px; height: 18px; vertical-align: middle;"></i>
                 Eviction
             </h3>
@@ -334,5 +370,28 @@ function updateCacheCalculations() {
 
 // Run on page load
 document.addEventListener('DOMContentLoaded', updateCacheCalculations);
+
+// Excluded folders management
+function addExcludedFolder() {
+    const list = document.getElementById('excluded-folders-list');
+    const row = document.createElement('div');
+    row.className = 'excluded-folder-row';
+    row.style.cssText = 'display: flex; gap: 0.5rem; margin-bottom: 0.5rem; align-items: center;';
+    row.innerHTML = `
+        <input type="text" name="excluded_folders" value=""
+               placeholder="e.g., @Recycle" style="flex: 1;">
+        <button type="button" class="btn btn-sm" onclick="removeExcludedFolder(this)"
+                style="padding: 0.4rem 0.6rem; background: var(--plex-bg-lighter); border: 1px solid var(--plex-border); color: var(--plex-text-secondary); cursor: pointer;">
+            <i data-lucide="x" style="width: 14px; height: 14px;"></i>
+        </button>
+    `;
+    list.appendChild(row);
+    lucide.createIcons({attrs: {class: ''}, nameAttr: 'data-lucide'});
+    row.querySelector('input').focus();
+}
+
+function removeExcludedFolder(button) {
+    button.closest('.excluded-folder-row').remove();
+}
 </script>
 {% endblock %}

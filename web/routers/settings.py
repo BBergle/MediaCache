@@ -567,6 +567,10 @@ async def save_cache_settings(request: Request):
     form = await request.form()
     settings_dict = dict(form)
 
+    # Handle list fields that need getlist() instead of single value
+    excluded_folders = form.getlist("excluded_folders")
+    settings_dict["excluded_folders"] = [f for f in excluded_folders if f and f.strip()]
+
     success = settings_service.save_cache_settings(settings_dict)
 
     if success:

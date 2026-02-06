@@ -259,6 +259,8 @@ class SettingsService:
             "remote_watchlist_toggle": raw.get("remote_watchlist_toggle", False),
             "remote_watchlist_rss_url": raw.get("remote_watchlist_rss_url", ""),
             "activity_retention_hours": raw.get("activity_retention_hours", 24),
+            # Scanning
+            "excluded_folders": raw.get("excluded_folders", []),
             # Advanced settings
             "max_concurrent_moves_array": raw.get("max_concurrent_moves_array", 2),
             "max_concurrent_moves_cache": raw.get("max_concurrent_moves_cache", 5),
@@ -301,6 +303,15 @@ class SettingsService:
                     raw[setting_key] = converter(settings[form_field])
                 except (ValueError, TypeError):
                     pass  # Keep existing value on conversion error
+
+        # Handle list fields separately (not through field_mapping)
+        if "excluded_folders" in settings:
+            folders = settings["excluded_folders"]
+            if isinstance(folders, list):
+                # Filter out empty strings
+                raw["excluded_folders"] = [f.strip() for f in folders if f and f.strip()]
+            else:
+                raw["excluded_folders"] = []
 
         return self._save_raw(raw)
 
@@ -993,6 +1004,7 @@ class SettingsService:
             "notification_type", "unraid_level", "unraid_levels", "webhook_url",
             "webhook_level", "webhook_levels", "max_log_files", "keep_error_logs_days",
             "days_to_monitor", "number_episodes", "activity_retention_hours",
+            "excluded_folders",
             # Advanced settings
             "max_concurrent_moves_array", "max_concurrent_moves_cache", "exit_if_active_session",
             # Legacy keys that may exist

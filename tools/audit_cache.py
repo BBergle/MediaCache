@@ -34,7 +34,7 @@ LEGACY_TIMESTAMPS_FILE = os.path.join(PROJECT_ROOT, "plexcache_timestamps.json")
 
 def load_settings():
     """Load paths from plexcache_settings.json."""
-    global CACHE_DIRS, ARRAY_DIRS, EXCLUDE_FILE, TIMESTAMPS_FILE
+    global CACHE_DIRS, ARRAY_DIRS, EXCLUDE_FILE, TIMESTAMPS_FILE, EXCLUDED_FOLDERS
 
     if not os.path.exists(SETTINGS_FILE):
         print(f"⚠️  Settings file not found: {SETTINGS_FILE}")
@@ -97,13 +97,29 @@ def load_settings():
         # Note: EXCLUDE_FILE and TIMESTAMPS_FILE are already set correctly
         # at module level (PROJECT_ROOT and DATA_DIR respectively)
 
+        # Load excluded folders for directory scanning
+        EXCLUDED_FOLDERS = settings.get('excluded_folders', [])
+
         print(f"Loaded settings from: {SETTINGS_FILE}")
         print(f"Cache directories: {CACHE_DIRS}")
         print(f"Array directories: {ARRAY_DIRS}")
+        if EXCLUDED_FOLDERS:
+            print(f"Excluded folders: {EXCLUDED_FOLDERS}")
 
     except Exception as e:
         print(f"❌ Error loading settings: {e}")
         sys.exit(1)
+
+
+# Excluded folders loaded from settings
+EXCLUDED_FOLDERS = []
+
+
+def _should_skip_directory(dirname):
+    """Check if directory should be skipped during scanning."""
+    if dirname.startswith('.'):
+        return True
+    return dirname in EXCLUDED_FOLDERS
 
 
 # Load settings on import
@@ -121,6 +137,7 @@ def get_cache_files():
     for cache_dir in CACHE_DIRS:
         if os.path.exists(cache_dir):
             for root, dirs, files in os.walk(cache_dir):
+                dirs[:] = [d for d in dirs if not _should_skip_directory(d)]
                 for f in files:
                     if f.lower().endswith(extensions):
                         cache_files.add(os.path.join(root, f))
@@ -164,6 +181,7 @@ def get_orphaned_plexcached_files():
         if not os.path.exists(array_dir):
             continue
         for root, dirs, files in os.walk(array_dir):
+            dirs[:] = [d for d in dirs if not _should_skip_directory(d)]
             for f in files:
                 if f.endswith('.plexcached'):
                     plexcached_path = os.path.join(root, f)
@@ -260,6 +278,8 @@ def cleanup_empty_directories():
         if os.path.exists(cache_dir):
             for root, dirs, files in os.walk(cache_dir, topdown=False):
                 for d in dirs:
+                    if _should_skip_directory(d):
+                        continue
                     dir_path = os.path.join(root, d)
                     try:
                         if not os.listdir(dir_path):
@@ -800,6 +820,7 @@ def find_malformed_plexcached():
         print(f"  Scanning: {array_dir}")
 
         for root, dirs, files in os.walk(array_dir):
+            dirs[:] = [d for d in dirs if not _should_skip_directory(d)]
             for f in files:
                 if f.endswith('.plexcached'):
                     total_scanned += 1
