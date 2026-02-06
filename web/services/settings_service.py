@@ -866,12 +866,13 @@ class SettingsService:
         """Export all settings as a dictionary.
 
         Args:
-            include_sensitive: If False, removes tokens and webhook URLs
+            include_sensitive: If False, redacts tokens, URLs, usernames, and identifiers
 
         Returns:
             Settings dictionary ready for JSON serialization
         """
         import copy
+        import re
         settings = copy.deepcopy(self._load_raw())
 
         if not include_sensitive:
@@ -879,14 +880,50 @@ class SettingsService:
             if "PLEX_TOKEN" in settings:
                 settings["PLEX_TOKEN"] = ""
 
-            # Remove user tokens
-            for user in settings.get("users", []):
-                if "token" in user:
-                    user["token"] = ""
+            # Redact Plex URL (preserve structure, hide IP/machine ID)
+            if "PLEX_URL" in settings and settings["PLEX_URL"]:
+                url = settings["PLEX_URL"]
+                # Preserve protocol and port, redact the host
+                match = re.match(r'(https?://)(.+?)(:(\d+))?(/.*)?$', url)
+                if match:
+                    port = f":{match.group(4)}" if match.group(4) else ""
+                    settings["PLEX_URL"] = f"{match.group(1)}[REDACTED]{port}"
+                else:
+                    settings["PLEX_URL"] = "[REDACTED]"
+
+            # Redact client ID
+            if "plexcache_client_id" in settings:
+                settings["plexcache_client_id"] = "[REDACTED]"
+
+            # Redact RSS URL (contains auth-embedded feed GUID)
+            if "remote_watchlist_rss_url" in settings and settings["remote_watchlist_rss_url"]:
+                url = settings["remote_watchlist_rss_url"]
+                match = re.match(r'(https?://[^/]+/)(.+)', url)
+                if match:
+                    settings["remote_watchlist_rss_url"] = f"{match.group(1)}[REDACTED]"
+                else:
+                    settings["remote_watchlist_rss_url"] = "[REDACTED]"
 
             # Remove webhook URL (may contain API keys)
             if "webhook_url" in settings:
                 settings["webhook_url"] = ""
+
+            # Anonymize users in both _cached_users and users arrays
+            for i, user in enumerate(settings.get("_cached_users", []), 1):
+                if "username" in user:
+                    user["username"] = f"User_{i}"
+                if "title" in user:
+                    user["title"] = f"User {i}"
+
+            for i, user in enumerate(settings.get("users", []), 1):
+                if "title" in user:
+                    user["title"] = f"User {i}"
+                if "token" in user:
+                    user["token"] = ""
+                if "id" in user:
+                    user["id"] = 0
+                if "uuid" in user:
+                    user["uuid"] = "[REDACTED]"
 
         return settings
 

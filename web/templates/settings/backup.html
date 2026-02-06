@@ -15,11 +15,12 @@
         <div class="form-group">
             <label class="switch">
                 <input type="checkbox" id="include_sensitive" checked>
-                <span>Include sensitive data (tokens, webhook URLs)</span>
+                <span>Include sensitive data</span>
             </label>
             <div class="form-hint">
                 <i data-lucide="alert-triangle" style="width: 14px; height: 14px; color: var(--plex-orange); vertical-align: middle;"></i>
                 Only include sensitive data if you're backing up for yourself. Uncheck to share settings safely.
+                When unchecked, redacts: tokens, Plex URL, RSS URL, webhook URL, client ID, usernames, and user IDs.
             </div>
         </div>
 
