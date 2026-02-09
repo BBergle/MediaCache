@@ -264,9 +264,22 @@ function executeAction(action, formData, isDryRun) {
         // Close modal first
         closeConfirmModal();
 
-        // Update the audit content with results
-        document.getElementById('audit-content').innerHTML = html;
-        lucide.createIcons();
+        // Check if this is an async "started in background" response
+        if (html.includes('maintenance-async-started')) {
+            // Show the alert at top of audit content
+            const alertContainer = document.createElement('div');
+            alertContainer.innerHTML = html;
+            const auditContent = document.getElementById('audit-content');
+            auditContent.insertBefore(alertContainer, auditContent.firstChild);
+            lucide.createIcons();
+
+            // Force immediate banner poll to show the running state
+            htmx.ajax('GET', '/api/operation-banner', {target: '#global-operation-banner', swap: 'innerHTML'});
+        } else {
+            // Synchronous response (dry-run) - update audit content with results
+            document.getElementById('audit-content').innerHTML = html;
+            lucide.createIcons();
+        }
 
         // Reset selections
         selectedUnprotectedFiles.clear();

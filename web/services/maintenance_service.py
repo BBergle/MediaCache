@@ -8,7 +8,7 @@ import subprocess
 from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Any
+from typing import Callable, Dict, List, Optional, Set, Any
 
 from web.config import PROJECT_ROOT, DATA_DIR, CONFIG_DIR, SETTINGS_FILE
 
@@ -635,7 +635,8 @@ class MaintenanceService:
 
     # === Fix Actions ===
 
-    def restore_plexcached(self, paths: List[str], dry_run: bool = True) -> ActionResult:
+    def restore_plexcached(self, paths: List[str], dry_run: bool = True,
+                            stop_check: Optional[Callable[[], bool]] = None) -> ActionResult:
         """Restore orphaned .plexcached files to their original names"""
         if not paths:
             return ActionResult(success=False, message="No paths provided")
@@ -644,6 +645,8 @@ class MaintenanceService:
         errors = []
 
         for plexcached_path in paths:
+            if stop_check and stop_check():
+                break
             if not plexcached_path.endswith('.plexcached'):
                 errors.append(f"Not a .plexcached file: {os.path.basename(plexcached_path)}")
                 continue
@@ -689,7 +692,8 @@ class MaintenanceService:
         paths = [b.plexcached_path for b in backups]
         return self.restore_plexcached(paths, dry_run)
 
-    def delete_plexcached(self, paths: List[str], dry_run: bool = True) -> ActionResult:
+    def delete_plexcached(self, paths: List[str], dry_run: bool = True,
+                          stop_check: Optional[Callable[[], bool]] = None) -> ActionResult:
         """Delete orphaned .plexcached backup files (e.g., when no longer needed)"""
         if not paths:
             return ActionResult(success=False, message="No paths provided")
@@ -698,6 +702,8 @@ class MaintenanceService:
         errors = []
 
         for plexcached_path in paths:
+            if stop_check and stop_check():
+                break
             if not plexcached_path.endswith('.plexcached'):
                 errors.append(f"Not a .plexcached file: {os.path.basename(plexcached_path)}")
                 continue
@@ -728,7 +734,8 @@ class MaintenanceService:
         paths = [o.plexcached_path for o in orphaned]
         return self.delete_plexcached(paths, dry_run)
 
-    def fix_with_backup(self, paths: List[str], dry_run: bool = True) -> ActionResult:
+    def fix_with_backup(self, paths: List[str], dry_run: bool = True,
+                        stop_check: Optional[Callable[[], bool]] = None) -> ActionResult:
         """Fix unprotected files that have .plexcached backup - delete cache copy, restore backup"""
         if not paths:
             return ActionResult(success=False, message="No paths provided")
@@ -737,6 +744,8 @@ class MaintenanceService:
         errors = []
 
         for cache_path in paths:
+            if stop_check and stop_check():
+                break
             has_backup, backup_path = self._check_plexcached_backup(cache_path)
             has_dup, array_path = self._check_array_duplicate(cache_path)
 
@@ -772,7 +781,8 @@ class MaintenanceService:
             errors=errors
         )
 
-    def sync_to_array(self, paths: List[str], dry_run: bool = True) -> ActionResult:
+    def sync_to_array(self, paths: List[str], dry_run: bool = True,
+                      stop_check: Optional[Callable[[], bool]] = None) -> ActionResult:
         """Move cache files to array - handles both files with and without backups.
 
         For each file:
@@ -787,6 +797,8 @@ class MaintenanceService:
         errors = []
 
         for cache_path in paths:
+            if stop_check and stop_check():
+                break
             array_path = self._cache_to_array_path(cache_path)
             if not array_path:
                 errors.append(f"{os.path.basename(cache_path)}: Unknown path mapping")
@@ -889,7 +901,8 @@ class MaintenanceService:
                 errors=[str(e)]
             )
 
-    def protect_with_backup(self, paths: List[str], dry_run: bool = True) -> ActionResult:
+    def protect_with_backup(self, paths: List[str], dry_run: bool = True,
+                            stop_check: Optional[Callable[[], bool]] = None) -> ActionResult:
         """Protect cache files by creating .plexcached backup on array and adding to exclude list"""
         logging.info(f"protect_with_backup called with {len(paths)} paths, dry_run={dry_run}")
 
@@ -901,6 +914,8 @@ class MaintenanceService:
         errors = []
 
         for i, cache_path in enumerate(paths):
+            if stop_check and stop_check():
+                break
             logging.debug(f"Processing path {i+1}/{len(paths)}: {cache_path}")
 
             # Get the array path equivalent

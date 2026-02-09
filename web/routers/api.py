@@ -555,10 +555,13 @@ async def get_operation_indicator(request: Request):
 @router.get("/operation-banner", response_class=HTMLResponse)
 async def get_operation_banner(request: Request):
     """Return global operation status banner HTML - shown on all pages when operation is running"""
+    from web.services.maintenance_runner import get_maintenance_runner
+
     operation_runner = get_operation_runner()
     status = operation_runner.get_status_dict()
+    maint_status = get_maintenance_runner().get_status_dict()
 
     return templates.TemplateResponse(
         "components/global_operation_banner.html",
-        {"request": request, "status": status}
+        {"request": request, "status": status, "maint_status": maint_status}
     )

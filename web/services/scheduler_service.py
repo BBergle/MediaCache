@@ -200,11 +200,16 @@ class SchedulerService:
     def _run_scheduled_job(self):
         """Execute the scheduled PlexCache operation"""
         from web.services import get_operation_runner
+        from web.services.maintenance_runner import get_maintenance_runner
 
         runner = get_operation_runner()
 
         if runner.is_running:
             logger.info("Scheduled run skipped - operation already in progress")
+            return
+
+        if get_maintenance_runner().is_running:
+            logger.info("Scheduled run skipped - maintenance action in progress")
             return
 
         logger.info("Starting scheduled PlexCache run")

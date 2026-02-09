@@ -1,5 +1,113 @@
-<!-- Global Operation Banner - centered toast on all pages when operation is running -->
-{% if status.state == 'running' %}
+<!-- Global Operation Banner - centered toast on all pages when operation or maintenance is running -->
+{% if maint_status is defined and maint_status.state == 'running' %}
+<!-- Maintenance action running -->
+<div style="position: fixed; top: 1rem; left: 50%; transform: translateX(-50%); z-index: 9999; background: #1a1d1f; border: 2px solid #e5a00d; border-radius: 12px; padding: 0.75rem 1.25rem; box-shadow: 0 8px 32px rgba(0,0,0,0.6); display: flex; align-items: center; gap: 1rem;"
+     hx-get="/api/operation-banner" hx-trigger="every 2s" hx-swap="innerHTML" hx-target="#global-operation-banner">
+    <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <span class="spinner" style="width: 18px; height: 18px;"></span>
+        <strong style="color: #fff; font-size: 0.95rem;">{{ maint_status.action_display }}</strong>
+    </div>
+    <div style="display: flex; align-items: center; gap: 0.5rem;">
+        <button type="button" class="btn btn-sm btn-danger" style="padding: 0.4rem 0.75rem; font-size: 0.85rem;"
+                hx-post="/maintenance/stop-action"
+                hx-target="#global-operation-banner"
+                hx-swap="innerHTML">
+            <i data-lucide="square" style="width: 14px; height: 14px;"></i>
+            Stop
+        </button>
+        <button type="button" style="background: transparent; border: none; color: #fff; cursor: pointer; padding: 0.25rem; opacity: 0.7;"
+                onclick="document.getElementById('global-operation-banner').innerHTML='<div hx-get=/api/operation-banner hx-trigger=every\ 10s hx-swap=innerHTML hx-target=#global-operation-banner></div>'; htmx.process(document.getElementById('global-operation-banner'));">
+            <i data-lucide="x" style="width: 18px; height: 18px;"></i>
+        </button>
+    </div>
+</div>
+<script>lucide.createIcons();</script>
+{% elif maint_status is defined and maint_status.state == 'completed' %}
+<!-- Maintenance action completed -->
+<script>
+(function() {
+    var completionKey = 'plexcache_last_maint_completion_shown';
+    var completionId = '{{ maint_status.completed_at or maint_status.duration_seconds }}';
+    var lastShown = sessionStorage.getItem(completionKey);
+
+    if (lastShown === completionId) {
+        // Already showed this completion, dismiss and go idle
+        fetch('/maintenance/dismiss-action', { method: 'POST' });
+        document.getElementById('global-operation-banner').innerHTML =
+            '<div hx-get="/api/operation-banner" hx-trigger="every 10s" hx-swap="innerHTML" hx-target="#global-operation-banner"></div>';
+        htmx.process(document.getElementById('global-operation-banner'));
+        return;
+    }
+
+    // Mark as shown
+    sessionStorage.setItem(completionKey, completionId);
+
+    var resultMsg = '{{ maint_status.result_message | default("Action completed") }}';
+    var duration = '{{ maint_status.duration_seconds }}';
+    var borderColor = '{{ "#2ecc71" if maint_status.result_success is not defined or maint_status.result_success else "#2ecc71" }}';
+    var iconColor = borderColor;
+
+    document.getElementById('global-operation-banner').innerHTML = `
+        <div id="global-operation-alert" style="position: fixed; top: 1rem; left: 50%; transform: translateX(-50%); z-index: 9999; background: #1a1d1f; border: 2px solid ${borderColor}; border-radius: 12px; padding: 0.75rem 1.25rem; box-shadow: 0 8px 32px rgba(0,0,0,0.6); display: flex; align-items: center; gap: 1rem;">
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                <i data-lucide="check-circle" style="width: 20px; height: 20px; color: ${iconColor};"></i>
+                <strong style="color: #fff; font-size: 0.95rem;">Maintenance Complete</strong>
+                <span style="font-size: 0.85rem; color: rgba(255,255,255,0.7);">
+                    ${resultMsg} | ${duration}s
+                </span>
+            </div>
+            <button type="button" style="background: transparent; border: none; color: #fff; cursor: pointer; padding: 0.25rem; opacity: 0.7;"
+                    onclick="dismissMaintCompletionBanner()" title="Dismiss">
+                <i data-lucide="x" style="width: 18px; height: 18px;"></i>
+            </button>
+        </div>
+    `;
+    lucide.createIcons();
+
+    // Auto-refresh audit content if on maintenance page
+    var auditContent = document.getElementById('audit-content');
+    if (auditContent) {
+        htmx.ajax('GET', '/maintenance/audit?refresh=true', {target: '#audit-content', swap: 'innerHTML'});
+    }
+
+    // Auto-dismiss after 6 seconds
+    setTimeout(dismissMaintCompletionBanner, 6000);
+})();
+
+function dismissMaintCompletionBanner() {
+    var alert = document.getElementById('global-operation-alert');
+    if (alert && alert.style.opacity !== '0') {
+        alert.style.transition = 'opacity 0.4s ease-out, transform 0.4s ease-out';
+        alert.style.opacity = '0';
+        alert.style.transform = 'translateY(-20px)';
+        setTimeout(function() {
+            // Dismiss the runner state and resume idle polling
+            fetch('/maintenance/dismiss-action', { method: 'POST' });
+            document.getElementById('global-operation-banner').innerHTML =
+                '<div hx-get="/api/operation-banner" hx-trigger="every 10s" hx-swap="innerHTML" hx-target="#global-operation-banner"></div>';
+            htmx.process(document.getElementById('global-operation-banner'));
+        }, 400);
+    }
+}
+</script>
+{% elif maint_status is defined and maint_status.state == 'failed' %}
+<!-- Maintenance action failed -->
+<div id="global-operation-alert" style="position: fixed; top: 1rem; left: 50%; transform: translateX(-50%); z-index: 9999; background: #1a1d1f; border: 2px solid #e74c3c; border-radius: 12px; padding: 0.75rem 1.25rem; box-shadow: 0 8px 32px rgba(0,0,0,0.6); display: flex; align-items: center; gap: 1rem;">
+    <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <i data-lucide="alert-circle" style="width: 20px; height: 20px; color: #e74c3c;"></i>
+        <strong style="color: #fff; font-size: 0.95rem;">Maintenance Failed</strong>
+        {% if maint_status.error_message %}
+        <span style="font-size: 0.85rem; color: rgba(255,255,255,0.7);">{{ maint_status.error_message }}</span>
+        {% endif %}
+    </div>
+    <button type="button" style="background: transparent; border: none; color: #fff; cursor: pointer; padding: 0.25rem; opacity: 0.7;"
+            onclick="fetch('/maintenance/dismiss-action',{method:'POST'}); this.parentElement.style.display='none'; document.getElementById('global-operation-banner').innerHTML='<div hx-get=/api/operation-banner hx-trigger=every\ 10s hx-swap=innerHTML hx-target=#global-operation-banner></div>'; htmx.process(document.getElementById('global-operation-banner'));"
+            title="Dismiss">
+        <i data-lucide="x" style="width: 18px; height: 18px;"></i>
+    </button>
+</div>
+<script>lucide.createIcons();</script>
+{% elif status.state == 'running' %}
 <div style="position: fixed; top: 1rem; left: 50%; transform: translateX(-50%); z-index: 9999; background: #1a1d1f; border: 2px solid #e5a00d; border-radius: 12px; padding: 0.75rem 1.25rem; box-shadow: 0 8px 32px rgba(0,0,0,0.6); display: flex; align-items: center; gap: 1rem;"
      hx-get="/api/operation-banner" hx-trigger="every 2s" hx-swap="innerHTML" hx-target="#global-operation-banner">
     <div style="display: flex; align-items: center; gap: 0.75rem;">

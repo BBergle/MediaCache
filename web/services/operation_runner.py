@@ -428,8 +428,14 @@ class OperationRunner:
             verbose: If True, enable DEBUG level logging
 
         Returns:
-            True if operation started, False if already running
+            True if operation started, False if already running or maintenance is running
         """
+        # Check mutual exclusion with MaintenanceRunner
+        from web.services.maintenance_runner import get_maintenance_runner
+        if get_maintenance_runner().is_running:
+            logging.info("Operation blocked - maintenance action in progress")
+            return False
+
         with self._lock:
             if self._state == OperationState.RUNNING:
                 return False
