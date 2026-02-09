@@ -5,9 +5,8 @@ from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Request, Form, Query
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.templating import Jinja2Templates
 
-from web.config import TEMPLATES_DIR
+from web.config import templates
 from web.services.maintenance_service import get_maintenance_service
 from web.services.maintenance_runner import get_maintenance_runner, ASYNC_ACTIONS
 from web.services.operation_runner import get_operation_runner
@@ -20,7 +19,6 @@ logger = logging.getLogger(__name__)
 _system_detector = SystemDetector()
 
 router = APIRouter()
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
 # In-memory cache for full audit results (not JSON-serializable)

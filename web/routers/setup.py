@@ -9,13 +9,11 @@ from typing import Optional, Dict, Any, List
 
 from fastapi import APIRouter, Request, Form, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-from fastapi.templating import Jinja2Templates
 
-from web.config import TEMPLATES_DIR, PROJECT_ROOT
+from web.config import templates, PROJECT_ROOT
 from web.services import get_settings_service
 
 router = APIRouter()
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 # PlexCache-R OAuth identifiers
 PLEXCACHE_PRODUCT_NAME = 'PlexCache-R'

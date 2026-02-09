@@ -1,16 +1,14 @@
 """PlexCache-R Web UI - FastAPI Application"""
 
 import logging
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from web.config import TEMPLATES_DIR, STATIC_DIR, PROJECT_ROOT
+from web.config import templates, STATIC_DIR, PROJECT_ROOT
 from web.routers import dashboard, cache, settings, operations, logs, api, maintenance, setup
 from web.services import get_scheduler_service, get_settings_service
 from web.services.web_cache import init_web_cache, get_web_cache_service
@@ -76,13 +74,6 @@ app = FastAPI(
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-# Set up Jinja2 templates
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
-
-# Expose image tag to all templates (set via Docker build arg, defaults to "latest")
-_image_tag = os.environ.get("IMAGE_TAG", "latest")
-templates.env.globals["image_tag"] = _image_tag
 
 # Include routers
 app.include_router(dashboard.router)

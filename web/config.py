@@ -3,6 +3,8 @@
 import os
 from pathlib import Path
 
+from fastapi.templating import Jinja2Templates
+
 # Paths
 WEB_DIR = Path(__file__).parent
 TEMPLATES_DIR = WEB_DIR / "templates"
@@ -23,3 +25,10 @@ DATA_DIR = CONFIG_DIR / "data" if IS_DOCKER else PROJECT_ROOT / "data"
 # Server defaults
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5000
+
+# Shared Jinja2 templates instance (all routers should import this)
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+# Docker image tag - shows badge in sidebar when not "latest"
+IMAGE_TAG = os.environ.get("IMAGE_TAG", "latest")
+templates.env.globals["image_tag"] = IMAGE_TAG

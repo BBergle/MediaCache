@@ -2,13 +2,11 @@
 
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.templating import Jinja2Templates
 
-from web.config import TEMPLATES_DIR
+from web.config import templates
 from web.services import get_operation_runner
 
 router = APIRouter()
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
 @router.post("/run")

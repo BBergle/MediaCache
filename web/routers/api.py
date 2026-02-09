@@ -3,16 +3,14 @@
 from datetime import datetime
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from typing import List
 from urllib.parse import unquote
 
-from web.config import TEMPLATES_DIR
+from web.config import templates
 from web.services import get_cache_service, get_settings_service, get_operation_runner, get_scheduler_service, ScheduleConfig, get_maintenance_service
 from web.services.web_cache import get_web_cache_service, CACHE_KEY_DASHBOARD_STATS, CACHE_KEY_MAINTENANCE_HEALTH
 
 router = APIRouter()
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
 def _get_dashboard_stats_data(use_cache: bool = True) -> tuple[dict, str | None]:

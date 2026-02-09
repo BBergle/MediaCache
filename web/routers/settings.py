@@ -9,9 +9,8 @@ from typing import Dict, Any, List
 import requests
 from fastapi import APIRouter, Request, Form, Query
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.templating import Jinja2Templates
 
-from web.config import TEMPLATES_DIR, CONFIG_DIR
+from web.config import templates, CONFIG_DIR
 from web.services import get_settings_service, get_scheduler_service
 from core.system_utils import get_disk_usage, detect_zfs, parse_size_bytes
 from core.file_operations import (
@@ -26,7 +25,6 @@ _parse_size_bytes = parse_size_bytes
 
 
 router = APIRouter()
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 # OAuth constants
 PLEXCACHE_PRODUCT_NAME = 'PlexCache-R'
