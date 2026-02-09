@@ -76,6 +76,9 @@
             <div class="sidebar-brand">
                 <i data-lucide="hard-drive"></i>
                 <span>PlexCache-R</span>
+                {% if image_tag is defined and image_tag != 'latest' %}
+                <span class="dev-badge">{{ image_tag | upper }}</span>
+                {% endif %}
             </div>
             <ul class="sidebar-nav">
                 <li>

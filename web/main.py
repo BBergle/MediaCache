@@ -1,6 +1,7 @@
 """PlexCache-R Web UI - FastAPI Application"""
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -78,6 +79,10 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Set up Jinja2 templates
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+# Expose image tag to all templates (set via Docker build arg, defaults to "latest")
+_image_tag = os.environ.get("IMAGE_TAG", "latest")
+templates.env.globals["image_tag"] = _image_tag
 
 # Include routers
 app.include_router(dashboard.router)
