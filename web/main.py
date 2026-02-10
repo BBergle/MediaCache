@@ -8,10 +8,11 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from web.config import templates, STATIC_DIR, PROJECT_ROOT, CONFIG_DIR
+from web.config import templates, STATIC_DIR, PROJECT_ROOT, CONFIG_DIR, SETTINGS_FILE
 from web.routers import dashboard, cache, settings, operations, logs, api, maintenance, setup
 from web.services import get_scheduler_service, get_settings_service
 from web.services.web_cache import init_web_cache, get_web_cache_service
+from core.system_utils import SystemDetector, detect_zfs, set_zfs_prefixes
 
 
 def _suppress_noisy_loggers():
@@ -25,6 +26,37 @@ def _suppress_noisy_loggers():
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("requests").setLevel(logging.WARNING)
     logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
+
+
+def _detect_zfs_paths():
+    """Detect ZFS-backed path mappings for the web UI.
+
+    Same logic as PlexCacheApp._detect_zfs_paths() but reads settings from disk
+    since the web UI doesn't use PlexCacheApp directly.
+    """
+    detector = SystemDetector()
+    if not detector.is_unraid:
+        return
+
+    import json
+    try:
+        with open(str(SETTINGS_FILE), 'r') as f:
+            settings = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return
+
+    zfs_prefixes = set()
+    for mapping in settings.get('path_mappings', []):
+        if not mapping.get('enabled', True):
+            continue
+        real_path = mapping.get('real_path', '')
+        if real_path and real_path.startswith('/mnt/user/') and detect_zfs(real_path):
+            prefix = real_path.rstrip('/') + '/'
+            zfs_prefixes.add(prefix)
+            logging.info(f"ZFS pool detected for: {real_path} (array-direct conversion disabled)")
+
+    if zfs_prefixes:
+        set_zfs_prefixes(zfs_prefixes)
 
 
 def _migrate_exclude_file():
@@ -53,6 +85,9 @@ async def lifespan(app: FastAPI):
     _suppress_noisy_loggers()
     print(f"PlexCache-R Web UI starting...")
     print(f"Project root: {PROJECT_ROOT}")
+
+    # Detect ZFS-backed path mappings before any file operations
+    _detect_zfs_paths()
 
     # Migrate old exclude file name before services start reading it
     _migrate_exclude_file()

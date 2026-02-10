@@ -54,6 +54,20 @@ def resolve_user0_to_disk(user0_path: str) -> Optional[str]:
     return None
 
 
+# ZFS-backed path prefixes that should NOT be converted to /mnt/user0/.
+# For ZFS pool-only shares (shareUseCache=only), files never appear at /mnt/user0/
+# because that path only shows standard array disks. Using /mnt/user/ is safe for
+# these paths since there is no cache/array split — no FUSE ambiguity exists.
+# Populated at startup by detect_zfs() checks on each path_mapping's real_path.
+_zfs_user_prefixes: set = set()
+
+
+def set_zfs_prefixes(prefixes: set) -> None:
+    """Set the ZFS-backed path prefixes (called once at startup)."""
+    global _zfs_user_prefixes
+    _zfs_user_prefixes = prefixes
+
+
 def get_array_direct_path(user_share_path: str) -> str:
     """Convert a user share path to array-direct path for existence checks.
 
@@ -65,13 +79,22 @@ def get_array_direct_path(user_share_path: str) -> str:
     array before deleting the cache copy. Using /mnt/user/ would incorrectly
     return True if the file only exists on cache.
 
+    Exception: ZFS pool-backed shares (shareUseCache=only) never have files at
+    /mnt/user0/ — their files live on a ZFS pool, not array disks. For these
+    paths, we skip the conversion and keep /mnt/user/ which is safe because
+    there is no cache/array FUSE ambiguity.
+
     Args:
         user_share_path: A path potentially starting with /mnt/user/
 
     Returns:
-        The /mnt/user0/ equivalent path if input is /mnt/user/, otherwise unchanged.
+        The /mnt/user0/ equivalent path if input is /mnt/user/ and not ZFS-backed,
+        otherwise unchanged.
     """
     if user_share_path.startswith('/mnt/user/'):
+        for prefix in _zfs_user_prefixes:
+            if user_share_path.startswith(prefix):
+                return user_share_path  # ZFS pool — no user0 conversion
         return '/mnt/user0/' + user_share_path[len('/mnt/user/'):]
     return user_share_path
 

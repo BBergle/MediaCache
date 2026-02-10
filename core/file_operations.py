@@ -1466,8 +1466,8 @@ class PlexcachedMigration:
             # On Unraid, check user0 (direct array) for .plexcached
             # This is the authoritative location - .plexcached should be on array
             if self.is_unraid:
-                array_file_user0 = array_file.replace("/mnt/user/", "/mnt/user0/", 1)
-                plexcached_file = array_file_user0 + PLEXCACHED_EXTENSION
+                array_file_direct = get_array_direct_path(array_file)
+                plexcached_file = array_file_direct + PLEXCACHED_EXTENSION
 
                 # Check if .plexcached exists on array
                 if os.path.isfile(plexcached_file):
@@ -1475,11 +1475,11 @@ class PlexcachedMigration:
                     continue
 
                 # Check if original exists on array (file wasn't cached yet)
-                if os.path.isfile(array_file_user0):
+                if os.path.isfile(array_file_direct):
                     logging.debug(f"Original exists on array, no migration needed: {cache_file}")
                     continue
 
-                array_file_check = array_file_user0
+                array_file_check = array_file_direct
             else:
                 array_file_check = array_file
                 plexcached_file = array_file + PLEXCACHED_EXTENSION
@@ -2229,7 +2229,7 @@ class FileFilter:
         # Note: Retention period check is handled upstream in get_files_to_move_back_to_array()
         # which correctly distinguishes between TV shows (retention applies) and movies (no retention)
 
-        array_file = file.replace("/mnt/user/", "/mnt/user0/", 1) if self.is_unraid else file
+        array_file = get_array_direct_path(file) if self.is_unraid else file
         array_path = os.path.dirname(array_file)
 
         # Check if exact file already exists on array
@@ -2261,7 +2261,7 @@ class FileFilter:
 
     def _should_add_to_cache(self, file: str, cache_file_name: str) -> bool:
         """Determine if a file should be added to the cache."""
-        array_file = file.replace("/mnt/user/", "/mnt/user0/", 1) if self.is_unraid else file
+        array_file = get_array_direct_path(file) if self.is_unraid else file
 
         # Check if file already exists on cache
         if os.path.isfile(cache_file_name):
@@ -2926,7 +2926,7 @@ class FileMover:
 
         # Modify the user path if unraid is True
         if self.is_unraid:
-            user_path = user_path.replace("/mnt/user/", "/mnt/user0/", 1)
+            user_path = get_array_direct_path(user_path)
 
         # Get the user file name by joining the user path with the base name of the file to move
         user_file_name = os.path.join(user_path, os.path.basename(file_to_move))

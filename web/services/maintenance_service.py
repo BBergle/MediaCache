@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Any
 
 from web.config import PROJECT_ROOT, DATA_DIR, CONFIG_DIR, SETTINGS_FILE
+from core.system_utils import get_array_direct_path
 
 
 @dataclass
@@ -226,8 +227,8 @@ class MaintenanceService:
                 real_path = mapping.get('real_path', '').rstrip('/\\')
 
                 if mapping.get('cacheable', True) and cache_path and real_path:
-                    # Convert real_path (/mnt/user/) to array path (/mnt/user0/)
-                    array_path = real_path.replace('/mnt/user/', '/mnt/user0/')
+                    # Convert real_path to array-direct path (ZFS-aware)
+                    array_path = get_array_direct_path(real_path)
                     cache_dirs.append(cache_path)
                     array_dirs.append(array_path)
         else:
@@ -237,7 +238,7 @@ class MaintenanceService:
             nas_library_folders = settings.get('nas_library_folders', [])
 
             if cache_dir and real_source and nas_library_folders:
-                array_source = real_source.replace('/mnt/user/', '/mnt/user0/')
+                array_source = get_array_direct_path(real_source)
                 for folder in nas_library_folders:
                     folder = folder.strip('/\\')
                     cache_dirs.append(os.path.join(cache_dir, folder))
