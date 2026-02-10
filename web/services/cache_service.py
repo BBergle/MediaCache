@@ -788,6 +788,10 @@ class CacheService:
                     eviction_over_by = disk_used - eviction_threshold_bytes
                     eviction_over_by_display = self._format_size(eviction_over_by)
 
+        cache_limit_exceeded = False
+        if cache_limit_bytes > 0 and disk_used >= cache_limit_bytes:
+            cache_limit_exceeded = True
+
         return {
             "cache_files": len(all_files),  # Grouped count (subtitles with videos)
             "cache_size": self._format_size(disk_used),  # Actual disk used
@@ -800,7 +804,8 @@ class CacheService:
             "ondeck_count": ondeck_count,
             "watchlist_count": watchlist_count,
             "eviction_over_threshold": eviction_over_threshold,
-            "eviction_over_by_display": eviction_over_by_display
+            "eviction_over_by_display": eviction_over_by_display,
+            "cache_limit_exceeded": cache_limit_exceeded
         }
 
     def get_drive_details(self, expiring_within_days: int = 3) -> Dict[str, Any]:

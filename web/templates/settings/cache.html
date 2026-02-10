@@ -59,6 +59,10 @@
                 Cache Management
             </h3>
 
+            <div class="form-hint" style="margin-bottom: 1rem;">
+                Cache Limit and Eviction are based on <strong>total drive usage</strong> (all files on the cache drive), not just PlexCache-managed files. Other applications, downloads, and system files all count toward the limit.
+            </div>
+
             <div class="form-group">
                 <label class="switch">
                     <input type="checkbox" name="watched_move"
@@ -124,8 +128,12 @@
                            value="{{ settings.cache_limit | default('250GB') }}"
                            placeholder="500GB or 75%"
                            oninput="updateCacheCalculations()">
-                    <div class="form-hint">Stop caching new files when drive usage exceeds this (e.g., 500GB or 75%)</div>
+                    <div class="form-hint">Stop caching new files when <strong>total drive usage</strong> exceeds this (e.g., 500GB or 75%). Includes all files on the drive, not just PlexCache-managed files.</div>
                     <div id="cache_limit_calculated" class="form-hint" style="color: var(--plex-orange); margin-top: 0.25rem;"></div>
+                    <div id="cache_limit_warning" class="form-hint" style="display: none; color: #e74c3c; margin-top: 0.25rem;">
+                        <i data-lucide="alert-triangle" style="width: 14px; height: 14px; vertical-align: middle;"></i>
+                        <span id="cache_limit_warning_text"></span>
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -191,7 +199,7 @@
                     <input type="number" id="cache_eviction_threshold_percent" name="cache_eviction_threshold_percent"
                            value="{{ settings.cache_eviction_threshold_percent | default(95) }}" min="50" max="100"
                            oninput="updateCacheCalculations()">
-                    <div class="form-hint">Start evicting when drive usage exceeds this % of Cache Limit</div>
+                    <div class="form-hint">Start evicting low-priority files when total drive usage exceeds this percentage of your Cache Limit</div>
                     <div id="eviction_threshold_calculated" class="form-hint" style="color: var(--plex-orange); margin-top: 0.25rem;"></div>
                 </div>
 
@@ -268,6 +276,8 @@
 // Drive info from server (auto-detected)
 const autoDetectedBytes = {{ drive_info.total_bytes | default(0) }};
 const autoDetectedDisplay = "{{ drive_info.total_display | default('Unknown') }}";
+const currentDriveUsedBytes = {{ drive_info.used_bytes | default(0) }};
+const currentDriveUsedDisplay = "{{ drive_info.used_display | default('Unknown') }}";
 
 function formatBytes(bytes) {
     if (bytes === 0) return '0 B';
@@ -362,9 +372,24 @@ function updateCacheCalculations() {
         // Calculate and show eviction threshold
         const evictionBytes = Math.round(cacheLimitBytes * evictionPercent / 100);
         evictionThresholdCalc.textContent = `= ${formatBytes(evictionBytes)} (${evictionPercent}% of ${formatBytes(cacheLimitBytes)})`;
+
+        // Show warning if drive is already over cache limit
+        const warningDiv = document.getElementById('cache_limit_warning');
+        const warningText = document.getElementById('cache_limit_warning_text');
+        if (warningDiv && currentDriveUsedBytes > 0) {
+            if (currentDriveUsedBytes >= cacheLimitBytes) {
+                warningText.textContent = `Drive is currently at ${currentDriveUsedDisplay} — already over this limit. No new files will be cached until usage drops below ${formatBytes(cacheLimitBytes)}.`;
+                warningDiv.style.display = 'block';
+                if (typeof lucide !== 'undefined') lucide.createIcons();
+            } else {
+                warningDiv.style.display = 'none';
+            }
+        }
     } else {
         cacheLimitCalc.textContent = '';
         evictionThresholdCalc.textContent = '';
+        const warningDiv = document.getElementById('cache_limit_warning');
+        if (warningDiv) warningDiv.style.display = 'none';
     }
 }
 

@@ -520,6 +520,12 @@ async def settings_cache(request: Request):
                 drive_info["total_display"] = f"{total_gb/1024:.2f} TB"
             else:
                 drive_info["total_display"] = f"{total_gb:.1f} GB"
+            drive_info["used_bytes"] = disk_usage.used
+            used_gb = disk_usage.used / (1024**3)
+            if used_gb >= 1024:
+                drive_info["used_display"] = f"{used_gb/1024:.2f} TB"
+            else:
+                drive_info["used_display"] = f"{used_gb:.1f} GB"
             # Add flag to indicate if using manual override
             if drive_size_override > 0:
                 drive_info["is_manual_override"] = True
