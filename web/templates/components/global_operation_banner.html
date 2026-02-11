@@ -1,4 +1,12 @@
 <!-- Global Operation Banner - centered toast on all pages when operation or maintenance is running -->
+<style>
+/* Expand active-files list on banner hover (parallel mode) */
+#active-op-banner:hover .maint-active-files {
+    max-height: 200px !important;
+    opacity: 1 !important;
+    margin-top: 0.3rem !important;
+}
+</style>
 <!-- Banner warning helper - expands a warning row inside the active banner -->
 <script>
 function showBannerWarning(message) {
@@ -68,12 +76,23 @@ function showBannerWarning(message) {
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.35rem;
              font-size: 0.8rem; color: rgba(255,255,255,0.5);">
             <span>{{ maint_status.files_processed }}/{{ maint_status.file_count }} files
-                {%- if maint_status.current_file %} &mdash; {{ maint_status.current_file|truncate(40, True, '...') }}{% endif %}</span>
+                {%- if maint_status.parallel %} <span style="color: rgba(255,255,255,0.35);">({{ maint_status.parallel }}&times;)</span>{% endif %}
+                {%- if not maint_status.parallel and maint_status.current_file %} &mdash; {{ maint_status.current_file|truncate(40, True, '...') }}{% endif %}</span>
             <span style="color: rgba(255,255,255,0.8); font-variant-numeric: tabular-nums;">
                 {%- if maint_status.bytes_display %}{{ maint_status.bytes_display }} <span style="color: rgba(255,255,255,0.3);">&middot;</span> {% endif %}
                 {{- maint_status.elapsed_display }}
                 {%- if maint_status.eta_display %} <span style="color: rgba(255,255,255,0.45);">|</span> ~{{ maint_status.eta_display }} left{% endif %}</span>
         </div>
+        {%- if maint_status.active_files %}
+        <!-- Active files - collapsed, expands on hover -->
+        <div class="maint-active-files" style="max-height: 0; opacity: 0; overflow: hidden;
+             transition: max-height 0.25s ease, opacity 0.2s ease; margin-top: 0;">
+            {%- for f in maint_status.active_files %}
+            <div style="font-size: 0.75rem; color: rgba(255,255,255,0.4); padding: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                <span style="color: rgba(255,255,255,0.2);">&#8627;</span> {{ f|truncate(55, True, '...') }}</div>
+            {%- endfor %}
+        </div>
+        {%- endif %}
     </div>
     {% endif %}
     <!-- Warning row - collapsed by default, expanded by showBannerWarning() -->

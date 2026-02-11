@@ -251,6 +251,9 @@ class MaintenanceResult:
     bytes_total: int = 0           # Total bytes of current file being copied
     bytes_copied: int = 0          # Bytes copied so far for current file
     copy_start_time: Optional[float] = None  # time.time() when current copy began
+    parallel: bool = False         # True when using parallel file operations
+    max_workers: int = 1           # Concurrency level for parallel mode
+    active_files: list = field(default_factory=list)  # Basenames of in-flight files (parallel)
 
 
 class MaintenanceRunner:
@@ -294,6 +297,7 @@ class MaintenanceRunner:
         method_kwargs: Optional[dict] = None,
         file_count: int = 0,
         on_complete: Optional[Callable] = None,
+        max_workers: int = 1,
     ) -> bool:
         """Start a maintenance action in a background thread.
 
@@ -304,12 +308,15 @@ class MaintenanceRunner:
             method_kwargs: Keyword args for the method
             file_count: Number of files being processed (for display)
             on_complete: Optional callback when action completes
+            max_workers: Concurrency level (>1 enables parallel mode)
 
         Returns:
             True if started, False if already running or blocked
         """
         if method_kwargs is None:
             method_kwargs = {}
+
+        parallel = max_workers > 1
 
         # Check mutual exclusion with OperationRunner
         from web.services.operation_runner import get_operation_runner
@@ -334,22 +341,37 @@ class MaintenanceRunner:
                 action_display=display,
                 started_at=datetime.now(),
                 file_count=file_count,
+                parallel=parallel,
+                max_workers=max_workers,
             )
 
         # Inject stop_check into kwargs so service methods can check for stop
         method_kwargs["stop_check"] = lambda: self._stop_requested
 
         # Inject progress_callback so service methods can report per-file progress
-        def _progress_callback(current_index: int, total: int, filename: str):
-            with self._lock:
-                if self._result:
-                    self._result.current_file_index = current_index
-                    self._result.current_file = filename
-                    self._result.files_processed = current_index - 1  # previous file is done
-                    # Reset byte progress for new file
-                    self._result.bytes_total = 0
-                    self._result.bytes_copied = 0
-                    self._result.copy_start_time = None
+        if parallel:
+            # Parallel mode: called when a file COMPLETES, not when it starts.
+            # completed_count is passed directly (no -1 offset).
+            # Byte progress is aggregate — do NOT reset per-file.
+            def _progress_callback(completed_count: int, total: int, filename: str):
+                with self._lock:
+                    if self._result:
+                        self._result.current_file_index = completed_count
+                        self._result.current_file = filename
+                        self._result.files_processed = completed_count
+        else:
+            # Sequential mode: called when a file STARTS processing.
+            # current_index is 1-based; files_processed = index - 1.
+            def _progress_callback(current_index: int, total: int, filename: str):
+                with self._lock:
+                    if self._result:
+                        self._result.current_file_index = current_index
+                        self._result.current_file = filename
+                        self._result.files_processed = current_index - 1  # previous file is done
+                        # Reset byte progress for new file
+                        self._result.bytes_total = 0
+                        self._result.bytes_copied = 0
+                        self._result.copy_start_time = None
 
         method_kwargs["progress_callback"] = _progress_callback
 
@@ -363,6 +385,17 @@ class MaintenanceRunner:
                     self._result.bytes_total = bytes_total
 
         method_kwargs["bytes_progress_callback"] = _bytes_callback
+
+        # Pass max_workers through to service method
+        method_kwargs["max_workers"] = max_workers
+
+        # Inject active_callback for parallel mode (tracks in-flight filenames)
+        if parallel:
+            def _active_callback(active_list: list):
+                with self._lock:
+                    if self._result:
+                        self._result.active_files = active_list
+            method_kwargs["active_callback"] = _active_callback
 
         self._thread = threading.Thread(
             target=self._run_action,
@@ -531,6 +564,7 @@ class MaintenanceRunner:
                 self._result.bytes_total = 0
                 self._result.bytes_copied = 0
                 self._result.copy_start_time = None
+                self._result.active_files = []
 
                 if error_message:
                     self._result.state = MaintenanceState.FAILED
@@ -573,6 +607,8 @@ class MaintenanceRunner:
             "files_processed": result.files_processed,
             "current_file": result.current_file,
             "current_file_index": result.current_file_index,
+            "parallel": result.max_workers if result.parallel else 0,
+            "active_files": list(result.active_files) if result.parallel else [],
         }
 
         # Elapsed time
@@ -586,11 +622,18 @@ class MaintenanceRunner:
 
         # Progress percent, bytes display, and ETA (running only)
         if result.file_count > 0 and result.state == MaintenanceState.RUNNING:
-            # Blended progress: completed files + fractional current file from bytes
-            file_fraction = 0
-            if result.bytes_total > 0:
-                file_fraction = result.bytes_copied / result.bytes_total
-            overall = (result.files_processed + file_fraction) / result.file_count
+            if result.parallel and result.bytes_total > 0:
+                # Parallel mode with copies: pure byte-based progress
+                overall = result.bytes_copied / result.bytes_total
+            elif result.parallel:
+                # Parallel mode without copies: pure file-based progress
+                overall = result.files_processed / result.file_count
+            else:
+                # Sequential mode: blended progress (completed files + fractional current file)
+                file_fraction = 0
+                if result.bytes_total > 0:
+                    file_fraction = result.bytes_copied / result.bytes_total
+                overall = (result.files_processed + file_fraction) / result.file_count
             status["progress_percent"] = min(int(overall * 100), 100)
 
             # Bytes display (only while copying)
@@ -604,13 +647,8 @@ class MaintenanceRunner:
                 copy_elapsed = time.time() - result.copy_start_time
                 if copy_elapsed > 0:
                     rate = result.bytes_copied / copy_elapsed
-                    current_remaining = (result.bytes_total - result.bytes_copied) / rate
-                    # Estimate remaining files from average completed-file time
-                    future_files = result.file_count - result.files_processed - 1
-                    future_time = 0
-                    if future_files > 0 and result.files_processed > 0:
-                        future_time = future_files * (elapsed / result.files_processed)
-                    status["eta_display"] = _format_duration(current_remaining + future_time)
+                    remaining_bytes = result.bytes_total - result.bytes_copied
+                    status["eta_display"] = _format_duration(remaining_bytes / rate)
                 else:
                     status["eta_display"] = ""
             elif result.files_processed > 0 and elapsed > 0:

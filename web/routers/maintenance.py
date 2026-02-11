@@ -117,7 +117,21 @@ def _check_blocked(action_name: str) -> Optional[str]:
     return None
 
 
-def _start_async_action(action_name: str, service_method, method_args=(), method_kwargs=None, file_count=0) -> Optional[str]:
+def _get_max_workers() -> int:
+    """Read max_concurrent_moves_array from settings for parallel maintenance."""
+    try:
+        import json
+        from web.config import SETTINGS_FILE
+        if SETTINGS_FILE.exists():
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+            return max(1, int(settings.get('max_concurrent_moves_array', 2)))
+    except (json.JSONDecodeError, IOError, ValueError, TypeError):
+        pass
+    return 2
+
+
+def _start_async_action(action_name: str, service_method, method_args=(), method_kwargs=None, file_count=0, max_workers=1) -> Optional[str]:
     """Start an async maintenance action via the runner.
 
     Returns HTML response string if started or blocked, None if couldn't start.
@@ -134,6 +148,7 @@ def _start_async_action(action_name: str, service_method, method_args=(), method
         method_kwargs=method_kwargs or {},
         file_count=file_count,
         on_complete=_invalidate_caches,
+        max_workers=max_workers,
     )
 
     if started:
@@ -330,6 +345,7 @@ def restore_plexcached(
         )
 
     # Async path - run in background
+    max_workers = _get_max_workers()
     file_count = len(paths) if not restore_all else 0
     if restore_all:
         response = _start_async_action(
@@ -337,6 +353,7 @@ def restore_plexcached(
             service.restore_all_plexcached,
             method_kwargs={"dry_run": False, "orphaned_only": orphaned_only},
             file_count=file_count,
+            max_workers=max_workers,
         )
     else:
         response = _start_async_action(
@@ -345,6 +362,7 @@ def restore_plexcached(
             method_args=(paths,),
             method_kwargs={"dry_run": False},
             file_count=len(paths),
+            max_workers=max_workers,
         )
     return HTMLResponse(response)
 
@@ -372,11 +390,13 @@ def delete_plexcached(
         )
 
     # Async path
+    max_workers = _get_max_workers()
     if delete_all:
         response = _start_async_action(
             "delete-plexcached",
             service.delete_all_plexcached,
             method_kwargs={"dry_run": False},
+            max_workers=max_workers,
         )
     else:
         response = _start_async_action(
@@ -385,6 +405,7 @@ def delete_plexcached(
             method_args=(paths,),
             method_kwargs={"dry_run": False},
             file_count=len(paths),
+            max_workers=max_workers,
         )
     return HTMLResponse(response)
 
@@ -406,12 +427,14 @@ def fix_with_backup(
             {"request": request, "action_result": result, "results": audit_results, "dry_run": True}
         )
 
+    max_workers = _get_max_workers()
     response = _start_async_action(
         "fix-with-backup",
         service.fix_with_backup,
         method_args=(paths,),
         method_kwargs={"dry_run": False},
         file_count=len(paths),
+        max_workers=max_workers,
     )
     return HTMLResponse(response)
 
@@ -433,12 +456,14 @@ def sync_to_array(
             {"request": request, "action_result": result, "results": audit_results, "dry_run": True}
         )
 
+    max_workers = _get_max_workers()
     response = _start_async_action(
         "sync-to-array",
         service.sync_to_array,
         method_args=(paths,),
         method_kwargs={"dry_run": False},
         file_count=len(paths),
+        max_workers=max_workers,
     )
     return HTMLResponse(response)
 
@@ -460,12 +485,14 @@ def protect_with_backup(
             {"request": request, "action_result": result, "results": audit_results, "dry_run": True}
         )
 
+    max_workers = _get_max_workers()
     response = _start_async_action(
         "protect-with-backup",
         service.protect_with_backup,
         method_args=(paths,),
         method_kwargs={"dry_run": False},
         file_count=len(paths),
+        max_workers=max_workers,
     )
     return HTMLResponse(response)
 
