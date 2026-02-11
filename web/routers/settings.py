@@ -509,6 +509,7 @@ async def settings_cache(request: Request):
                 drive_info["total_display"] = f"{total_gb/1024:.2f} TB"
             else:
                 drive_info["total_display"] = f"{total_gb:.1f} GB"
+            drive_info["free_bytes"] = disk_usage.free
             drive_info["used_bytes"] = disk_usage.used
             used_gb = disk_usage.used / (1024**3)
             if used_gb >= 1024:

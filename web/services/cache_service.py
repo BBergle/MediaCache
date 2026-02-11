@@ -752,11 +752,11 @@ class CacheService:
         eviction_over_by = 0
         eviction_over_by_display = None
         eviction_mode = settings.get("cache_eviction_mode", "none")
+        cache_limit_bytes = 0
 
         if eviction_mode != "none" and disk_total > 0:
             # Get the configured cache limit (not disk total)
             cache_limit_setting = settings.get("cache_limit", "")
-            cache_limit_bytes = 0
 
             if cache_limit_setting and cache_limit_setting not in ["", "N/A", "none", "None", "0"]:
                 try:
@@ -792,6 +792,34 @@ class CacheService:
         if cache_limit_bytes > 0 and disk_used >= cache_limit_bytes:
             cache_limit_exceeded = True
 
+        # Check min_free_space floor
+        min_free_space_warning = False
+        min_free_space_setting = settings.get("min_free_space", "")
+        if min_free_space_setting and min_free_space_setting not in ["", "0"] and disk_total > 0:
+            try:
+                limit_str = str(min_free_space_setting).strip()
+                min_free_bytes = 0
+                if limit_str.upper().endswith('%'):
+                    percent_val = int(limit_str.rstrip('%'))
+                    min_free_bytes = int(disk_total * percent_val / 100)
+                else:
+                    import re as _re
+                    match = _re.match(r'^([\d.]+)\s*(T|TB|G|GB|M|MB)?$', limit_str, _re.IGNORECASE)
+                    if match:
+                        value = float(match.group(1))
+                        unit = (match.group(2) or "GB").upper()
+                        if unit in ("T", "TB"):
+                            min_free_bytes = int(value * 1024**4)
+                        elif unit in ("G", "GB"):
+                            min_free_bytes = int(value * 1024**3)
+                        elif unit in ("M", "MB"):
+                            min_free_bytes = int(value * 1024**2)
+                disk_free = disk_total - disk_used
+                if min_free_bytes > 0 and disk_free < min_free_bytes:
+                    min_free_space_warning = True
+            except (ValueError, TypeError):
+                pass
+
         return {
             "cache_files": len(all_files),  # Grouped count (subtitles with videos)
             "cache_size": self._format_size(disk_used),  # Actual disk used
@@ -805,7 +833,8 @@ class CacheService:
             "watchlist_count": watchlist_count,
             "eviction_over_threshold": eviction_over_threshold,
             "eviction_over_by_display": eviction_over_by_display,
-            "cache_limit_exceeded": cache_limit_exceeded
+            "cache_limit_exceeded": cache_limit_exceeded,
+            "min_free_space_warning": min_free_space_warning
         }
 
     def get_drive_details(self, expiring_within_days: int = 3) -> Dict[str, Any]:
@@ -946,6 +975,45 @@ class CacheService:
             cache_limit_used_percent = round(effective_usage / cache_limit_bytes * 100, 1)
             cache_limit_available = max(0, cache_limit_bytes - effective_usage)
 
+        # Calculate min_free_space info
+        min_free_space_setting = settings.get("min_free_space", "")
+        min_free_space_bytes = 0
+        min_free_space_display = None
+        min_free_space_percent = None
+        min_free_space_warning = False
+        min_free_space_available = 0
+
+        if min_free_space_setting and min_free_space_setting not in ["", "0"] and disk_total > 0:
+            try:
+                mfs_str = str(min_free_space_setting).strip()
+                if mfs_str.upper().endswith('%'):
+                    percent_val = int(mfs_str.rstrip('%').rstrip().upper().rstrip('%'))
+                    min_free_space_bytes = int(disk_total * percent_val / 100)
+                    min_free_space_display = f"{percent_val}% = {self._format_size(min_free_space_bytes)}"
+                    min_free_space_percent = percent_val
+                else:
+                    import re
+                    match = re.match(r"^(\d+(?:\.\d+)?)\s*(TB|GB|MB|T|G|M)?$", mfs_str, re.IGNORECASE)
+                    if match:
+                        value = float(match.group(1))
+                        unit = (match.group(2) or "GB").upper()
+                        if unit in ("T", "TB"):
+                            min_free_space_bytes = int(value * 1024**4)
+                        elif unit in ("G", "GB"):
+                            min_free_space_bytes = int(value * 1024**3)
+                        elif unit in ("M", "MB"):
+                            min_free_space_bytes = int(value * 1024**2)
+                        min_free_space_display = self._format_size(min_free_space_bytes)
+                        if disk_total > 0:
+                            min_free_space_percent = round(min_free_space_bytes / disk_total * 100, 1)
+            except (ValueError, TypeError):
+                pass
+
+        if min_free_space_bytes > 0:
+            min_free_space_available = max(0, disk_free - min_free_space_bytes)
+            if disk_free < min_free_space_bytes:
+                min_free_space_warning = True
+
         # Calculate eviction threshold (for visual display)
         eviction_threshold_setting = settings.get("cache_eviction_threshold_percent", 95)
         eviction_threshold_bytes = 0
@@ -1030,6 +1098,13 @@ class CacheService:
                 "eviction_approaching": eviction_approaching,
                 "eviction_over_by": eviction_over_by,
                 "eviction_over_by_display": self._format_size(eviction_over_by) if eviction_over_by > 0 else None,
+                # Min free space info
+                "min_free_space_bytes": min_free_space_bytes,
+                "min_free_space_display": min_free_space_display,
+                "min_free_space_percent": min_free_space_percent,
+                "min_free_space_warning": min_free_space_warning,
+                "min_free_space_available": min_free_space_available,
+                "min_free_space_available_display": self._format_size(min_free_space_available) if min_free_space_bytes > 0 else None,
                 # Stacked bar data
                 "other_drive_size": other_drive_size,
                 "other_drive_size_display": self._format_size(other_drive_size),

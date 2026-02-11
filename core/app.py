@@ -1306,6 +1306,37 @@ class PlexCacheApp:
             limit_readable = f"{cache_limit_bytes / (1024**3):.1f}GB"
             return (cache_limit_bytes, limit_readable)
 
+    def _get_effective_min_free_space(self, cache_dir: str) -> tuple:
+        """Calculate effective min free space in bytes, handling percentage-based values.
+
+        Args:
+            cache_dir: Path to the cache directory.
+
+        Returns:
+            Tuple of (min_free_bytes, readable_str). Returns (0, None) if disabled.
+        """
+        min_free_bytes = self.config_manager.cache.min_free_space_bytes
+
+        if min_free_bytes == 0:
+            return (0, None)
+
+        if min_free_bytes < 0:
+            # Negative value indicates percentage
+            percent = abs(min_free_bytes)
+            try:
+                drive_size_override = self.config_manager.cache.cache_drive_size_bytes
+                disk_usage = get_disk_usage(cache_dir, drive_size_override)
+                total_drive_size = disk_usage.total
+                free_bytes = int(total_drive_size * percent / 100)
+                readable = f"{percent}% of {total_drive_size / (1024**3):.1f}GB = {free_bytes / (1024**3):.1f}GB"
+                return (free_bytes, readable)
+            except Exception as e:
+                logging.warning(f"Could not calculate cache drive size for min_free_space percentage: {e}")
+                return (0, None)
+        else:
+            readable = f"{min_free_bytes / (1024**3):.1f}GB"
+            return (min_free_bytes, readable)
+
     def _get_plexcache_tracked_size(self) -> tuple:
         """Calculate current PlexCache tracked size from exclude file.
 
@@ -1344,15 +1375,16 @@ class PlexCacheApp:
         return (plexcache_tracked, cached_files)
 
     def _apply_cache_limit(self, media_files: List[str], cache_dir: str) -> List[str]:
-        """Apply cache size limit, filtering out files that would exceed the limit.
+        """Apply cache size limit and min free space, filtering out files that would exceed limits.
 
-        Returns the list of files that fit within the cache limit.
+        Returns the list of files that fit within the most restrictive constraint.
         Files are prioritized in the order they appear (OnDeck items should come first).
         """
         cache_limit_bytes, limit_readable = self._get_effective_cache_limit(cache_dir)
+        min_free_bytes, min_free_readable = self._get_effective_min_free_space(cache_dir)
 
-        # No limit set or error calculating
-        if cache_limit_bytes == 0:
+        # No constraints set
+        if cache_limit_bytes == 0 and min_free_bytes == 0:
             return media_files
 
         # Get total cache drive usage (use manual override if configured)
@@ -1365,14 +1397,39 @@ class PlexCacheApp:
             logging.warning(f"Could not determine cache drive usage: {e}, skipping limit check")
             return media_files
 
-        logging.info(f"Cache limit: {limit_readable}")
-        logging.info(f"Cache drive usage: {drive_usage_gb:.2f}GB")
+        if cache_limit_bytes > 0:
+            logging.info(f"Cache limit: {limit_readable}")
+        if min_free_bytes > 0:
+            logging.info(f"Min free space: {min_free_readable}")
+        logging.info(f"Cache drive usage: {drive_usage_gb:.2f}GB (free: {disk_usage.free / (1024**3):.2f}GB)")
 
-        # Calculate available space from actual drive usage
-        available_space = cache_limit_bytes - drive_usage_bytes
+        # Calculate available space from each constraint
+        available_space = None
+        bottleneck = None
+
+        if cache_limit_bytes > 0:
+            cache_limit_available = cache_limit_bytes - drive_usage_bytes
+            available_space = cache_limit_available
+            bottleneck = "cache_limit"
+
+        if min_free_bytes > 0:
+            min_free_available = disk_usage.free - min_free_bytes
+            if available_space is None or min_free_available < available_space:
+                available_space = min_free_available
+                bottleneck = "min_free_space"
+
+        if available_space is None:
+            return media_files
+
+        # Log which constraint is the bottleneck when both are active
+        if cache_limit_bytes > 0 and min_free_bytes > 0:
+            logging.info(f"Active constraint: {bottleneck.replace('_', ' ')} (available: {available_space / (1024**3):.2f}GB)")
 
         if available_space <= 0:
-            logging.warning(f"Cache drive already at or over limit ({drive_usage_gb:.2f}GB used, limit is {limit_readable})")
+            if bottleneck == "min_free_space":
+                logging.warning(f"Drive free space ({disk_usage.free / (1024**3):.2f}GB) is at or below min free space floor ({min_free_readable})")
+            else:
+                logging.warning(f"Cache drive already at or over limit ({drive_usage_gb:.2f}GB used, limit is {limit_readable})")
             return []
         files_to_cache = []
         skipped_count = 0

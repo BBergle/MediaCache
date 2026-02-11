@@ -154,6 +154,13 @@ class CacheConfig:
     cache_limit: str = ""
     cache_limit_bytes: int = 0  # Parsed value in bytes (computed from cache_limit)
 
+    # Minimum free space: safety floor to keep on the cache drive
+    # Stops caching when free space drops below this, regardless of cache_limit
+    # Supports formats: "50GB", "5%", or just "50" (defaults to GB)
+    # Empty string or "0" means disabled
+    min_free_space: str = ""
+    min_free_space_bytes: int = 0  # Parsed value in bytes (computed from min_free_space)
+
     # Smart cache eviction settings
     # cache_eviction_mode: "smart" (priority-based), "fifo" (oldest first), or "none" (disabled)
     cache_eviction_mode: str = "none"
@@ -382,6 +389,10 @@ class ConfigManager:
         # Load and parse cache limit setting
         self.cache.cache_limit = self.settings_data.get('cache_limit', "")
         self.cache.cache_limit_bytes = self._parse_cache_limit(self.cache.cache_limit)
+
+        # Load and parse min free space setting
+        self.cache.min_free_space = self.settings_data.get('min_free_space', "")
+        self.cache.min_free_space_bytes = self._parse_cache_limit(self.cache.min_free_space)
 
         # Load smart eviction settings (default: disabled)
         self.cache.cache_eviction_mode = self.settings_data.get('cache_eviction_mode', "none")

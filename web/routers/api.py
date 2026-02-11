@@ -60,6 +60,7 @@ def _get_dashboard_stats_data(use_cache: bool = True) -> tuple[dict, str | None]
         "eviction_over_threshold": cache_stats.get("eviction_over_threshold", False),
         "eviction_over_by_display": cache_stats.get("eviction_over_by_display"),
         "cache_limit_exceeded": cache_stats.get("cache_limit_exceeded", False),
+        "min_free_space_warning": cache_stats.get("min_free_space_warning", False),
         "last_run": last_run,
         "is_running": operation_runner.is_running,
         "plex_connected": plex_connected,
