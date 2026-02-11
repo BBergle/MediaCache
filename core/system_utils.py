@@ -190,6 +190,13 @@ def get_disk_usage(path: str, total_override_bytes: int = 0) -> DiskUsage:
 def detect_zfs(path: str) -> bool:
     """Detect if a path is on a ZFS filesystem.
 
+    First tries df -T on the exact path. If that reports a non-ZFS type
+    AND the path is under /mnt/user/ (Unraid FUSE), falls back to checking
+    /proc/mounts for ZFS datasets mounted with the same share name.
+
+    This fallback is needed because Unraid's FUSE layer (/mnt/user/) reports
+    filesystem type as 'shfs' even when the underlying storage is ZFS.
+
     Args:
         path: Path to check.
 
@@ -201,14 +208,52 @@ def detect_zfs(path: str) -> bool:
             ['df', '-T', path],
             capture_output=True, text=True, timeout=5
         )
-        if result.returncode != 0:
-            return False
-
-        # Check if 'zfs' appears in the filesystem type column
-        return 'zfs' in result.stdout.lower()
-
+        if result.returncode == 0 and 'zfs' in result.stdout.lower():
+            return True
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return False
+        pass
+
+    # Fallback: For Unraid FUSE paths like /mnt/user/<share>/, df -T reports
+    # 'shfs' instead of the underlying filesystem. Check /proc/mounts for
+    # ZFS datasets with a mountpoint matching the share name.
+    if path.startswith('/mnt/user/'):
+        parts = path.rstrip('/').split('/')
+        if len(parts) >= 4:
+            share_name = parts[3]  # e.g., 'plex_media' from /mnt/user/plex_media/...
+            return _check_zfs_mount_for_share(share_name)
+
+    return False
+
+
+def _check_zfs_mount_for_share(share_name: str) -> bool:
+    """Check if a ZFS dataset is mounted with a matching share name.
+
+    Reads /proc/mounts to find ZFS mounts where the mountpoint's last
+    path component matches the Unraid share name. This detects ZFS-backed
+    shares that are hidden behind Unraid's FUSE layer at /mnt/user/.
+
+    Example /proc/mounts line:
+        plex/plex_media /mnt/plex/plex_media zfs rw,xattr,posixacl ...
+
+    Args:
+        share_name: The Unraid share name (e.g., 'plex_media').
+
+    Returns:
+        True if a ZFS mount with a matching share name is found.
+    """
+    try:
+        with open('/proc/mounts', 'r') as f:
+            for line in f:
+                fields = line.split()
+                if len(fields) >= 3:
+                    mountpoint = fields[1]
+                    fs_type = fields[2]
+                    if fs_type == 'zfs' and mountpoint.rstrip('/').endswith('/' + share_name):
+                        logging.debug(f"ZFS mount detected via /proc/mounts: {mountpoint} (share: {share_name})")
+                        return True
+    except (OSError, IOError):
+        pass
+    return False
 
 
 def get_disk_number_from_path(disk_path: str) -> Optional[str]:
