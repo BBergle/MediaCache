@@ -1,8 +1,9 @@
 """API routes for HTMX partial updates"""
 
+import html
 from datetime import datetime
 from fastapi import APIRouter, Request, Form
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from typing import List
 from urllib.parse import unquote
 
@@ -195,7 +196,7 @@ def evict_file(request: Request, file_path: str):
 
     # Return an alert message
     if result.get("success"):
-        message = result.get("message", "File evicted")
+        message = html.escape(result.get("message", "File evicted"))
         return f'''<div class="alert alert-success" id="evict-alert">
             <i data-lucide="check-circle"></i>
             <span>{message}</span>
@@ -205,7 +206,7 @@ def evict_file(request: Request, file_path: str):
             htmx.trigger('#cache-table-body', 'refresh');
         </script>'''
     else:
-        message = result.get("message", "Eviction failed")
+        message = html.escape(result.get("message", "Eviction failed"))
         return f'''<div class="alert alert-error" id="evict-alert">
             <i data-lucide="alert-circle"></i>
             <span>{message}</span>
@@ -239,9 +240,9 @@ async def evict_bulk(request: Request):
     result = cache_service.evict_files(decoded_paths)
 
     if result["success"]:
-        msg = f"Evicted {result['evicted_count']} of {result['total_count']} files"
+        msg = html.escape(f"Evicted {result['evicted_count']} of {result['total_count']} files")
         if result["errors"]:
-            msg += f" ({len(result['errors'])} errors)"
+            msg += html.escape(f" ({len(result['errors'])} errors)")
 
         return f'''<div class="alert alert-success" id="evict-alert">
             <i data-lucide="check-circle"></i>
@@ -255,7 +256,7 @@ async def evict_bulk(request: Request):
             updateBulkActions();
         </script>'''
     else:
-        errors_str = "; ".join(result["errors"][:3])
+        errors_str = html.escape("; ".join(result["errors"][:3]))
         return f'''<div class="alert alert-error" id="evict-alert">
             <i data-lucide="alert-circle"></i>
             <span>Failed to evict files: {errors_str}</span>
@@ -553,7 +554,7 @@ async def get_operation_indicator(request: Request):
 
 
 @router.get("/operation-banner", response_class=HTMLResponse)
-async def get_operation_banner(request: Request):
+def get_operation_banner(request: Request):
     """Return global operation status banner HTML - shown on all pages when operation is running"""
     from web.services.maintenance_runner import get_maintenance_runner
 
@@ -561,7 +562,26 @@ async def get_operation_banner(request: Request):
     status = operation_runner.get_status_dict()
     maint_status = get_maintenance_runner().get_status_dict()
 
+    context = {"request": request, "status": status, "maint_status": maint_status}
+
+    # When both runners are idle, include scheduler countdown info
+    if not operation_runner.is_running and not get_maintenance_runner().is_running:
+        scheduler_service = get_scheduler_service()
+        sched_status = scheduler_service.get_status()
+        if sched_status.get("enabled") and sched_status.get("next_run_relative"):
+            context["scheduler_status"] = {
+                "next_run_relative": sched_status["next_run_relative"],
+                "next_run_display": sched_status.get("next_run_display", ""),
+            }
+
     return templates.TemplateResponse(
         "components/global_operation_banner.html",
-        {"request": request, "status": status, "maint_status": maint_status}
+        context
     )
+
+
+@router.post("/dismiss-operation")
+def dismiss_operation():
+    """Dismiss a completed/failed operation banner, resetting state to idle."""
+    get_operation_runner().dismiss()
+    return JSONResponse({"ok": True})

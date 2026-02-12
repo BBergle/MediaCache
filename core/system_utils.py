@@ -532,7 +532,8 @@ class FileUtils:
         display_src: str = None,
         display_dest: str = None,
         stop_check: Callable[[], bool] = None,
-        chunk_size: int = 10 * 1024 * 1024  # 10MB chunks for stop checks
+        chunk_size: int = 10 * 1024 * 1024,  # 10MB chunks for stop checks
+        progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> int:
         """Copy a file preserving original ownership and permissions (Linux only).
 
@@ -546,6 +547,7 @@ class FileUtils:
                         Checked between chunks to allow mid-copy cancellation.
             chunk_size: Size of chunks for copy (default 10MB). Smaller = more responsive
                         to stop requests but slightly slower copy speed.
+            progress_callback: Optional callback(bytes_copied, file_total) called after each chunk.
 
         If PUID/PGID environment variables are set, those values are used for ownership.
         Otherwise, the source file's ownership is preserved.
@@ -571,8 +573,10 @@ class FileUtils:
                 target_uid = self.puid if self.puid is not None else src_uid
                 target_gid = self.pgid if self.pgid is not None else src_gid
 
-                # Chunked copy with stop check support
+                # Chunked copy with stop check and progress callback support
                 # This allows cancelling mid-copy for large files
+                file_size = stat_info.st_size
+                bytes_copied = 0
                 with open(src, 'rb') as fsrc:
                     with open(dest, 'wb') as fdest:
                         while True:
@@ -585,6 +589,9 @@ class FileUtils:
                             if not chunk:
                                 break
                             fdest.write(chunk)
+                            bytes_copied += len(chunk)
+                            if progress_callback:
+                                progress_callback(bytes_copied, file_size)
 
                 # Copy metadata (timestamps, etc.) - equivalent to what copy2 does
                 shutil.copystat(src, dest)
@@ -611,8 +618,10 @@ class FileUtils:
                 else:
                     logging.debug(f"File copied with permissions preserved: {log_dest}")
             else:  # Windows logic
-                # Windows: use chunked copy for stop check support
-                if stop_check:
+                # Windows: use chunked copy for stop check or progress callback support
+                if stop_check or progress_callback:
+                    file_size = os.path.getsize(src)
+                    bytes_copied = 0
                     with open(src, 'rb') as fsrc:
                         with open(dest, 'wb') as fdest:
                             while True:
@@ -623,6 +632,9 @@ class FileUtils:
                                 if not chunk:
                                     break
                                 fdest.write(chunk)
+                                bytes_copied += len(chunk)
+                                if progress_callback:
+                                    progress_callback(bytes_copied, file_size)
                     shutil.copystat(src, dest)
                 else:
                     shutil.copy2(src, dest)

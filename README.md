@@ -1,5 +1,5 @@
 # PlexCache-R V3.0: Automate Plex Media Management
-### Updated 1/20/26
+### Updated 2/12/26
 
 ## Current Bugs / Todo List
 
@@ -27,6 +27,13 @@ The original PlexCache app only worked for local users for most features, due to
 - (New v3) - **Enhanced Webhooks** - Discord and Slack rich message formatting with granular notification levels (Summary, Activity, Errors, Warnings).
 - (New v3) - **Stop Button** - Abort running operations gracefully from the Web UI.
 - (New v3) - **Smart Error Handling** - Migration stops early on critical errors (disk full, permissions).
+- (New v3) - **Async Maintenance** — Background thread execution for maintenance actions (restore, sync, protect, delete, fix) with real-time progress.
+- (New v3) - **Parallel File Operations** — Concurrent file moves/copies with configurable worker count.
+- (New v3) - **Cache Health Audit** — Detect unprotected files, orphaned backups, stale entries with one-click fixes.
+- (New v3) - **ZFS Support** — Automatic detection of ZFS pool-only shares with correct path resolution.
+- (New v3) - **Min Free Space** — Safety floor setting to prevent caching when cache drive space is low.
+- (New v3) - **Docker Support** — Official container with Unraid template, auto-setup, and path translation.
+- (New v3) - **Byte-Level Progress** — Smooth progress bar updates every 10MB during file copies, with ETA from copy rate.
 - Move watched media present on the cache drive back to the array.
 - Move respective subtitles along with the media moved to or from the cache.
 - Filter media older than a specified number of days.
@@ -45,26 +52,37 @@ The original PlexCache app only worked for local users for most features, due to
 
 ```
 PlexCache-R/
-├── plexcache.py              # CLI entry point
-├── plexcache_web.py          # Web UI entry point
+├── plexcache.py              # Unified entry point (CLI, Web UI, setup wizard)
 ├── core/                     # Core application modules
 │   ├── app.py                # Main orchestrator (PlexCacheApp class)
 │   ├── setup.py              # Interactive setup wizard
-│   ├── config.py             # Configuration management (dataclasses)
-│   ├── logging_config.py     # Logging, rotation, notification handlers
-│   ├── system_utils.py       # OS detection, path conversions
-│   ├── plex_api.py           # Plex server interactions
-│   └── file_operations.py    # File moving, filtering, subtitles
+│   ├── config.py             # Configuration management (dataclasses, JSON settings)
+│   ├── logging_config.py     # Logging, rotation, Unraid/webhook notification handlers
+│   ├── system_utils.py       # OS detection, path conversions, file utilities
+│   ├── plex_api.py           # Plex server interactions (OnDeck, Watchlist, RSS feeds)
+│   └── file_operations.py    # File moving, filtering, subtitles, timestamp tracking
 ├── web/                      # Web UI (FastAPI + HTMX)
-│   ├── main.py               # FastAPI application
-│   ├── routers/              # Route handlers
-│   ├── services/             # Business logic
+│   ├── main.py               # FastAPI application (lifespan, middleware, error handlers)
+│   ├── config.py             # Web configuration + shared Jinja2 templates instance
+│   ├── dependencies.py       # Shared instances
+│   ├── routers/              # Route handlers (dashboard, cache, settings, logs, maintenance, operations, setup)
+│   ├── services/             # Business logic layer
+│   │   ├── maintenance_runner.py  # Background maintenance thread runner
+│   │   ├── operation_runner.py    # Background operation runner + activity feed
+│   │   ├── cache_service.py       # Cache analysis and storage stats
+│   │   └── ...                    # Scheduler, settings, import services
 │   ├── templates/            # Jinja2 templates (Plex theme)
 │   └── static/               # CSS, JS assets
+├── docker/                   # Docker support
+│   ├── Dockerfile            # Multi-stage container build
+│   ├── docker-entrypoint.sh  # Container startup script
+│   └── plexcache-r.xml       # Unraid Community Apps template
 ├── tools/                    # Diagnostic utilities
 │   └── audit_cache.py        # Cache diagnostic tool
-├── data/                     # Runtime tracking files (auto-created)
-└── logs/                     # Log files
+├── data/                     # Runtime tracking files (auto-created, JSON)
+├── logs/                     # plexcache.log (rotating, 10MB, 5 backups)
+├── plexcache_settings.json   # User configuration
+└── plexcache_cached_files.txt  # Tracked cache files (Unraid mover exclude list)
 ```
 
 ## Web UI (New in V3.0)
@@ -73,9 +91,9 @@ PlexCache-R now includes a browser-based dashboard for monitoring and configurat
 
 **Start the Web UI:**
 ```bash
-python3 plexcache_web.py                 # Start on localhost:5000
-python3 plexcache_web.py --host 0.0.0.0  # Listen on all interfaces
-python3 plexcache_web.py --port 8080     # Custom port
+python3 plexcache.py --web               # Start on localhost:5000
+python3 plexcache.py --web --host 0.0.0.0  # Listen on all interfaces
+python3 plexcache.py --web --port 8080     # Custom port
 ```
 
 **Features:**
@@ -88,8 +106,13 @@ python3 plexcache_web.py --port 8080     # Custom port
 - **Schedule** - Automatic runs with interval or cron expressions
 - **Logs** - Real-time log viewer with search, filters, and live streaming
 - **Stop Button** - Abort running operations gracefully (stops after current file completes)
+- **Operations** — Run Now with real-time progress banner, ETA, and stop button
+- **Activity Feed** — Recent file operations with persistent history
+- **Maintenance History** — Persistent log of past maintenance actions
 
 **Tech Stack:** FastAPI, HTMX, Jinja2, Plex-inspired dark theme
+
+> **Note:** When running via Docker, the default port is **5757**. When running via CLI, the default port is **5000**.
 
 ## Docker Installation (Recommended for Unraid)
 
@@ -141,7 +164,149 @@ See `docker/UNRAID_SETUP.md` for detailed Unraid setup instructions including CA
 
 ## Installation and Setup
 
-Please check out our [Wiki section](https://github.com/StudioNirin/PlexCache-R/wiki) for the step-by-step guide on how to setup PlexCache on your system. The WIKI should cover basically everything. If something doesn't make sense, or doesn't work, please open a new issue for it. But don't be upset if the answer is in the WIKI and we mock you for not reading it thoroughly first. 
+There are three ways to run PlexCache-R, depending on your preference:
+
+| | Docker | Manual + Web UI | Manual + CLI |
+|---|---|---|---|
+| **Best for** | Unraid users who prefer containers | Unraid/Linux users who prefer native installs | Lightweight, script-only usage |
+| **Web dashboard** | Yes (always on) | Yes (always on) | No |
+| **Scheduling** | Built-in (via Web UI) | Built-in (via Web UI) | External (cron / User Scripts) |
+| **Auto-start** | Docker restart policy | systemd or User Scripts plugin | cron `@reboot` or User Scripts |
+| **Default port** | 5757 | 5000 | N/A |
+| **Setup** | Web UI wizard on first visit | Web UI wizard on first visit | `--setup` CLI wizard |
+
+### Option 1: Docker (Recommended)
+
+See the [Docker Installation](#docker-installation-recommended-for-unraid) section above.
+
+### Option 2: Manual Install + Web UI
+
+This runs PlexCache-R as a persistent web server with dashboard, scheduler, and all V3.0 features.
+
+**Prerequisites:**
+- Python 3.9+
+- Git (to clone the repo)
+
+**Install:**
+```bash
+cd /mnt/user/appdata
+git clone https://github.com/StudioNirin/PlexCache-R.git
+cd PlexCache-R
+pip3 install -r requirements.txt
+```
+
+**Start the Web UI:**
+```bash
+python3 plexcache.py --web --host 0.0.0.0           # Listen on all interfaces, port 5000
+python3 plexcache.py --web --host 0.0.0.0 --port 8080  # Custom port
+```
+
+Then open `http://[YOUR_IP]:5000` in your browser. On first run, the Setup Wizard will guide you through configuration.
+
+#### Auto-Start on Boot (Unraid — User Scripts Plugin)
+
+The easiest way to auto-start on Unraid without Docker:
+
+1. Install **User Scripts** from Community Apps (if not already installed)
+2. Go to **Settings** → **User Scripts** → **Add New Script**
+3. Name it `PlexCache-R Web UI`
+4. Click the script name, then **Edit Script** and paste:
+
+```bash
+#!/bin/bash
+cd /mnt/user/appdata/PlexCache-R
+nohup python3 plexcache.py --web --host 0.0.0.0 --port 5000 > /dev/null 2>&1 &
+```
+
+5. Set the schedule to **At Startup of Array**
+6. Click **Apply**
+
+> **Tip:** To stop the server, find the process with `ps aux | grep plexcache` and `kill` it, or use the User Scripts **Stop** button if available.
+
+#### Auto-Start on Boot (Generic Linux — systemd)
+
+For non-Unraid Linux systems, create a systemd service:
+
+```bash
+sudo nano /etc/systemd/system/plexcache-r.service
+```
+
+```ini
+[Unit]
+Description=PlexCache-R Web UI
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/PlexCache-R
+ExecStart=/usr/bin/python3 plexcache.py --web --host 0.0.0.0 --port 5000
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable plexcache-r
+sudo systemctl start plexcache-r
+```
+
+Check status with `sudo systemctl status plexcache-r` and logs with `journalctl -u plexcache-r -f`.
+
+### Option 3: Manual Install + CLI Only
+
+This is the original V1/V2 mode — no web server, no dashboard. PlexCache-R runs once, performs caching/eviction, and exits. You schedule it externally.
+
+**Install** (same as Option 2):
+```bash
+cd /mnt/user/appdata
+git clone https://github.com/StudioNirin/PlexCache-R.git
+cd PlexCache-R
+pip3 install -r requirements.txt
+```
+
+**First-time setup:**
+```bash
+python3 plexcache.py --setup
+```
+
+**Run manually:**
+```bash
+python3 plexcache.py                     # Normal run
+python3 plexcache.py --dry-run --verbose # Test run with full debug output
+```
+
+#### Schedule with Cron
+
+```bash
+crontab -e
+```
+
+```
+# Run PlexCache-R every 6 hours
+0 */6 * * * cd /mnt/user/appdata/PlexCache-R && python3 plexcache.py >> /mnt/user/appdata/PlexCache-R/logs/cron.log 2>&1
+```
+
+#### Schedule with Unraid User Scripts
+
+1. Install **User Scripts** from Community Apps
+2. **Add New Script** → name it `PlexCache-R`
+3. **Edit Script:**
+
+```bash
+#!/bin/bash
+cd /mnt/user/appdata/PlexCache-R
+python3 plexcache.py
+```
+
+4. Set schedule (e.g., **Custom** → `0 */6 * * *` for every 6 hours)
+5. Click **Apply**
+
+---
+
+For additional help, check the [Wiki](https://github.com/StudioNirin/PlexCache-R/wiki) for detailed guides. If something doesn't make sense or doesn't work, please open a new issue. But don't be upset if the answer is in the Wiki and we mock you for not reading it thoroughly first.
 
 ## Notes
 

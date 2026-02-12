@@ -26,11 +26,13 @@ class PlexCacheApp:
     """Main PlexCache application class."""
 
     def __init__(self, config_file: str, dry_run: bool = False,
-                 quiet: bool = False, verbose: bool = False):
+                 quiet: bool = False, verbose: bool = False,
+                 bytes_progress_callback=None):
         self.config_file = config_file
         self.dry_run = dry_run  # Don't move files, just simulate
         self.quiet = quiet  # Override notification level to errors-only
         self.verbose = verbose  # Enable DEBUG level logging
+        self._bytes_progress_callback = bytes_progress_callback  # Byte-level progress for operation banner
         self.start_time = time.time()
         
         # Initialize components
@@ -517,7 +519,8 @@ class PlexCacheApp:
             stop_check=lambda: self.should_stop,  # Allow FileMover to check for stop requests
             create_plexcached_backups=self.config_manager.cache.create_plexcached_backups,
             hardlinked_files=self.config_manager.cache.hardlinked_files,
-            cleanup_empty_folders=self.config_manager.cache.cleanup_empty_folders
+            cleanup_empty_folders=self.config_manager.cache.cleanup_empty_folders,
+            bytes_progress_callback=self._bytes_progress_callback
         )
 
     def _init_cache_management(self) -> None:

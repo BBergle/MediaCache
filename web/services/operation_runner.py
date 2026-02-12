@@ -165,6 +165,25 @@ class OperationResult:
     dry_run: bool = False
     log_messages: List[str] = field(default_factory=list)
     recent_activity: List[FileActivity] = field(default_factory=list)
+    # Phase tracking (Enhancement 1)
+    current_phase: str = "starting"
+    current_phase_display: str = "Starting..."
+    files_to_cache_total: int = 0
+    files_to_restore_total: int = 0
+    files_cached_so_far: int = 0
+    files_restored_so_far: int = 0
+    bytes_cached_so_far: int = 0
+    bytes_restored_so_far: int = 0
+    last_completed_file: str = ""
+    error_count: int = 0
+    # Byte-level batch progress (from FileMover callback)
+    batch_bytes_copied: int = 0
+    batch_bytes_total: int = 0
+    batch_copy_start_time: Optional[float] = None
+    # Cumulative across all batches (array + cache)
+    cumulative_bytes_copied: int = 0
+    cumulative_bytes_total: int = 0
+    _prev_batch_cumulative: int = 0  # internal: snapshot at batch start
 
 
 class WebLogHandler(logging.Handler):
@@ -203,6 +222,7 @@ class OperationRunner:
         self._max_recent_activity = MAX_RECENT_ACTIVITY
         self._stop_requested = False  # Flag to signal operation should stop
         self._app_instance: Optional["PlexCacheApp"] = None  # Reference to running app
+        self._current_run_files: List[dict] = []  # Files processed in current run only
         # Track current operation type based on headers
         self._current_operation: Optional[str] = None
         # Patterns to match file operation headers and content
@@ -359,6 +379,96 @@ class OperationRunner:
         except (ValueError, TypeError):
             return 0
 
+    # Phase detection markers (order matters — checked top-to-bottom)
+    _PHASE_MARKERS = [
+        ("--- Results ---", "results", "Finishing up..."),
+        ("Smart eviction", "evicting", "Running eviction..."),
+        ("Caching to cache drive", "caching", "Caching to drive..."),
+        ("Returning to array", "restoring", "Returning to array..."),
+        ("Copying to array", "restoring", "Returning to array..."),
+        ("--- Moving Files ---", "moving", "Moving files..."),
+        ("Total media to cache:", "analyzing", "Analyzing libraries..."),
+        ("--- Fetching Media ---", "fetching", "Fetching media..."),
+    ]
+
+    # Regex to extract file count from "Caching to cache drive (N file(s)):"
+    _cache_count_re = re.compile(r'Caching to cache drive \((\d+)\s+\w+')
+    # Regex to extract file count from "Total media to cache: N files"
+    _total_media_re = re.compile(r'Total media to cache:\s*(\d+)')
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        """Format seconds into human-readable duration like '1m 23s' or '45s'"""
+        seconds = max(0, seconds)
+        if seconds < 60:
+            return f"{int(seconds)}s"
+        minutes = int(seconds // 60)
+        secs = int(seconds % 60)
+        if minutes < 60:
+            return f"{minutes}m {secs:02d}s"
+        hours = int(minutes // 60)
+        mins = minutes % 60
+        return f"{hours}h {mins:02d}m"
+
+    @staticmethod
+    def _format_bytes(num_bytes: int) -> str:
+        """Format bytes into human-readable string like '2.1 GB' or '450 MB'"""
+        size = float(num_bytes)
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size < 1024 or unit == 'TB':
+                return f"{size:.1f} {unit}" if unit != 'B' else f"{int(size)} B"
+            size /= 1024
+        return f"{size:.1f} TB"
+
+    def _parse_phase(self, msg: str):
+        """Detect phase transitions and extract counts from log messages."""
+        # Strip timestamp prefix for clean matching
+        clean_msg = msg
+        for sep in (' - INFO - ', ' - DEBUG - ', ' - WARNING - '):
+            if sep in msg:
+                clean_msg = msg.split(sep, 1)[-1]
+                break
+
+        # Count errors
+        if ' - ERROR - ' in msg or ' - CRITICAL - ' in msg:
+            with self._lock:
+                if self._current_result:
+                    self._current_result.error_count += 1
+
+        # Detect phase transitions
+        for marker, phase_key, phase_display in self._PHASE_MARKERS:
+            if marker in clean_msg:
+                with self._lock:
+                    if self._current_result:
+                        self._current_result.current_phase = phase_key
+                        prefix = "Dry Run: " if self._current_result.dry_run else ""
+                        self._current_result.current_phase_display = prefix + phase_display
+                break
+
+        # Extract file count totals from header lines
+        with self._lock:
+            if not self._current_result:
+                return
+
+            # "Returning to array (N episodes/files ...)" or "Copying to array (N ...)"
+            m = self._return_header.search(clean_msg)
+            if not m:
+                m = self._copy_header.search(clean_msg)
+            if m:
+                self._current_result.files_to_restore_total += int(m.group(1))
+                return
+
+            # "Caching to cache drive (N file(s)):"
+            m = self._cache_count_re.search(clean_msg)
+            if m:
+                self._current_result.files_to_cache_total = int(m.group(1))
+                return
+
+            # "Total media to cache: N files" — only set if caching header hasn't set it yet
+            m = self._total_media_re.search(clean_msg)
+            if m and self._current_result.files_to_cache_total == 0:
+                self._current_result.files_to_cache_total = int(m.group(1))
+
     def _parse_file_operation(self, msg: str):
         """Parse log message to extract file operations"""
         # Strip timestamp prefix if present (format: HH:MM:SS - LEVEL - message)
@@ -411,6 +521,21 @@ class OperationRunner:
                 self._recent_activity.insert(0, activity)
                 if len(self._recent_activity) > self._max_recent_activity:
                     self._recent_activity = self._recent_activity[:self._max_recent_activity]
+                # Track files for this run's completion summary
+                self._current_run_files.insert(0, {
+                    "action": action,
+                    "filename": filename,
+                    "size": activity._format_size(size_bytes),
+                })
+                # Increment real-time progress counters
+                if self._current_result:
+                    self._current_result.last_completed_file = filename
+                    if action == "Cached":
+                        self._current_result.files_cached_so_far += 1
+                        self._current_result.bytes_cached_so_far += size_bytes
+                    elif action in ("Restored", "Moved"):
+                        self._current_result.files_restored_so_far += 1
+                        self._current_result.bytes_restored_so_far += size_bytes
             # Persist to disk (load-merge-save to avoid overwriting maintenance entries)
             self._save_activity(new_entry=activity)
             return
@@ -426,8 +551,9 @@ class OperationRunner:
             if len(self._log_messages) > self._max_log_messages:
                 self._log_messages = self._log_messages[-self._max_log_messages:]
 
-        # Try to parse file operations from log message
+        # Try to parse file operations and phase transitions from log message
         self._parse_file_operation(msg)
+        self._parse_phase(msg)
 
         # Notify async subscribers
         for queue in self._subscribers:
@@ -472,12 +598,15 @@ class OperationRunner:
             self._log_messages = []
             self._stop_requested = False  # Reset stop flag for new operation
             self._app_instance = None  # Clear previous app reference
+            self._current_run_files = []  # Reset per-run file list
             # Activity stacks across runs (not cleared) - capped at _max_recent_activity
             self._current_operation = None
             self._current_result = OperationResult(
                 state=OperationState.RUNNING,
                 started_at=datetime.now(),
-                dry_run=dry_run
+                dry_run=dry_run,
+                current_phase="starting",
+                current_phase_display="Dry Run: Starting..." if dry_run else "Starting...",
             )
 
         # Start operation in background thread
@@ -489,6 +618,14 @@ class OperationRunner:
         self._thread.start()
 
         return True
+
+    def dismiss(self) -> None:
+        """Reset COMPLETED/FAILED state back to IDLE so the banner shows scheduler info."""
+        with self._lock:
+            if self._state in (OperationState.COMPLETED, OperationState.FAILED):
+                self._state = OperationState.IDLE
+                if self._current_result:
+                    self._current_result.state = OperationState.IDLE
 
     def stop_operation(self) -> bool:
         """
@@ -547,12 +684,27 @@ class OperationRunner:
 
             config_file = str(SETTINGS_FILE)
 
+            # Byte-level progress callback for smooth operation banner updates
+            def _bytes_cb(bytes_copied: int, bytes_total: int):
+                with self._lock:
+                    if self._current_result:
+                        r = self._current_result
+                        if bytes_copied == 0:
+                            # New batch starting — snapshot cumulative progress
+                            r.batch_copy_start_time = time.time()
+                            r._prev_batch_cumulative = r.cumulative_bytes_copied
+                            r.cumulative_bytes_total = r._prev_batch_cumulative + bytes_total
+                        r.batch_bytes_copied = bytes_copied
+                        r.batch_bytes_total = bytes_total
+                        r.cumulative_bytes_copied = r._prev_batch_cumulative + bytes_copied
+
             # Create and run the app
             app = PlexCacheApp(
                 config_file=config_file,
                 dry_run=dry_run,
                 quiet=False,
-                verbose=verbose
+                verbose=verbose,
+                bytes_progress_callback=_bytes_cb
             )
 
             # Store reference so stop_operation can signal it
@@ -561,12 +713,13 @@ class OperationRunner:
 
             app.run()
 
-            # Extract results from app
+            # Extract results from real-time log counters (accurate: only counts
+            # files actually [Cached]/[Restored]/[Moved], not "Already cached")
             with self._lock:
-                self._current_result.files_cached = len(app.media_to_cache) if hasattr(app, 'media_to_cache') else 0
-                self._current_result.files_restored = app.restored_count + app.moved_to_array_count if hasattr(app, 'restored_count') else 0
-                self._current_result.bytes_cached = app.cached_bytes if hasattr(app, 'cached_bytes') else 0
-                self._current_result.bytes_restored = app.restored_bytes + app.moved_to_array_bytes if hasattr(app, 'restored_bytes') else 0
+                self._current_result.files_cached = self._current_result.files_cached_so_far
+                self._current_result.files_restored = self._current_result.files_restored_so_far
+                self._current_result.bytes_cached = self._current_result.bytes_cached_so_far
+                self._current_result.bytes_restored = self._current_result.bytes_restored_so_far
 
             # Check if we were stopped early
             if self._stop_requested:
@@ -637,16 +790,92 @@ class OperationRunner:
             "error_message": result.error_message
         }
 
-        # Generate message
         if result.state == OperationState.RUNNING:
-            status["message"] = "Operation in progress..."
-        elif result.state == OperationState.COMPLETED:
-            if result.dry_run:
-                status["message"] = f"Dry run completed in {result.duration_seconds:.1f}s"
+            # Phase and progress fields
+            status["current_phase"] = result.current_phase
+            status["current_phase_display"] = result.current_phase_display
+            status["files_to_cache_total"] = result.files_to_cache_total
+            status["files_to_restore_total"] = result.files_to_restore_total
+            status["files_cached_so_far"] = result.files_cached_so_far
+            status["files_restored_so_far"] = result.files_restored_so_far
+            status["error_count"] = result.error_count
+            status["last_completed_file"] = result.last_completed_file
+
+            total_files = result.files_to_cache_total + result.files_to_restore_total
+            completed_files = result.files_cached_so_far + result.files_restored_so_far
+            status["total_files"] = total_files
+            status["completed_files"] = completed_files
+
+            # Progress percent (meaningful only when we know totals)
+            if total_files > 0:
+                status["progress_percent"] = min(int(completed_files / total_files * 100), 100)
             else:
-                status["message"] = f"Completed: {result.files_cached} cached, {result.files_restored} restored ({result.duration_seconds:.1f}s)"
+                status["progress_percent"] = 0
+
+            # Elapsed time
+            elapsed = 0
+            if result.started_at:
+                elapsed = (datetime.now() - result.started_at).total_seconds()
+            status["elapsed_display"] = self._format_duration(elapsed)
+
+            # ETA (file-level average)
+            if completed_files > 0 and total_files > 0 and elapsed > 0:
+                avg = elapsed / completed_files
+                remaining = total_files - completed_files
+                status["eta_display"] = self._format_duration(avg * remaining)
+            else:
+                status["eta_display"] = ""
+
+            # Bytes display (total moved so far)
+            total_bytes = result.bytes_cached_so_far + result.bytes_restored_so_far
+            if total_bytes > 0:
+                status["bytes_display"] = self._format_bytes(total_bytes)
+            else:
+                status["bytes_display"] = ""
+
+            # Byte-level progress (smooth updates during active copies)
+            cumul_total = result.cumulative_bytes_total
+            cumul_copied = result.cumulative_bytes_copied
+
+            if cumul_total > 0:
+                # Override file-level progress with smoother byte-level
+                status["progress_percent"] = min(int(cumul_copied / cumul_total * 100), 100)
+                status["bytes_display"] = f"{self._format_bytes(cumul_copied)} / {self._format_bytes(cumul_total)}"
+
+                # ETA from current batch byte rate
+                if result.batch_bytes_copied > 0 and result.batch_copy_start_time:
+                    copy_elapsed = time.time() - result.batch_copy_start_time
+                    if copy_elapsed > 0:
+                        rate = result.batch_bytes_copied / copy_elapsed
+                        remaining = cumul_total - cumul_copied
+                        if rate > 0:
+                            status["eta_display"] = self._format_duration(remaining / rate)
+
+            # Recent log messages (last 5) for hover mini-log
+            with self._lock:
+                status["recent_logs"] = list(self._log_messages[-5:])
+
+            status["message"] = result.current_phase_display
+
+        elif result.state == OperationState.COMPLETED:
+            # Formatted display fields for richer completion banner
+            status["duration_display"] = self._format_duration(result.duration_seconds)
+            status["bytes_cached_display"] = self._format_bytes(result.bytes_cached) if result.bytes_cached > 0 else ""
+            status["bytes_restored_display"] = self._format_bytes(result.bytes_restored) if result.bytes_restored > 0 else ""
+            status["error_count"] = result.error_count
+
+            # Files processed in this run for hover detail
+            with self._lock:
+                status["recent_files"] = list(self._current_run_files[:8])
+
+            if result.dry_run:
+                status["message"] = f"Dry run completed in {self._format_duration(result.duration_seconds)}"
+            else:
+                status["message"] = f"Completed: {result.files_cached} cached, {result.files_restored} restored ({self._format_duration(result.duration_seconds)})"
+
         elif result.state == OperationState.FAILED:
             status["message"] = f"Failed: {result.error_message}"
+            status["error_count"] = result.error_count
         else:
             status["message"] = "Ready"
 
