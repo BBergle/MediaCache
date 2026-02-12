@@ -767,7 +767,8 @@ async def save_logging_settings(
     request: Request,
     max_log_files: int = Form(24),
     keep_error_logs_days: int = Form(7),
-    time_format: str = Form("24h")
+    time_format: str = Form("24h"),
+    activity_retention_hours: int = Form(24)
 ):
     """Save logging settings"""
     settings_service = get_settings_service()
@@ -775,7 +776,8 @@ async def save_logging_settings(
     success = settings_service.save_logging_settings({
         "max_log_files": max_log_files,
         "keep_error_logs_days": keep_error_logs_days,
-        "time_format": time_format
+        "time_format": time_format,
+        "activity_retention_hours": activity_retention_hours
     })
 
     if success:

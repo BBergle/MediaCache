@@ -263,7 +263,6 @@ class SettingsService:
             "eviction_min_priority": raw.get("eviction_min_priority", 60),
             "remote_watchlist_toggle": raw.get("remote_watchlist_toggle", False),
             "remote_watchlist_rss_url": raw.get("remote_watchlist_rss_url", ""),
-            "activity_retention_hours": raw.get("activity_retention_hours", 24),
             # Scanning
             "excluded_folders": raw.get("excluded_folders", []),
             # Advanced settings
@@ -298,7 +297,6 @@ class SettingsService:
             "eviction_min_priority": ("eviction_min_priority", safe_int),
             "remote_watchlist_toggle": ("remote_watchlist_toggle", lambda x: x == "on" or x is True),
             "remote_watchlist_rss_url": ("remote_watchlist_rss_url", str),
-            "activity_retention_hours": ("activity_retention_hours", safe_int),
             # Advanced settings
             "max_concurrent_moves_array": ("max_concurrent_moves_array", safe_int),
             "max_concurrent_moves_cache": ("max_concurrent_moves_cache", safe_int),
@@ -355,7 +353,8 @@ class SettingsService:
         return {
             "max_log_files": raw.get("max_log_files", 24),
             "keep_error_logs_days": raw.get("keep_error_logs_days", 7),
-            "time_format": raw.get("time_format", "24h")
+            "time_format": raw.get("time_format", "24h"),
+            "activity_retention_hours": raw.get("activity_retention_hours", 24)
         }
 
     def save_logging_settings(self, settings: Dict[str, Any]) -> bool:
@@ -385,6 +384,15 @@ class SettingsService:
             time_format = settings["time_format"]
             if time_format in ("12h", "24h"):
                 raw["time_format"] = time_format
+
+        # Validate and save activity_retention_hours
+        if "activity_retention_hours" in settings:
+            try:
+                activity_retention_hours = int(float(settings["activity_retention_hours"]))
+                if activity_retention_hours >= 1:
+                    raw["activity_retention_hours"] = activity_retention_hours
+            except (ValueError, TypeError):
+                pass
 
         return self._save_raw(raw)
 

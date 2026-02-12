@@ -52,6 +52,23 @@
                 <div class="form-hint">Controls how timestamps are displayed throughout the Web UI (dashboard, logs, schedule)</div>
             </div>
 
+            <h3 style="font-size: 1rem; color: var(--plex-orange); margin-top: 2rem; margin-bottom: 1rem;">
+                <i data-lucide="activity" style="width: 18px; height: 18px; vertical-align: middle;"></i>
+                Dashboard
+            </h3>
+
+            <div class="form-group">
+                <label for="activity_retention_hours">Recent Activity Retention (hours)</label>
+                <select id="activity_retention_hours" name="activity_retention_hours">
+                    <option value="12" {% if settings.activity_retention_hours == 12 %}selected{% endif %}>12 hours</option>
+                    <option value="24" {% if settings.activity_retention_hours == 24 or not settings.activity_retention_hours %}selected{% endif %}>24 hours (default)</option>
+                    <option value="48" {% if settings.activity_retention_hours == 48 %}selected{% endif %}>48 hours</option>
+                    <option value="72" {% if settings.activity_retention_hours == 72 %}selected{% endif %}>3 days</option>
+                    <option value="168" {% if settings.activity_retention_hours == 168 %}selected{% endif %}>7 days</option>
+                </select>
+                <div class="form-hint">How long to keep Recent Activity entries on the Dashboard</div>
+            </div>
+
             <div class="form-group mb-0" style="margin-top: 1.5rem;">
                 <button type="submit" class="btn btn-primary">
                     <i data-lucide="save"></i>
