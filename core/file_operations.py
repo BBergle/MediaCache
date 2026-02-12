@@ -2793,6 +2793,34 @@ class FileFilter:
             return 0
 
 
+class _ByteProgressAggregator:
+    """Thread-safe byte progress aggregator for parallel file operations.
+
+    Collects per-chunk byte updates from multiple workers and reports
+    aggregate (total_copied, total_bytes) to an external callback.
+    """
+
+    def __init__(self, total_bytes: int, external_callback: Optional[Callable]):
+        self._lock = threading.Lock()
+        self._total_bytes = total_bytes
+        self._copied_bytes = 0
+        self._external_callback = external_callback
+
+    def make_worker_callback(self) -> Callable:
+        """Create a per-worker callback that aggregates byte progress."""
+        last_reported = [0]
+
+        def callback(copied: int, file_size: int):
+            delta = copied - last_reported[0]
+            last_reported[0] = copied
+            with self._lock:
+                self._copied_bytes += delta
+                if self._external_callback:
+                    self._external_callback(self._copied_bytes, self._total_bytes)
+
+        return callback
+
+
 class FileMover:
     """Handles file moving operations.
 
@@ -2816,7 +2844,8 @@ class FileMover:
                  stop_check: Optional[Callable[[], bool]] = None,
                  create_plexcached_backups: bool = True,
                  hardlinked_files: str = "skip",
-                 cleanup_empty_folders: bool = True):
+                 cleanup_empty_folders: bool = True,
+                 bytes_progress_callback: Optional[Callable[[int, int], None]] = None):
         self.real_source = real_source
         self.cache_dir = cache_dir
         self.is_unraid = is_unraid
@@ -2829,6 +2858,7 @@ class FileMover:
         self.create_plexcached_backups = create_plexcached_backups  # Whether to create .plexcached backups
         self.hardlinked_files = hardlinked_files  # How to handle hard-linked files: "skip" or "move"
         self.cleanup_empty_folders = cleanup_empty_folders  # Whether to remove empty parent folders after moves
+        self._bytes_progress_callback = bytes_progress_callback  # Byte-level progress for operation banner
         self._exclude_file_lock = threading.Lock()
         # Progress tracking
         self._progress_lock = threading.Lock()
@@ -3232,6 +3262,12 @@ class FileMover:
         self._completed_bytes = 0
         self._total_bytes = total_bytes
 
+        # Byte-level progress aggregator for operation banner
+        self._byte_aggregator = None
+        if self._bytes_progress_callback and total_bytes > 0 and not self.debug:
+            self._byte_aggregator = _ByteProgressAggregator(total_bytes, self._bytes_progress_callback)
+            self._bytes_progress_callback(0, total_bytes)  # Signal batch start
+
         # Get console lock for thread-safe tqdm output
         console_lock = get_console_lock()
 
@@ -3378,16 +3414,24 @@ class FileMover:
         (src, dest), cache_file_name, file_size, original_path = move_cmd_with_cache
         filename = os.path.basename(src)
 
+        # Get per-worker byte progress callback
+        worker_byte_cb = self._byte_aggregator.make_worker_callback() if self._byte_aggregator else None
+
         try:
             if destination == 'cache':
-                result = self._move_to_cache(src, dest, cache_file_name, original_path)
+                result = self._move_to_cache(src, dest, cache_file_name, original_path, byte_callback=worker_byte_cb)
             elif destination == 'array':
-                result = self._move_to_array(src, dest, cache_file_name)
+                result = self._move_to_array(src, dest, cache_file_name, byte_callback=worker_byte_cb)
                 if result == 0:
                     with self._successful_array_moves_lock:
                         self._successful_array_moves.append(cache_file_name)
             else:
                 result = 0
+
+            # Finalize byte progress for this file (handles instant renames
+            # where copy_file_with_permissions wasn't called)
+            if worker_byte_cb and result in (0, 2) and file_size > 0:
+                worker_byte_cb(file_size, file_size)
 
             # Update tqdm progress bar
             with self._progress_lock:
@@ -3411,7 +3455,7 @@ class FileMover:
             return 1
 
     def _move_to_cache(self, array_file: str, cache_path: str, cache_file_name: str,
-                       original_path: str = None) -> int:
+                       original_path: str = None, byte_callback=None) -> int:
         """Copy file to cache and handle array original.
 
         When create_plexcached_backups is True (default):
@@ -3475,7 +3519,7 @@ class FileMover:
 
             self.file_utils.copy_file_with_permissions(
                 array_file, cache_file_name, verbose=True, display_dest=display_dest,
-                stop_check=combined_stop_check
+                stop_check=combined_stop_check, progress_callback=byte_callback
             )
             logging.debug(f"Copy complete: {os.path.basename(array_file)}")
 
@@ -3739,7 +3783,8 @@ class FileMover:
             logging.warning(f"Error searching for file by inode: {e}")
             return None
 
-    def _move_to_array(self, cache_file: str, array_path: str, cache_file_name: str) -> int:
+    def _move_to_array(self, cache_file: str, array_path: str, cache_file_name: str,
+                       byte_callback=None) -> int:
         """Move file from cache back to array.
 
         Handles five scenarios:
@@ -3827,7 +3872,7 @@ class FileMover:
 
                     self.file_utils.copy_file_with_permissions(
                         cache_file, array_file, verbose=True, display_src=display_src,
-                        stop_check=combined_stop_check
+                        stop_check=combined_stop_check, progress_callback=byte_callback
                     )
                     logging.debug(f"Copied upgraded file to array: {array_file}")
 
@@ -3885,7 +3930,7 @@ class FileMover:
 
                     self.file_utils.copy_file_with_permissions(
                         cache_file, array_file, verbose=True, display_src=display_src,
-                        stop_check=combined_stop_check
+                        stop_check=combined_stop_check, progress_callback=byte_callback
                     )
                     logging.debug(f"Copied upgraded file to array: {array_file}")
 
@@ -3922,7 +3967,7 @@ class FileMover:
 
                     self.file_utils.copy_file_with_permissions(
                         cache_file, array_direct_file, verbose=True, display_src=display_src,
-                        stop_check=combined_stop_check
+                        stop_check=combined_stop_check, progress_callback=byte_callback
                     )
                     logging.debug(f"Copied to array: {array_direct_file}")
 
