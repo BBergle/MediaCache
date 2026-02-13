@@ -306,7 +306,7 @@ class PlexCacheApp:
         logging.info("")
         # Log version and build info for debugging
         build_commit = os.environ.get('GIT_COMMIT', 'dev')
-        logging.info(f"=== PlexCache-R v{__version__} (build: {build_commit}) ===")
+        logging.info(f"=== PlexCache-D v{__version__} (build: {build_commit}) ===")
         # Log file ownership configuration (PUID/PGID)
         self.file_utils.log_ownership_config()
 
