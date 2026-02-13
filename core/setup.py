@@ -439,9 +439,9 @@ def configure_path_mappings(settings):
 
 # ----------------  Plex OAuth PIN Authentication ----------------
 
-# PlexCache-R client identifier - stored in settings for consistency
+# PlexCache-D client identifier - stored in settings for consistency
 PLEXCACHE_CLIENT_ID_KEY = 'plexcache_client_id'
-PLEXCACHE_PRODUCT_NAME = 'PlexCache-R'
+PLEXCACHE_PRODUCT_NAME = 'PlexCache-D'
 PLEXCACHE_PRODUCT_VERSION = '1.0'
 
 
@@ -1103,10 +1103,10 @@ def _test_webhook(url: str, platform: str) -> bool:
         # Discord embed test
         payload = {
             "embeds": [{
-                "title": "PlexCache-R Test",
+                "title": "PlexCache-D Test",
                 "description": "Webhook configured successfully!",
                 "color": 3066993,  # Green
-                "footer": {"text": "PlexCache-R Setup"}
+                "footer": {"text": "PlexCache-D Setup"}
             }]
         }
     elif platform == 'slack':
@@ -1115,7 +1115,7 @@ def _test_webhook(url: str, platform: str) -> bool:
             "blocks": [
                 {
                     "type": "header",
-                    "text": {"type": "plain_text", "text": "PlexCache-R Test", "emoji": True}
+                    "text": {"type": "plain_text", "text": "PlexCache-D Test", "emoji": True}
                 },
                 {
                     "type": "section",
@@ -1125,8 +1125,8 @@ def _test_webhook(url: str, platform: str) -> bool:
         }
     else:
         # Generic test
-        payload = {"content": "PlexCache-R: Webhook configured successfully!",
-                   "text": "PlexCache-R: Webhook configured successfully!"}
+        payload = {"content": "PlexCache-D: Webhook configured successfully!",
+                   "text": "PlexCache-D: Webhook configured successfully!"}
 
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=10)
@@ -1410,7 +1410,7 @@ def _setup_summary():
 
 
 def setup(advanced_mode: bool = False):
-    """Run the PlexCache-R setup wizard.
+    """Run the PlexCache-D setup wizard.
 
     Args:
         advanced_mode: If True, show all configuration options.
@@ -1675,7 +1675,7 @@ def run_setup():
             setup()
     else:
         # New setup - just start it directly without asking
-        print("Welcome to PlexCache-R Setup!")
+        print("Welcome to PlexCache-D Setup!")
         print(f"Creating new configuration at: {settings_filename}\n")
         settings_data = {}
         setup()
