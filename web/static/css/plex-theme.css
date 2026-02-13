@@ -142,6 +142,7 @@ body {
     font-size: 1.25rem;
     font-weight: 700;
     color: var(--plex-text);
+    white-space: nowrap;
 }
 
 .sidebar-brand .dev-badge {
