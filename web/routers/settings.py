@@ -10,7 +10,7 @@ import requests
 from fastapi import APIRouter, Request, Form, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from web.config import templates, CONFIG_DIR
+from web.config import templates, CONFIG_DIR, PLEXCACHE_PRODUCT_VERSION
 from web.services import get_settings_service, get_scheduler_service
 from core.system_utils import get_disk_usage, detect_zfs, parse_size_bytes
 from core.file_operations import (
@@ -28,7 +28,6 @@ router = APIRouter()
 
 # OAuth constants
 PLEXCACHE_PRODUCT_NAME = 'PlexCache-R'
-PLEXCACHE_PRODUCT_VERSION = '3.0'
 
 # Store OAuth state in memory (with lock for thread safety)
 _oauth_state: Dict[str, Any] = {}

@@ -27,6 +27,10 @@ SETTINGS_FILE = CONFIG_DIR / "plexcache_settings.json" if IS_DOCKER else PROJECT
 LOGS_DIR = CONFIG_DIR / "logs" if IS_DOCKER else PROJECT_ROOT / "logs"
 DATA_DIR = CONFIG_DIR / "data" if IS_DOCKER else PROJECT_ROOT / "data"
 
+# Product version (sourced from core/__init__.py)
+from core import __version__ as _core_version
+PLEXCACHE_PRODUCT_VERSION = _core_version
+
 # Server defaults
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5000

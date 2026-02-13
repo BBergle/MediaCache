@@ -9,14 +9,13 @@ from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Request, Form, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
-from web.config import templates, PROJECT_ROOT
+from web.config import templates, PROJECT_ROOT, PLEXCACHE_PRODUCT_VERSION
 from web.services import get_settings_service
 
 router = APIRouter()
 
 # PlexCache-R OAuth identifiers
 PLEXCACHE_PRODUCT_NAME = 'PlexCache-R'
-PLEXCACHE_PRODUCT_VERSION = '3.0'
 
 # Store OAuth state in memory (cleared on restart, which is fine for setup)
 _oauth_state: Dict[str, Any] = {}

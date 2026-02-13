@@ -442,7 +442,7 @@ def configure_path_mappings(settings):
 # PlexCache-R client identifier - stored in settings for consistency
 PLEXCACHE_CLIENT_ID_KEY = 'plexcache_client_id'
 PLEXCACHE_PRODUCT_NAME = 'PlexCache-R'
-PLEXCACHE_PRODUCT_VERSION = '1.0'
+from core import __version__ as PLEXCACHE_PRODUCT_VERSION
 
 
 def get_or_create_client_id(settings: dict) -> str:

@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from typing import List
 from urllib.parse import unquote
 
-from web.config import templates
+from web.config import templates, PLEXCACHE_PRODUCT_VERSION
 from web.services import get_cache_service, get_settings_service, get_operation_runner, get_scheduler_service, ScheduleConfig, get_maintenance_service
 from web.services.web_cache import get_web_cache_service, CACHE_KEY_DASHBOARD_STATS, CACHE_KEY_MAINTENANCE_HEALTH
 
@@ -433,7 +433,7 @@ async def health_check():
 
     return {
         "status": "healthy",
-        "version": "3.0.0",
+        "version": PLEXCACHE_PRODUCT_VERSION,
         "plex_connected": plex_connected,
         "scheduler_running": schedule_status.get("running", False),
         "operation_running": operation_runner.is_running,
