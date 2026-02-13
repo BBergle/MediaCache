@@ -227,6 +227,158 @@ class TestShouldAddToCache:
 
 
 # ============================================================================
+# _move_to_cache FUSE path safety tests
+# ============================================================================
+
+class TestMoveToCacheFusePathSafety:
+    """Test that _move_to_cache converts /mnt/user/ to /mnt/user0/ before rename.
+
+    Bug: On Unraid, after copying to /mnt/cache/, the FUSE layer at /mnt/user/
+    merges cache + array views. os.rename() through /mnt/user/ targets the cache
+    copy (FUSE prefers cache), leaving the array original untouched.
+    Fix: Convert array_file to /mnt/user0/ (array-direct) before any rename.
+    """
+
+    def test_converts_user_to_user0_before_rename(self, tmp_path):
+        """_move_to_cache must convert /mnt/user/ paths to /mnt/user0/ before rename."""
+        array_dir = os.path.join(str(tmp_path), "user0", "media", "Movies")
+        cache_dir = os.path.join(str(tmp_path), "cache", "media", "Movies")
+        os.makedirs(array_dir, exist_ok=True)
+        os.makedirs(cache_dir, exist_ok=True)
+
+        # Create the array file at the user0 (array-direct) path
+        array_file_user0 = create_test_file(
+            os.path.join(array_dir, "Movie.mkv"), "array data"
+        )
+        # The caller passes a /mnt/user/ path (FUSE)
+        array_file_user = os.path.join(str(tmp_path), "user", "media", "Movies", "Movie.mkv")
+        cache_file = os.path.join(cache_dir, "Movie.mkv")
+
+        mover = _make_file_mover(tmp_path, is_unraid=True, create_backups=True)
+
+        # Simulate copy creating the cache file
+        def fake_copy(src, dest, **kwargs):
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "w") as f:
+                f.write("cache data")
+
+        mover.file_utils.copy_file_with_permissions = fake_copy
+
+        # Mock get_array_direct_path to convert user -> user0
+        def mock_get_array_direct(path):
+            return path.replace(
+                os.path.join(str(tmp_path), "user") + os.sep,
+                os.path.join(str(tmp_path), "user0") + os.sep,
+                1
+            )
+
+        with patch("core.file_operations.get_array_direct_path", side_effect=mock_get_array_direct):
+            with patch("core.file_operations.get_console_lock"):
+                with patch("tqdm.tqdm.write"):
+                    with patch("core.logging_config.mark_file_activity"):
+                        result = mover._move_to_cache(
+                            array_file_user, cache_dir, cache_file
+                        )
+
+        assert result == 0
+        # The .plexcached must be at the user0 path, NOT user path
+        plexcached_user0 = array_file_user0 + PLEXCACHED_EXTENSION
+        assert os.path.isfile(plexcached_user0), (
+            f".plexcached was NOT created at array-direct path {plexcached_user0}"
+        )
+        # Original array file should be renamed away
+        assert not os.path.isfile(array_file_user0), (
+            "Array file was not renamed — rename may have targeted the cache copy through FUSE"
+        )
+
+    def test_raises_when_user0_not_accessible(self, tmp_path):
+        """_move_to_cache must raise IOError when array-direct path doesn't exist."""
+        cache_dir = os.path.join(str(tmp_path), "cache", "media", "Movies")
+        os.makedirs(cache_dir, exist_ok=True)
+
+        # /mnt/user/ path, but NO file exists at /mnt/user0/
+        array_file_user = "/mnt/user/media/Movies/Movie.mkv"
+
+        mover = _make_file_mover(tmp_path, is_unraid=True, create_backups=True)
+
+        # get_array_direct_path returns a different path (user0), but no file there
+        def mock_get_array_direct(path):
+            return path.replace("/mnt/user/", "/mnt/user0/", 1)
+
+        with patch("core.file_operations.get_array_direct_path", side_effect=mock_get_array_direct):
+            with pytest.raises(IOError, match="Cannot safely create .plexcached backup"):
+                mover._move_to_cache(
+                    array_file_user, cache_dir,
+                    os.path.join(cache_dir, "Movie.mkv")
+                )
+
+    def test_no_conversion_when_already_user0(self, tmp_path):
+        """When array_file is already /mnt/user0/, no extra conversion happens."""
+        array_dir = os.path.join(str(tmp_path), "user0", "media", "Movies")
+        cache_dir = os.path.join(str(tmp_path), "cache", "media", "Movies")
+
+        array_file = create_test_file(
+            os.path.join(array_dir, "Movie.mkv"), "array data"
+        )
+        cache_file = os.path.join(cache_dir, "Movie.mkv")
+
+        mover = _make_file_mover(tmp_path, is_unraid=True, create_backups=True)
+
+        def fake_copy(src, dest, **kwargs):
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "w") as f:
+                f.write("cache data")
+
+        mover.file_utils.copy_file_with_permissions = fake_copy
+
+        # get_array_direct_path returns the same path (already user0)
+        with patch("core.file_operations.get_array_direct_path", side_effect=lambda p: p):
+            with patch("core.file_operations.get_console_lock"):
+                with patch("tqdm.tqdm.write"):
+                    with patch("core.logging_config.mark_file_activity"):
+                        result = mover._move_to_cache(
+                            array_file, cache_dir, cache_file
+                        )
+
+        assert result == 0
+        # .plexcached at the original path
+        assert os.path.isfile(array_file + PLEXCACHED_EXTENSION)
+
+    def test_no_conversion_when_backups_disabled(self, tmp_path):
+        """When create_plexcached_backups is False, the file is deleted (no rename)."""
+        array_dir = os.path.join(str(tmp_path), "user", "media", "Movies")
+        cache_dir = os.path.join(str(tmp_path), "cache", "media", "Movies")
+
+        array_file = create_test_file(
+            os.path.join(array_dir, "Movie.mkv"), "array data"
+        )
+        cache_file = os.path.join(cache_dir, "Movie.mkv")
+
+        mover = _make_file_mover(tmp_path, is_unraid=False, create_backups=False)
+
+        def fake_copy(src, dest, **kwargs):
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "w") as f:
+                f.write("cache data")
+
+        mover.file_utils.copy_file_with_permissions = fake_copy
+
+        # get_array_direct_path returns same (no conversion)
+        with patch("core.file_operations.get_array_direct_path", side_effect=lambda p: p):
+            with patch("core.file_operations.get_console_lock"):
+                with patch("tqdm.tqdm.write"):
+                    with patch("core.logging_config.mark_file_activity"):
+                        result = mover._move_to_cache(
+                            array_file, cache_dir, cache_file
+                        )
+
+        assert result == 0
+        # File deleted, no .plexcached
+        assert not os.path.isfile(array_file)
+        assert not os.path.isfile(array_file + PLEXCACHED_EXTENSION)
+
+
+# ============================================================================
 # _move_to_array tests
 # ============================================================================
 

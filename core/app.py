@@ -721,6 +721,24 @@ class PlexCacheApp:
                     "Check your Docker volume configuration and ensure source paths exist on the host."
                 )
 
+            # Validate /mnt/user0 mount when .plexcached backups are enabled
+            # Without this mount, .plexcached renames operate through FUSE (/mnt/user/)
+            # which targets the cache copy instead of the array original
+            if self.config_manager.cache.create_plexcached_backups:
+                if not os.path.ismount('/mnt/user0'):
+                    if not os.path.exists('/mnt/user0'):
+                        logging.error(
+                            "CRITICAL: /mnt/user0 is not mounted but .plexcached backups are enabled. "
+                            "Without /mnt/user0, file renames will operate through FUSE (/mnt/user/) "
+                            "which can corrupt cached files. Add -v /mnt/user0:/mnt/user0 to your "
+                            "Docker configuration, or disable .plexcached backups in settings."
+                        )
+                    else:
+                        logging.warning(
+                            "/mnt/user0 exists but is not a mount point — it may be an empty "
+                            "directory inside the container. Verify your Docker volume configuration."
+                        )
+
         if self.config_manager.paths.path_mappings:
             # Multi-path mode: check paths from enabled mappings
             for mapping in self.config_manager.paths.path_mappings:

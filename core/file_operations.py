@@ -2526,7 +2526,7 @@ class FileFilter:
 
             for i, part in enumerate(path_parts):
                 # Match Season folders
-                season_match = re.match(r'^(Season|Series)\s*(\d+)$', part, re.IGNORECASE)
+                season_match = re.match(r'^(Season|Series)\s*(\d+)', part, re.IGNORECASE)
                 if season_match:
                     season_num = int(season_match.group(2))
                     if i > 0:
@@ -2587,7 +2587,7 @@ class FileFilter:
             # Check if this is a TV show
             for i, part in enumerate(path_parts):
                 if (
-                    re.match(r'^(Season|Series)\s*\d+$', part, re.IGNORECASE)
+                    re.match(r'^(Season|Series)\s*\d+', part, re.IGNORECASE)
                     or re.match(r'^\d+$', part)
                     or re.match(r'^Specials$', part, re.IGNORECASE)
                 ):
@@ -3483,6 +3483,23 @@ class FileMover:
         If interrupted at any point, the original array file remains safe.
         Worst case: an orphaned cache copy exists that can be deleted.
         """
+        # Safety: ensure .plexcached rename uses array-direct path (/mnt/user0/)
+        # On Unraid, /mnt/user/ is FUSE which merges cache + array views.
+        # After copying to cache, renaming through /mnt/user/ targets the cache
+        # copy (FUSE prefers cache), not the array original. We must operate on
+        # /mnt/user0/ (array-direct) to rename the correct file.
+        array_direct = get_array_direct_path(array_file)
+        if array_direct != array_file:
+            if os.path.isfile(array_direct):
+                array_file = array_direct
+            else:
+                raise IOError(
+                    f"Cannot safely create .plexcached backup: array-direct path not accessible "
+                    f"at {array_direct}. If running in Docker, ensure /mnt/user0 is mounted "
+                    f"as a volume (e.g., -v /mnt/user0:/mnt/user0). Without this mount, "
+                    f"the rename operates through FUSE and may target the wrong file."
+                )
+
         plexcached_file = array_file + PLEXCACHED_EXTENSION
         array_path = os.path.dirname(array_file)
 
@@ -3812,6 +3829,14 @@ class FileMover:
         try:
             # Derive the original array file path and .plexcached path
             array_file = os.path.join(array_path, os.path.basename(cache_file))
+
+            # Safety: ensure array operations use array-direct path (/mnt/user0/)
+            # to avoid FUSE path issues (see _move_to_cache for full explanation)
+            array_direct = get_array_direct_path(array_file)
+            if array_direct != array_file:
+                array_file = array_direct
+                array_path = os.path.dirname(array_file)
+
             plexcached_file = array_file + PLEXCACHED_EXTENSION
 
             # Track operation type for activity logging
