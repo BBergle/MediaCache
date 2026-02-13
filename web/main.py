@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from web import __version__
 from web.config import templates, STATIC_DIR, PROJECT_ROOT, CONFIG_DIR, SETTINGS_FILE
 from web.routers import dashboard, cache, settings, operations, logs, api, maintenance, setup
 from web.services import get_scheduler_service, get_settings_service
@@ -125,7 +126,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="PlexCache-R",
     description="Web UI for PlexCache-R media cache management",
-    version="0.2.0",
+    version=__version__,
     lifespan=lifespan
 )
 
