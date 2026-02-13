@@ -392,14 +392,7 @@ document.addEventListener('htmx:afterSwap', function(evt) {
 (function() {
     var completionKey = 'plexcache_last_maint_completion_shown';
     var completionId = '{{ maint_status.completed_at or maint_status.duration_seconds }}';
-    if (sessionStorage.getItem(completionKey) === completionId) {
-        diSetExpandState('false');
-        fetch('/maintenance/dismiss-action', { method: 'POST' });
-        document.getElementById('global-operation-banner').innerHTML =
-            '<div hx-get="/api/operation-banner" hx-trigger="every 10s" hx-swap="innerHTML" hx-target="#global-operation-banner"></div>';
-        htmx.process(document.getElementById('global-operation-banner'));
-        return;
-    }
+    var isRepoll = (sessionStorage.getItem(completionKey) === completionId);
     sessionStorage.setItem(completionKey, completionId);
 
     var maintErrors = {{ maint_status.errors|length if maint_status.errors is defined else 0 }};
@@ -431,7 +424,8 @@ document.addEventListener('htmx:afterSwap', function(evt) {
     }
 
     document.getElementById('global-operation-banner').innerHTML = `
-        <div class="di-pill di-pill--${colorMod}"
+        <div class="di-pill di-pill--${colorMod}" data-state="maint-completed"
+             hx-get="/api/operation-banner" hx-trigger="every 10s" hx-swap="innerHTML" hx-target="#global-operation-banner"
              onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()">
             <div class="di-pill__compact">
                 <div class="di-pill__left">
@@ -462,6 +456,7 @@ document.addEventListener('htmx:afterSwap', function(evt) {
             </div>
         </div>`;
     lucide.createIcons();
+    htmx.process(document.getElementById('global-operation-banner'));
     // Apply expansion class to JS-generated pill (CSS attribute selectors also apply)
     var _st = diGetExpandState(), _p = document.querySelector('#global-operation-banner .di-pill');
     if (_p) { if (_st === 'tier2') _p.classList.add('di-expanded'); if (_st === 'tier3') { _p.classList.add('di-expanded','di-detail'); } }
@@ -472,18 +467,12 @@ document.addEventListener('htmx:afterSwap', function(evt) {
         htmx.ajax('GET', '/maintenance/audit?refresh=true', {target: '#audit-content', swap: 'innerHTML'});
     }
 
-    // Auto-dismiss after 6s, pause on hover
-    var autoDismissTimer = setTimeout(dismissMaintCompletionBanner, 6000);
-    var pill = document.querySelector('#global-operation-banner .di-pill');
-    if (pill) {
-        pill.addEventListener('mouseenter', function() { clearTimeout(autoDismissTimer); });
-        pill.addEventListener('mouseleave', function() { autoDismissTimer = setTimeout(dismissMaintCompletionBanner, 3000); });
-    }
 })();
 
 function dismissMaintCompletionBanner() {
     var pill = document.querySelector('#global-operation-banner .di-pill');
     diSetExpandState('false');  /* Reset so idle pill doesn't inherit expanded layout */
+    sessionStorage.removeItem('plexcache_nextrun_dismissed');
     if (pill && pill.style.opacity !== '0') {
         pill.style.transition = 'opacity 0.4s ease-out, transform 0.4s ease-out';
         pill.style.opacity = '0';
@@ -678,13 +667,7 @@ function dismissMaintCompletionBanner() {
     if (window.BannerLogStream) BannerLogStream.disconnect();
     var completionKey = 'plexcache_last_completion_shown';
     var completionId = '{{ status.completed_at or status.duration_seconds }}';
-    if (sessionStorage.getItem(completionKey) === completionId) {
-        diSetExpandState('false');
-        document.getElementById('global-operation-banner').innerHTML =
-            '<div hx-get="/api/operation-banner" hx-trigger="every 10s" hx-swap="innerHTML" hx-target="#global-operation-banner"></div>';
-        htmx.process(document.getElementById('global-operation-banner'));
-        return;
-    }
+    var isRepoll = (sessionStorage.getItem(completionKey) === completionId);
     sessionStorage.setItem(completionKey, completionId);
 
     var filesCached = {{ status.files_cached|default(0) }};
@@ -751,7 +734,8 @@ function dismissMaintCompletionBanner() {
     }
 
     document.getElementById('global-operation-banner').innerHTML = `
-        <div class="di-pill di-pill--${colorMod}"
+        <div class="di-pill di-pill--${colorMod}" data-state="op-completed"
+             hx-get="/api/operation-banner" hx-trigger="every 10s" hx-swap="innerHTML" hx-target="#global-operation-banner"
              onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()">
             <div class="di-pill__compact">
                 <div class="di-pill__left">
@@ -782,22 +766,16 @@ function dismissMaintCompletionBanner() {
             </div>
         </div>`;
     lucide.createIcons();
+    htmx.process(document.getElementById('global-operation-banner'));
     // Apply expansion class to JS-generated pill (CSS attribute selectors also apply)
     var _st = diGetExpandState(), _p = document.querySelector('#global-operation-banner .di-pill');
     if (_p) { if (_st === 'tier2') _p.classList.add('di-expanded'); if (_st === 'tier3') { _p.classList.add('di-expanded','di-detail'); } }
-
-    // Auto-dismiss after 6s, pause on hover
-    var autoDismissTimer = setTimeout(dismissCompletionBanner, 6000);
-    var pill = document.querySelector('#global-operation-banner .di-pill');
-    if (pill) {
-        pill.addEventListener('mouseenter', function() { clearTimeout(autoDismissTimer); });
-        pill.addEventListener('mouseleave', function() { autoDismissTimer = setTimeout(dismissCompletionBanner, 3000); });
-    }
 })();
 
 function dismissCompletionBanner() {
     var pill = document.querySelector('#global-operation-banner .di-pill');
     diSetExpandState('false');  /* Reset so idle pill doesn't inherit expanded layout */
+    sessionStorage.removeItem('plexcache_nextrun_dismissed');
     if (pill && pill.style.opacity !== '0') {
         pill.style.transition = 'opacity 0.4s ease-out, transform 0.4s ease-out';
         pill.style.opacity = '0';
