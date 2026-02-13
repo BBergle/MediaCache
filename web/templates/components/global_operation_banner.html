@@ -484,6 +484,19 @@ document.addEventListener('htmx:afterSwap', function(evt) {
         _ob._compObs.observe(_ob, { attributes: true, attributeFilter: ['data-di-expanded'] });
     }
 
+    // Handle "stuck" expanded state from running→completed transition.
+    // When innerHTML is swapped under a stationary cursor, browsers don't fire
+    // mouseleave on the new pill (mouseenter was never tracked). Detect this
+    // on the next mouse movement and collapse if the cursor has already left.
+    if (diGetExpandState() !== 'false') {
+        document.addEventListener('mousemove', function() {
+            var p = document.querySelector('#global-operation-banner .di-pill');
+            if (p && !p.matches(':hover') && diGetExpandState() !== 'false') {
+                diSmoothSetState('false');
+            }
+        }, { once: true });
+    }
+
     // Auto-refresh audit content if on maintenance page
     var auditContent = document.getElementById('audit-content');
     if (auditContent) {
@@ -815,6 +828,17 @@ function dismissMaintCompletionBanner() {
             }
         });
         _ob._compObs.observe(_ob, { attributes: true, attributeFilter: ['data-di-expanded'] });
+    }
+
+    // Handle "stuck" expanded state from running→completed transition.
+    // (Same fix as maintenance completion above.)
+    if (diGetExpandState() !== 'false') {
+        document.addEventListener('mousemove', function() {
+            var p = document.querySelector('#global-operation-banner .di-pill');
+            if (p && !p.matches(':hover') && diGetExpandState() !== 'false') {
+                diSmoothSetState('false');
+            }
+        }, { once: true });
     }
 })();
 
