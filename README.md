@@ -51,7 +51,7 @@ The original PlexCache app only worked for local users for most features, due to
 ### Project Structure
 
 ```
-PlexCache-R/
+PlexCache-D/
 ├── plexcache.py              # Unified entry point (CLI, Web UI, setup wizard)
 ├── core/                     # Core application modules
 │   ├── app.py                # Main orchestrator (PlexCacheApp class)
@@ -76,7 +76,7 @@ PlexCache-R/
 ├── docker/                   # Docker support
 │   ├── Dockerfile            # Multi-stage container build
 │   ├── docker-entrypoint.sh  # Container startup script
-│   └── plexcache-r.xml       # Unraid Community Apps template
+│   └── plexcache-d.xml       # Unraid Community Apps template
 ├── tools/                    # Diagnostic utilities
 │   └── audit_cache.py        # Cache diagnostic tool
 ├── data/                     # Runtime tracking files (auto-created, JSON)
@@ -87,7 +87,7 @@ PlexCache-R/
 
 ## Web UI (New in V3.0)
 
-PlexCache-R now includes a browser-based dashboard for monitoring and configuration.
+PlexCache-D now includes a browser-based dashboard for monitoring and configuration.
 
 **Start the Web UI:**
 ```bash
@@ -116,7 +116,7 @@ python3 plexcache.py --web --port 8080     # Custom port
 
 ## Docker Installation (Recommended for Unraid)
 
-PlexCache-R is available as a Docker container, ideal for Unraid users.
+PlexCache-D is available as a Docker container, ideal for Unraid users.
 
 **Container Registry:** `ghcr.io/studionirin/plexcache-d`
 
@@ -124,7 +124,7 @@ PlexCache-R is available as a Docker container, ideal for Unraid users.
 
 ```bash
 docker run -d \
-  --name plexcache-r \
+  --name plexcache-d \
   -p 5757:5757 \
   -v /mnt/user/appdata/plexcache:/config \
   -v /mnt/cache:/mnt/cache \
@@ -148,7 +148,7 @@ docker run -d \
 4. Set **WebUI**: `http://[IP]:[PORT:5757]`
 5. Click **Apply**
 
-> **Important:** All media paths (`/mnt/cache`, `/mnt/user0`, `/mnt/user`) must be **read-write** for PlexCache-R to move files between cache and array.
+> **Important:** All media paths (`/mnt/cache`, `/mnt/user0`, `/mnt/user`) must be **read-write** for PlexCache-D to move files between cache and array.
 
 ### First Run
 
@@ -164,7 +164,7 @@ See `docker/UNRAID_SETUP.md` for detailed Unraid setup instructions including CA
 
 ## Installation and Setup
 
-There are three ways to run PlexCache-R, depending on your preference:
+There are three ways to run PlexCache-D, depending on your preference:
 
 | | Docker | Manual + Web UI | Manual + CLI |
 |---|---|---|---|
@@ -181,7 +181,7 @@ See the [Docker Installation](#docker-installation-recommended-for-unraid) secti
 
 ### Option 2: Manual Install + Web UI
 
-This runs PlexCache-R as a persistent web server with dashboard, scheduler, and all V3.0 features.
+This runs PlexCache-D as a persistent web server with dashboard, scheduler, and all V3.0 features.
 
 **Prerequisites:**
 - Python 3.9+
@@ -190,8 +190,8 @@ This runs PlexCache-R as a persistent web server with dashboard, scheduler, and 
 **Install:**
 ```bash
 cd /mnt/user/appdata
-git clone https://github.com/StudioNirin/PlexCache-R.git
-cd PlexCache-R
+git clone https://github.com/StudioNirin/PlexCache-D.git
+cd PlexCache-D
 pip3 install -r requirements.txt
 ```
 
@@ -209,12 +209,12 @@ The easiest way to auto-start on Unraid without Docker:
 
 1. Install **User Scripts** from Community Apps (if not already installed)
 2. Go to **Settings** → **User Scripts** → **Add New Script**
-3. Name it `PlexCache-R Web UI`
+3. Name it `PlexCache-D Web UI`
 4. Click the script name, then **Edit Script** and paste:
 
 ```bash
 #!/bin/bash
-cd /mnt/user/appdata/PlexCache-R
+cd /mnt/user/appdata/PlexCache-D
 nohup python3 plexcache.py --web --host 0.0.0.0 --port 5000 > /dev/null 2>&1 &
 ```
 
@@ -228,17 +228,17 @@ nohup python3 plexcache.py --web --host 0.0.0.0 --port 5000 > /dev/null 2>&1 &
 For non-Unraid Linux systems, create a systemd service:
 
 ```bash
-sudo nano /etc/systemd/system/plexcache-r.service
+sudo nano /etc/systemd/system/plexcache-d.service
 ```
 
 ```ini
 [Unit]
-Description=PlexCache-R Web UI
+Description=PlexCache-D Web UI
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/PlexCache-R
+WorkingDirectory=/opt/PlexCache-D
 ExecStart=/usr/bin/python3 plexcache.py --web --host 0.0.0.0 --port 5000
 Restart=on-failure
 RestartSec=10
@@ -249,21 +249,21 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable plexcache-r
-sudo systemctl start plexcache-r
+sudo systemctl enable plexcache-d
+sudo systemctl start plexcache-d
 ```
 
-Check status with `sudo systemctl status plexcache-r` and logs with `journalctl -u plexcache-r -f`.
+Check status with `sudo systemctl status plexcache-d` and logs with `journalctl -u plexcache-d -f`.
 
 ### Option 3: Manual Install + CLI Only
 
-This is the original V1/V2 mode — no web server, no dashboard. PlexCache-R runs once, performs caching/eviction, and exits. You schedule it externally.
+This is the original V1/V2 mode — no web server, no dashboard. PlexCache-D runs once, performs caching/eviction, and exits. You schedule it externally.
 
 **Install** (same as Option 2):
 ```bash
 cd /mnt/user/appdata
-git clone https://github.com/StudioNirin/PlexCache-R.git
-cd PlexCache-R
+git clone https://github.com/StudioNirin/PlexCache-D.git
+cd PlexCache-D
 pip3 install -r requirements.txt
 ```
 
@@ -285,19 +285,19 @@ crontab -e
 ```
 
 ```
-# Run PlexCache-R every 6 hours
-0 */6 * * * cd /mnt/user/appdata/PlexCache-R && python3 plexcache.py >> /mnt/user/appdata/PlexCache-R/logs/cron.log 2>&1
+# Run PlexCache-D every 6 hours
+0 */6 * * * cd /mnt/user/appdata/PlexCache-D && python3 plexcache.py >> /mnt/user/appdata/PlexCache-D/logs/cron.log 2>&1
 ```
 
 #### Schedule with Unraid User Scripts
 
 1. Install **User Scripts** from Community Apps
-2. **Add New Script** → name it `PlexCache-R`
+2. **Add New Script** → name it `PlexCache-D`
 3. **Edit Script:**
 
 ```bash
 #!/bin/bash
-cd /mnt/user/appdata/PlexCache-R
+cd /mnt/user/appdata/PlexCache-D
 python3 plexcache.py
 ```
 
@@ -306,7 +306,7 @@ python3 plexcache.py
 
 ---
 
-For additional help, check the [Wiki](https://github.com/StudioNirin/PlexCache-R/wiki) for detailed guides. If something doesn't make sense or doesn't work, please open a new issue. But don't be upset if the answer is in the Wiki and we mock you for not reading it thoroughly first.
+For additional help, check the [Wiki](https://github.com/StudioNirin/PlexCache-D/wiki) for detailed guides. If something doesn't make sense or doesn't work, please open a new issue. But don't be upset if the answer is in the Wiki and we mock you for not reading it thoroughly first.
 
 ## Notes
 
@@ -325,23 +325,23 @@ Why this is a problem:
 - `.plexcached` backups on remote storage won't protect against anything
 - Remote NAS is typically "always-on" anyway, so there's no array spinup savings
 
-**Recommendation:** In the setup wizard or settings, set libraries on remote storage as **non-cacheable** (`enabled: false` in path_mappings). This prevents PlexCache-R from attempting to manage files it cannot properly protect.
+**Recommendation:** In the setup wizard or settings, set libraries on remote storage as **non-cacheable** (`enabled: false` in path_mappings). This prevents PlexCache-D from attempting to manage files it cannot properly protect.
 
 ### Dynamix File Integrity False Positives
 
-If you use the **Dynamix File Integrity** plugin on Unraid, you may see "SHA256 hash key mismatch" errors for files managed by PlexCache-R. **These are false positives, not actual corruption.**
+If you use the **Dynamix File Integrity** plugin on Unraid, you may see "SHA256 hash key mismatch" errors for files managed by PlexCache-D. **These are false positives, not actual corruption.**
 
 Why this happens:
 - Dynamix records hashes using the original filename (e.g., `movie.mkv`)
-- PlexCache-R renames array files to `.plexcached` (e.g., `movie.mkv.plexcached`)
+- PlexCache-D renames array files to `.plexcached` (e.g., `movie.mkv.plexcached`)
 - Dynamix can't find the original filename and reports it as corrupted/missing
 
 **Your files are intact.** The rename operation does not modify file contents. You can verify by comparing MD5/SHA256 hashes of the cache copy and `.plexcached` backup - they will match.
 
 **Recommendations:**
 - Exclude `*.plexcached` files from Dynamix scanning
-- Or rebuild the Dynamix hash database after PlexCache-R has been running
-- Or exclude PlexCache-R managed directories from integrity scanning
+- Or rebuild the Dynamix hash database after PlexCache-D has been running
+- Or exclude PlexCache-D managed directories from integrity scanning
 
 ## Disclaimer
 
