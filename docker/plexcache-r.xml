@@ -1,14 +1,14 @@
 <?xml version="1.0"?>
 <Container version="2">
     <Name>plexcache-r</Name>
-    <Repository>ghcr.io/brandon-haney/plexcache-r:latest</Repository>
-    <Registry>https://github.com/Brandon-Haney/PlexCache-R/pkgs/container/plexcache-r</Registry>
+    <Repository>ghcr.io/studionirin/plexcache-d:latest</Repository>
+    <Registry>https://github.com/StudioNirin/PlexCache-D/pkgs/container/plexcache-d</Registry>
     <Network>bridge</Network>
     <MyIP/>
     <Shell>sh</Shell>
     <Privileged>false</Privileged>
-    <Support>https://github.com/StudioNirin/PlexCache-R/issues</Support>
-    <Project>https://github.com/StudioNirin/PlexCache-R</Project>
+    <Support>https://github.com/StudioNirin/PlexCache-D/issues</Support>
+    <Project>https://github.com/StudioNirin/PlexCache-D</Project>
     <Overview>
 PlexCache-R intelligently caches frequently-accessed Plex media (OnDeck and Watchlist items) to your cache drive, reducing array spinups and improving playback performance.
 
