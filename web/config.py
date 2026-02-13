@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi.templating import Jinja2Templates
 
+from web import __version__
 from core.system_utils import SystemDetector
 
 # Paths
@@ -41,6 +42,7 @@ templates.env.globals["image_tag"] = IMAGE_TAG
 _detector = SystemDetector()
 templates.env.globals["is_unraid"] = _detector.is_unraid
 templates.env.globals["is_docker"] = IS_DOCKER
+templates.env.globals["web_version"] = __version__
 
 
 def get_time_format() -> str:
