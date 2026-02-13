@@ -801,6 +801,13 @@ class OperationRunner:
             save_last_run_time()
             self._save_last_run_summary()
 
+            # Invalidate dashboard stats cache so summary shows on next poll
+            try:
+                from web.services.web_cache import get_web_cache_service, CACHE_KEY_DASHBOARD_STATS
+                get_web_cache_service().invalidate(CACHE_KEY_DASHBOARD_STATS)
+            except Exception:
+                pass
+
     def get_status_dict(self) -> dict:
         """Get status as a dictionary for API responses"""
         result = self.current_result
