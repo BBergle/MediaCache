@@ -325,12 +325,17 @@ footer {
 #global-operation-banner {
     position: fixed;
     top: 1rem;
-    left: 50%;
+    left: calc(50% + var(--sidebar-width) / 2);
     transform: translateX(-50%);
     z-index: 9999;
     pointer-events: none;
     display: flex;
     justify-content: center;
+}
+
+body.sidebar-collapsed #global-operation-banner,
+.sidebar-collapsed-init #global-operation-banner {
+    left: calc(50% + var(--sidebar-collapsed) / 2);
 }
 
 #global-operation-banner:empty {
