@@ -22,6 +22,20 @@ from web.services.maintenance_service import ActionResult
 
 logger = logging.getLogger(__name__)
 
+# Resolution groups for multi-version detection
+_4K_RESOLUTIONS = {"2160", "4k"}
+_HD_SD_RESOLUTIONS = {"1080", "720", "480", "360", "sd"}
+
+
+def _resolution_group(resolution: str) -> str:
+    """Return 'uhd', 'hd_sd', or 'unknown' for a Plex videoResolution value."""
+    r = resolution.lower().strip()
+    if r in _4K_RESOLUTIONS:
+        return "uhd"
+    if r in _HD_SD_RESOLUTIONS:
+        return "hd_sd"
+    return "unknown"
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -53,6 +67,7 @@ class PlexDuplicateItem:
     orphan_files: List[str] = field(default_factory=list)  # fs_paths of orphans
     orphan_bytes: int = 0
     is_resolved: bool = False
+    is_multi_version: bool = False
 
 
 @dataclass
@@ -68,6 +83,7 @@ class DuplicateScanResults:
     unresolved_count: int   # Items where keeper couldn't be determined
     arr_enabled: bool
     libraries_scanned: List[str]
+    multi_version_count: int = 0
     items: List[PlexDuplicateItem] = field(default_factory=list)
 
 
@@ -100,6 +116,7 @@ def _item_to_dict(item: PlexDuplicateItem) -> dict:
         "orphan_files": item.orphan_files,
         "orphan_bytes": item.orphan_bytes,
         "is_resolved": item.is_resolved,
+        "is_multi_version": item.is_multi_version,
     }
 
 
@@ -115,6 +132,7 @@ def _results_to_dict(results: DuplicateScanResults) -> dict:
         "unresolved_count": results.unresolved_count,
         "arr_enabled": results.arr_enabled,
         "libraries_scanned": results.libraries_scanned,
+        "multi_version_count": results.multi_version_count,
         "items": [_item_to_dict(i) for i in results.items],
     }
 
@@ -144,6 +162,7 @@ def _dict_to_item(d: dict) -> PlexDuplicateItem:
         orphan_files=d.get("orphan_files", []),
         orphan_bytes=d.get("orphan_bytes", 0),
         is_resolved=d.get("is_resolved", False),
+        is_multi_version=d.get("is_multi_version", False),
     )
 
 
@@ -160,6 +179,7 @@ def _dict_to_results(d: dict) -> DuplicateScanResults:
         unresolved_count=d["unresolved_count"],
         arr_enabled=d["arr_enabled"],
         libraries_scanned=d.get("libraries_scanned", []),
+        multi_version_count=d.get("multi_version_count", 0),
         items=[_dict_to_item(i) for i in d.get("items", [])],
     )
 
@@ -289,13 +309,17 @@ class DuplicateService:
 
             arr_enabled = bool(tracked_files)
 
+            # Detect multi-version items before orphan classification
+            self._detect_multi_version(duplicates)
+
             if tracked_files:
                 self._classify_orphans(duplicates, tracked_files)
 
             # Compute stats
+            multi_version_count = sum(1 for item in duplicates if item.is_multi_version)
             orphan_count = sum(len(item.orphan_files) for item in duplicates)
             orphan_bytes = sum(item.orphan_bytes for item in duplicates)
-            unresolved_count = sum(1 for item in duplicates if not item.is_resolved)
+            unresolved_count = sum(1 for item in duplicates if not item.is_resolved and not item.is_multi_version)
 
             duration = time.time() - start_time
 
@@ -310,6 +334,7 @@ class DuplicateService:
                 unresolved_count=unresolved_count,
                 arr_enabled=arr_enabled,
                 libraries_scanned=libraries_scanned,
+                multi_version_count=multi_version_count,
                 items=duplicates,
             )
 
@@ -653,6 +678,26 @@ class DuplicateService:
         return tracked
 
     # ------------------------------------------------------------------
+    # Private: Multi-version detection
+    # ------------------------------------------------------------------
+
+    def _detect_multi_version(self, items: List[PlexDuplicateItem]) -> None:
+        """Mark items as multi-version when files span different resolution groups.
+
+        4K group: 2160p, 4k.  HD/SD group: 1080p, 720p, 480p, 360p, sd.
+        Files within the same group are true duplicates; files across groups
+        are intentional multi-version setups (e.g., 4K + 1080p copies).
+        """
+        for item in items:
+            groups = set()
+            for f in item.files:
+                g = _resolution_group(f.resolution)
+                if g != "unknown":
+                    groups.add(g)
+            if len(groups) > 1:
+                item.is_multi_version = True
+
+    # ------------------------------------------------------------------
     # Private: Orphan classification
     # ------------------------------------------------------------------
 
@@ -673,6 +718,9 @@ class DuplicateService:
         tracked_lower = {k.lower(): k for k in tracked_files}
 
         for item in items:
+            if item.is_multi_version:
+                continue
+
             tracked_in_set = []
             untracked_in_set = []
 
@@ -743,7 +791,8 @@ class DuplicateService:
         results.orphan_count = sum(len(i.orphan_files) for i in updated_items)
         results.orphan_bytes = sum(i.orphan_bytes for i in updated_items)
         results.orphan_bytes_display = format_bytes(results.orphan_bytes)
-        results.unresolved_count = sum(1 for i in updated_items if not i.is_resolved)
+        results.unresolved_count = sum(1 for i in updated_items if not i.is_resolved and not i.is_multi_version)
+        results.multi_version_count = sum(1 for i in updated_items if i.is_multi_version)
 
         self.save_scan_results(results)
 

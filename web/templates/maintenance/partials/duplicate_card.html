@@ -50,6 +50,9 @@
         <span class="badge badge-error">{{ scan_results.orphan_count }} orphans</span>
         <span class="badge badge-muted">{{ scan_results.orphan_bytes_display }}</span>
         {% endif %}
+        {% if scan_results.multi_version_count > 0 %}
+        <span class="badge badge-warning">{{ scan_results.multi_version_count }} multi-version</span>
+        {% endif %}
         {% if scan_results.unresolved_count > 0 %}
         <span class="badge badge-info">{{ scan_results.unresolved_count }} unresolved</span>
         {% endif %}
@@ -111,8 +114,8 @@
             </thead>
             <tbody>
                 {% for item in scan_results.items %}
-                <tr class="dup-item-row" data-rating-key="{{ item.rating_key }}" onclick="toggleDuplicateExpand(this)" style="cursor: pointer;">
-                    <td onclick="event.stopPropagation();">
+                <tr class="dup-item-row" data-rating-key="{{ item.rating_key }}" onclick="toggleDuplicateExpand(this, event)" style="cursor: pointer;">
+                    <td>
                         <!-- Only show checkbox if item has orphan files -->
                     </td>
                     <td>
@@ -131,7 +134,9 @@
                     <td class="text-muted" style="font-size: 0.85rem;">{{ item.library }}</td>
                     <td class="text-muted">{{ item.files|length }}</td>
                     <td>
-                        {% if item.is_resolved %}
+                        {% if item.is_multi_version %}
+                        <span class="badge badge-warning">Multi-Version</span>
+                        {% elif item.is_resolved %}
                         <span class="badge badge-success">Resolved</span>
                         {% else %}
                         <span class="badge badge-info">Unresolved</span>
@@ -156,18 +161,20 @@
                                 {% for file in item.files %}
                                 <tr>
                                     <td>
-                                        {% if file.is_keeper is false %}
+                                        {% if file.is_keeper is not true %}
                                         <input type="checkbox" class="dup-file-checkbox" value="{{ file.fs_path }}" onchange="toggleDuplicateFile(this)">
                                         {% endif %}
                                     </td>
                                     <td title="{{ file.fs_path }}" style="max-width: 350px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                                         {{ file.fs_path.split('/')[-1] }}
                                     </td>
-                                    <td class="text-muted">{{ file.resolution }}{% if file.resolution != '?' %}p{% endif %}</td>
+                                    <td class="text-muted">{{ file.resolution }}{% if file.resolution not in ('?', '4k', 'sd') %}p{% endif %}</td>
                                     <td class="text-muted">{{ file.video_codec }}</td>
                                     <td class="text-muted">{{ file.size_display }}</td>
                                     <td>
-                                        {% if file.is_keeper is true %}
+                                        {% if item.is_multi_version %}
+                                        <span class="badge badge-muted">{{ file.resolution }}{% if file.resolution not in ('?', '4k', 'sd') %}p{% endif %}</span>
+                                        {% elif file.is_keeper is true %}
                                         <span class="badge badge-success">Keeper</span>
                                         {% elif file.is_keeper is false %}
                                         <span class="badge badge-error">Orphan</span>
