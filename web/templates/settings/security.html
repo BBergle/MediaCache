@@ -1,0 +1,207 @@
+{% extends "settings/index.html" %}
+
+{% block settings_content %}
+<style>
+    .security-section {
+        padding: 1.25rem 0;
+    }
+    .security-section + .security-section {
+        border-top: 1px solid var(--plex-border);
+    }
+    .security-section-header {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--plex-orange);
+        margin-bottom: 1rem;
+    }
+    .security-section-header i {
+        width: 18px;
+        height: 18px;
+    }
+    .security-toggle-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+    }
+    .security-toggle-row label.toggle-switch {
+        flex-shrink: 0;
+    }
+    .security-info-box {
+        padding: 0.75rem 1rem;
+        background: var(--plex-surface);
+        border-radius: var(--plex-radius-sm, 8px);
+        font-size: 0.8rem;
+        color: var(--plex-text-muted);
+    }
+    .security-info-box + .security-info-box {
+        margin-top: 0.75rem;
+    }
+    .security-sessions-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 0.75rem 1rem;
+        background: var(--plex-surface);
+        border-radius: var(--plex-radius-sm, 8px);
+    }
+</style>
+
+<div class="card">
+    <div class="card-header">
+        <i data-lucide="shield"></i>
+        <h2>Security Settings</h2>
+    </div>
+    <div class="card-body" style="padding-top: 0;">
+        <form hx-put="/settings/security" hx-target="#settings-alert-container" hx-swap="innerHTML">
+
+            <!-- Web UI Authentication -->
+            <div class="security-section">
+                <div class="security-section-header">
+                    <i data-lucide="lock"></i>
+                    Web UI Authentication
+                </div>
+
+                <div class="form-group" style="margin-bottom: 0.75rem;">
+                    <div class="security-toggle-row">
+                        <div>
+                            <label for="auth_enabled" style="margin-bottom: 0;">Require Login</label>
+                            <div class="form-hint">Only the Plex server owner can sign in to access the Web UI</div>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="auth_enabled" name="auth_enabled" value="true"
+                                   {% if settings.auth_enabled %}checked{% endif %}
+                                   onchange="toggleAuthSections()">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                {% if settings.auth_admin_username %}
+                <div class="security-info-box" style="margin-top: 0.75rem;">
+                    <i data-lucide="user-check" style="width: 16px; height: 16px; vertical-align: middle; color: var(--plex-success);"></i>
+                    Admin: <strong>{{ settings.auth_admin_username }}</strong>
+                    <span style="color: var(--plex-text-muted); font-size: 0.8rem;">(Plex ID: {{ settings.auth_admin_plex_id }})</span>
+                </div>
+                {% endif %}
+
+                <div id="auth-details" style="{% if not settings.auth_enabled %}display: none;{% endif %}">
+                    <div class="form-group" style="margin-top: 1.25rem; margin-bottom: 0;">
+                        <label for="auth_session_hours">Session Duration</label>
+                        <select id="auth_session_hours" name="auth_session_hours">
+                            <option value="1" {% if settings.auth_session_hours == 1 %}selected{% endif %}>1 hour</option>
+                            <option value="4" {% if settings.auth_session_hours == 4 %}selected{% endif %}>4 hours</option>
+                            <option value="12" {% if settings.auth_session_hours == 12 %}selected{% endif %}>12 hours</option>
+                            <option value="24" {% if settings.auth_session_hours == 24 or not settings.auth_session_hours %}selected{% endif %}>24 hours (default)</option>
+                            <option value="72" {% if settings.auth_session_hours == 72 %}selected{% endif %}>3 days</option>
+                            <option value="168" {% if settings.auth_session_hours == 168 %}selected{% endif %}>7 days</option>
+                        </select>
+                        <div class="form-hint">How long a login session lasts before requiring re-authentication. "Remember me" extends to 7 days.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Password Fallback -->
+            <div id="password-fallback-section" class="security-section" style="{% if not settings.auth_enabled %}display: none;{% endif %}">
+                <div class="security-section-header">
+                    <i data-lucide="key"></i>
+                    Password Fallback
+                </div>
+
+                <div class="form-hint" style="margin-bottom: 1rem;">
+                    Optional password login as fallback when Plex OAuth is unavailable.
+                </div>
+
+                <div class="form-group" style="margin-bottom: 0.75rem;">
+                    <div class="security-toggle-row">
+                        <div>
+                            <label for="auth_password_enabled" style="margin-bottom: 0;">Enable Password Login</label>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="auth_password_enabled" name="auth_password_enabled" value="true"
+                                   {% if settings.auth_password_enabled %}checked{% endif %}
+                                   onchange="togglePasswordSection()">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div id="password-section" style="{% if not settings.auth_password_enabled %}display: none;{% endif %}">
+                    <div class="grid grid-2" style="margin-top: 0.75rem;">
+                        <div class="form-group">
+                            <label for="auth_password_username">Username</label>
+                            <input type="text" id="auth_password_username" name="auth_password_username"
+                                   value="{{ settings.auth_password_username | default('') }}"
+                                   autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label for="auth_password">New Password</label>
+                            <input type="password" id="auth_password" name="auth_password"
+                                   placeholder="Leave blank to keep current"
+                                   autocomplete="new-password">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Active Sessions -->
+            <div id="sessions-section" class="security-section" style="{% if not settings.auth_enabled %}display: none;{% endif %}">
+                <div class="security-section-header">
+                    <i data-lucide="users"></i>
+                    Active Sessions
+                </div>
+
+                <div class="security-sessions-row">
+                    <span>
+                        <strong>{{ active_sessions }}</strong> active session{{ 's' if active_sessions != 1 else '' }}
+                    </span>
+                    {% if active_sessions > 0 %}
+                    <button type="button" class="btn btn-sm"
+                            style="background: rgba(244, 67, 54, 0.1); color: var(--plex-error); border: 1px solid rgba(244, 67, 54, 0.3);"
+                            hx-post="/settings/security/logout-all"
+                            hx-target="#settings-alert-container"
+                            hx-swap="innerHTML"
+                            hx-confirm="Sign out all active sessions? Everyone (including you) will need to log in again.">
+                        <i data-lucide="log-out" style="width: 14px; height: 14px;"></i>
+                        Sign Out All
+                    </button>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Recovery + Save -->
+            <div class="security-section">
+                <div class="security-info-box">
+                    <strong>Recovery:</strong> If locked out, edit <code>plexcache_settings.json</code> and set
+                    <code>"auth_enabled": false</code>. Takes effect immediately, no restart needed.
+                </div>
+
+                <div class="form-group mb-0" style="margin-top: 1.25rem;">
+                    <button type="submit" class="btn btn-primary">
+                        <i data-lucide="save"></i>
+                        Save Security Settings
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function toggleAuthSections() {
+    var enabled = document.getElementById('auth_enabled').checked;
+    document.getElementById('auth-details').style.display = enabled ? '' : 'none';
+    document.getElementById('password-fallback-section').style.display = enabled ? '' : 'none';
+    document.getElementById('sessions-section').style.display = enabled ? '' : 'none';
+}
+
+function togglePasswordSection() {
+    var enabled = document.getElementById('auth_password_enabled').checked;
+    document.getElementById('password-section').style.display = enabled ? '' : 'none';
+}
+</script>
+{% endblock %}

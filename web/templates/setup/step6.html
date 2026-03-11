@@ -1,58 +1,162 @@
 {% extends "setup/base_setup.html" %}
 
+{% block head %}
+<style>
+    .security-toggle-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 1rem;
+        background: var(--surface-secondary);
+        border-radius: 6px;
+        margin-bottom: 1.25rem;
+    }
+
+    .security-toggle-row label.toggle-switch {
+        flex-shrink: 0;
+    }
+
+    #auth-details {
+        display: grid;
+        gap: 1.25rem;
+    }
+
+    .admin-identity-box {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.75rem 1rem;
+        background: rgba(76, 175, 80, 0.08);
+        border: 1px solid rgba(76, 175, 80, 0.2);
+        border-radius: 6px;
+    }
+
+    .admin-identity-box i {
+        color: var(--plex-success);
+        width: 20px;
+        height: 20px;
+        flex-shrink: 0;
+    }
+
+    .password-fields {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+    }
+
+    @media (max-width: 500px) {
+        .password-fields {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+{% endblock %}
+
 {% block content %}
-<form action="/setup/complete" method="post">
-    <div class="setup-content" style="text-align: center;">
-        <div class="welcome-icon" style="background: var(--success);">
-            <i data-lucide="check"></i>
+<form action="/setup/step6" method="post">
+    <div class="setup-content">
+        <div style="text-align: center; margin-bottom: 1.5rem;">
+            <div class="welcome-icon" style="background: var(--plex-orange); width: 60px; height: 60px;">
+                <i data-lucide="shield" style="width: 30px; height: 30px;"></i>
+            </div>
         </div>
 
-        <h2>Setup Complete!</h2>
-        <p class="description">
-            PlexCache-D has been configured and is ready to use.
+        <h2 style="text-align: center;">Security</h2>
+        <p class="description" style="text-align: center;">
+            Protect your PlexCache-D instance with authentication.
+            You can skip this and configure it later in Settings.
         </p>
 
-        <div style="background: var(--surface-secondary); border-radius: 6px; padding: 1rem; text-align: left; margin: 1.5rem 0;">
-            <h3 style="margin: 0 0 1rem 0; font-size: 1rem; color: var(--text-secondary);">Configuration Summary</h3>
+        <!-- Auth toggle -->
+        <div class="security-toggle-row">
+            <div>
+                <strong style="color: var(--plex-text);">Require Login</strong>
+                <div class="help-text" style="margin-top: 2px;">Only the Plex server owner can sign in to access the Web UI</div>
+            </div>
+            <label class="toggle-switch">
+                <input type="checkbox" id="auth_enabled" name="auth_enabled" value="on"
+                       {% if auth_enabled %}checked{% endif %}
+                       onchange="toggleAuthDetails()">
+                <span class="toggle-slider"></span>
+            </label>
+        </div>
 
-            <div class="summary-item">
-                <span class="label">Plex Server</span>
-                <span class="value success">
-                    <i data-lucide="check-circle" style="width: 14px; height: 14px; margin-right: 4px;"></i>
-                    Connected
-                </span>
+        <!-- Auth details (shown when enabled) -->
+        <div id="auth-details" style="{% if not auth_enabled %}display: none;{% endif %}">
+
+            <!-- Admin identity -->
+            {% if admin_username %}
+            <div class="admin-identity-box">
+                <i data-lucide="user-check"></i>
+                <div>
+                    <strong>{{ admin_username }}</strong>
+                    <span style="color: var(--plex-text-muted); font-size: 0.85rem;"> will be the admin account</span>
+                </div>
+            </div>
+            {% else %}
+            <div class="admin-identity-box" style="background: rgba(229, 160, 13, 0.08); border-color: rgba(229, 160, 13, 0.2);">
+                <i data-lucide="user" style="color: var(--plex-orange);"></i>
+                <div>
+                    <span style="color: var(--plex-text-muted); font-size: 0.85rem;">Admin identity will be captured from your Plex account</span>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Session duration -->
+            <div class="form-group" style="margin-bottom: 0;">
+                <label for="auth_session_hours">Session Duration</label>
+                <select id="auth_session_hours" name="auth_session_hours">
+                    <option value="1" {% if auth_session_hours == 1 %}selected{% endif %}>1 hour</option>
+                    <option value="4" {% if auth_session_hours == 4 %}selected{% endif %}>4 hours</option>
+                    <option value="12" {% if auth_session_hours == 12 %}selected{% endif %}>12 hours</option>
+                    <option value="24" {% if auth_session_hours == 24 or not auth_session_hours %}selected{% endif %}>24 hours (default)</option>
+                    <option value="72" {% if auth_session_hours == 72 %}selected{% endif %}>3 days</option>
+                    <option value="168" {% if auth_session_hours == 168 %}selected{% endif %}>7 days</option>
+                </select>
+                <p class="help-text">How long a login session lasts before requiring re-authentication</p>
             </div>
 
-            <div class="summary-item">
-                <span class="label">Libraries</span>
-                <span class="value">{{ libraries_count }} selected</span>
-            </div>
+            <!-- Password fallback -->
+            <div style="background: var(--surface-secondary); padding: 1rem; border-radius: 6px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+                    <div>
+                        <strong style="color: var(--plex-text); font-size: 0.95rem;">
+                            <i data-lucide="key" style="width: 16px; height: 16px; vertical-align: middle; color: var(--plex-orange);"></i>
+                            Password Fallback
+                        </strong>
+                        <div class="help-text" style="margin-top: 2px;">Optional password login when Plex OAuth is unavailable</div>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="auth_password_enabled" name="auth_password_enabled" value="on"
+                               {% if auth_password_enabled %}checked{% endif %}
+                               onchange="togglePasswordSection()">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
 
-            <div class="summary-item">
-                <span class="label">Path Mappings</span>
-                {% if path_mappings_count > 0 %}
-                <span class="value">{{ path_mappings_count }} configured</span>
-                {% else %}
-                <span class="value" style="color: var(--plex-text-muted);">Using default paths</span>
-                {% endif %}
-            </div>
-
-            <div class="summary-item">
-                <span class="label">Users</span>
-                <span class="value">{{ users_count }} user(s)</span>
+                <div id="password-section" style="{% if not auth_password_enabled %}display: none;{% endif %} margin-top: 1rem;">
+                    <div class="password-fields">
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label for="auth_password_username">Username</label>
+                            <input type="text" id="auth_password_username" name="auth_password_username"
+                                   value="{{ auth_password_username | default('') }}"
+                                   placeholder="admin"
+                                   autocomplete="off">
+                        </div>
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label for="auth_password">Password</label>
+                            <input type="password" id="auth_password" name="auth_password"
+                                   placeholder="Enter password"
+                                   autocomplete="new-password">
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <div class="alert alert-info" style="text-align: left;">
+        <div class="alert alert-info" style="margin-top: 1.25rem;">
             <i data-lucide="info"></i>
-            <div>
-                <strong>Next Steps:</strong>
-                <ul style="margin: 0.5rem 0 0 1rem; padding: 0;">
-                    <li>Run a dry-run test from the Dashboard to verify paths</li>
-                    <li>Configure the schedule in Settings to automate caching</li>
-                    <li>Set up notifications ({% if is_unraid %}Unraid/{% endif %}Discord/Slack) in Settings</li>
-                </ul>
-            </div>
+            <div>You can always change these settings later in <strong>Settings &gt; Security</strong>.</div>
         </div>
     </div>
 
@@ -62,9 +166,27 @@
             Back
         </a>
         <button type="submit" class="btn btn-primary">
-            <i data-lucide="rocket"></i>
-            Launch PlexCache-D
+            Next
+            <i data-lucide="arrow-right"></i>
         </button>
     </div>
 </form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleAuthDetails() {
+    var enabled = document.getElementById('auth_enabled').checked;
+    document.getElementById('auth-details').style.display = enabled ? '' : 'none';
+}
+
+function togglePasswordSection() {
+    var enabled = document.getElementById('auth_password_enabled').checked;
+    document.getElementById('password-section').style.display = enabled ? '' : 'none';
+    if (!enabled) {
+        document.getElementById('auth_password_username').value = '';
+        document.getElementById('auth_password').value = '';
+    }
+}
+</script>
 {% endblock %}

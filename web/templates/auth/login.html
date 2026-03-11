@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign In - PlexCache-D</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <script src="/static/js/vendor/lucide.min.js"></script>
+    <link rel="stylesheet" href="/static/css/plex-theme.css">
+    <style>
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--plex-bg-darker);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            color: var(--plex-text);
+        }
+
+        .login-card {
+            width: 100%;
+            max-width: 380px;
+            padding: 0 1rem;
+        }
+
+        .login-brand {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        .login-brand-icon {
+            width: 64px;
+            height: 64px;
+            margin: 0 auto 1rem;
+            background: linear-gradient(135deg, var(--plex-orange), #c98d0c);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 24px rgba(229, 160, 13, 0.25);
+        }
+
+        .login-brand-icon i {
+            width: 32px;
+            height: 32px;
+            color: white;
+        }
+
+        .login-brand h1 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin: 0;
+            color: var(--plex-text);
+        }
+
+        .login-body {
+            background: var(--plex-bg-card);
+            border: 1px solid var(--plex-border);
+            border-radius: var(--plex-radius-lg, 16px);
+            padding: 1.75rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+
+        .login-error {
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            background: rgba(244, 67, 54, 0.1);
+            border: 1px solid rgba(244, 67, 54, 0.3);
+            color: var(--plex-error);
+            font-size: 0.875rem;
+            margin-bottom: 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .login-error i {
+            width: 16px;
+            height: 16px;
+            flex-shrink: 0;
+        }
+
+        /* Plex OAuth button */
+        .btn-plex {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            background: rgba(229, 160, 13, 0.08);
+            border: 1px solid rgba(229, 160, 13, 0.4);
+            border-radius: 8px;
+            color: #fff;
+            font-weight: 600;
+            font-size: 0.95rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.625rem;
+            transition: all 0.15s ease;
+        }
+
+        .btn-plex:hover {
+            background: rgba(229, 160, 13, 0.15);
+            border-color: rgba(229, 160, 13, 0.6);
+        }
+
+        .btn-plex:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-plex img {
+            height: 22px;
+            width: auto;
+        }
+
+        /* OAuth status */
+        .oauth-status {
+            text-align: center;
+            padding: 0.75rem 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+        }
+
+        .oauth-status .spinner {
+            width: 18px;
+            height: 18px;
+        }
+
+        .oauth-status-text {
+            color: var(--plex-text-muted);
+            font-size: 0.875rem;
+        }
+
+        /* Divider */
+        .login-divider {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin: 1.25rem 0;
+            color: var(--plex-text-muted);
+            font-size: 0.8rem;
+        }
+
+        .login-divider::before,
+        .login-divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--plex-border);
+        }
+
+        /* Password form */
+        .login-input {
+            width: 100%;
+            padding: 0.7rem 0.875rem;
+            border: 1px solid var(--plex-border);
+            border-radius: 8px;
+            background: var(--plex-bg-input);
+            color: var(--plex-text);
+            font-size: 0.9rem;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+            box-sizing: border-box;
+        }
+
+        .login-input::placeholder {
+            color: var(--plex-text-muted);
+        }
+
+        .login-input:focus {
+            outline: none;
+            border-color: var(--plex-orange);
+            box-shadow: 0 0 0 3px rgba(229, 160, 13, 0.15);
+        }
+
+        .login-input + .login-input {
+            margin-top: 0.75rem;
+        }
+
+        .login-remember {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 0.875rem;
+        }
+
+        .login-remember input {
+            width: 15px;
+            height: 15px;
+            accent-color: var(--plex-orange);
+        }
+
+        .login-remember label {
+            font-size: 0.825rem;
+            color: var(--plex-text-muted);
+            cursor: pointer;
+        }
+
+        .btn-login {
+            width: 100%;
+            padding: 0.7rem 1rem;
+            margin-top: 1rem;
+            background: var(--plex-bg-hover);
+            border: 1px solid var(--plex-border);
+            border-radius: 8px;
+            color: var(--plex-text);
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            transition: all 0.2s ease;
+        }
+
+        .btn-login:hover {
+            background: var(--plex-bg-card-hover);
+            border-color: var(--plex-border-light);
+        }
+
+        /* Spinner */
+        .spinner {
+            width: 18px;
+            height: 18px;
+            border: 2px solid var(--plex-border);
+            border-top-color: var(--plex-orange);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="login-brand">
+            <div class="login-brand-icon">
+                <i data-lucide="hard-drive"></i>
+            </div>
+            <h1>PlexCache-D</h1>
+        </div>
+
+        <div class="login-body">
+            {% if error %}
+            <div class="login-error">
+                <i data-lucide="alert-circle"></i>
+                <span>{{ error }}</span>
+            </div>
+            {% endif %}
+
+            {% if password_enabled %}
+            <!-- Password login form (primary when enabled) -->
+            <form method="post" action="/auth/login/password">
+                <input type="hidden" name="next_url" value="{{ next_url }}">
+                <input type="text" class="login-input" id="username" name="username"
+                       placeholder="Username" required autocomplete="username">
+                <input type="password" class="login-input" id="password" name="password"
+                       placeholder="Password" required autocomplete="current-password">
+                <div class="login-remember">
+                    <input type="checkbox" id="remember_me" name="remember_me" value="true">
+                    <label for="remember_me">Remember me for 7 days</label>
+                </div>
+                <button type="submit" class="btn-login">
+                    <i data-lucide="log-in" style="width: 16px; height: 16px;"></i>
+                    Sign In
+                </button>
+            </form>
+
+            <div class="login-divider">Or sign in with</div>
+            {% endif %}
+
+            <!-- Plex OAuth -->
+            <div id="oauth-section">
+                <button type="button" class="btn-plex" id="plex-oauth-btn" onclick="startPlexOAuth()">
+                    {% if not password_enabled %}Login with {% endif %}<img src="/static/img/plex-logo.svg" alt="Plex">
+                </button>
+
+                <div id="oauth-status" style="display: none;">
+                    <div class="oauth-status">
+                        <div class="spinner"></div>
+                        <span class="oauth-status-text" id="oauth-status-text">Waiting for Plex authorization...</span>
+                    </div>
+                </div>
+
+                <div id="oauth-error" style="display: none;" class="login-error">
+                    <i data-lucide="alert-circle"></i>
+                    <span id="oauth-error-text"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        lucide.createIcons();
+
+        var _oauthPollTimer = null;
+        var _oauthPinId = null;
+        var _oauthClientId = null;
+        var _oauthPopup = null;
+        var _oauthPopupCheckTimer = null;
+        var _plexBtnLabel = {% if password_enabled %}'<img src="/static/img/plex-logo.svg" alt="Plex">'{% else %}'Login with <img src="/static/img/plex-logo.svg" alt="Plex">'{% endif %};
+
+        function startPlexOAuth() {
+            var btn = document.getElementById('plex-oauth-btn');
+            var status = document.getElementById('oauth-status');
+            var errorDiv = document.getElementById('oauth-error');
+
+            // Open popup synchronously on click (before async fetch) to avoid popup blockers
+            var w = 600, h = 700;
+            var left = window.screenX + (window.outerWidth - w) / 2;
+            var top = window.screenY + (window.outerHeight - h) / 2;
+            _oauthPopup = window.open('about:blank', 'PlexOAuth',
+                'width=' + w + ',height=' + h + ',left=' + left + ',top=' + top +
+                ',toolbar=no,menubar=no,scrollbars=yes');
+
+            btn.disabled = true;
+            btn.innerHTML = '<div class="spinner"></div>';
+            status.style.display = 'none';
+            errorDiv.style.display = 'none';
+
+            fetch('/auth/login/oauth/start', { method: 'POST' })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (!data.success) {
+                        if (_oauthPopup) _oauthPopup.close();
+                        showOAuthError(data.error || 'Failed to start OAuth');
+                        resetOAuthBtn();
+                        return;
+                    }
+
+                    _oauthClientId = data.client_id;
+                    _oauthPinId = data.pin_id;
+
+                    // Redirect the already-open popup to the Plex auth URL
+                    if (_oauthPopup && !_oauthPopup.closed) {
+                        _oauthPopup.location = data.auth_url;
+                    } else {
+                        // Popup was blocked or closed, fall back to new tab
+                        window.open(data.auth_url, '_blank');
+                    }
+
+                    btn.style.display = 'none';
+                    status.style.display = 'block';
+
+                    _oauthPollTimer = setInterval(pollOAuth, 1000);
+
+                    // Monitor if user closes the popup
+                    _oauthPopupCheckTimer = setInterval(function() {
+                        if (_oauthPopup && _oauthPopup.closed) {
+                            clearInterval(_oauthPopupCheckTimer);
+                            _oauthPopupCheckTimer = null;
+                            // Only reset if still waiting (not already authenticated)
+                            if (_oauthPollTimer) {
+                                clearInterval(_oauthPollTimer);
+                                _oauthPollTimer = null;
+                                resetOAuthBtn();
+                            }
+                        }
+                    }, 1000);
+
+                    setTimeout(function() {
+                        if (_oauthPollTimer) {
+                            clearInterval(_oauthPollTimer);
+                            _oauthPollTimer = null;
+                            if (_oauthPopup && !_oauthPopup.closed) _oauthPopup.close();
+                            showOAuthError('OAuth session expired. Please try again.');
+                            resetOAuthBtn();
+                        }
+                    }, 600000);
+                })
+                .catch(function(err) {
+                    if (_oauthPopup) _oauthPopup.close();
+                    showOAuthError('Network error: ' + err.message);
+                    resetOAuthBtn();
+                });
+        }
+
+        function pollOAuth() {
+            fetch('/auth/login/oauth/poll?client_id=' + encodeURIComponent(_oauthClientId) + '&pin_id=' + _oauthPinId)
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (!data.success) {
+                        clearInterval(_oauthPollTimer);
+                        _oauthPollTimer = null;
+                        if (_oauthPopupCheckTimer) { clearInterval(_oauthPopupCheckTimer); _oauthPopupCheckTimer = null; }
+                        if (_oauthPopup && !_oauthPopup.closed) _oauthPopup.close();
+                        showOAuthError(data.error || 'OAuth poll failed');
+                        resetOAuthBtn();
+                        return;
+                    }
+
+                    if (!data.complete) return;
+
+                    clearInterval(_oauthPollTimer);
+                    _oauthPollTimer = null;
+                    if (_oauthPopupCheckTimer) { clearInterval(_oauthPopupCheckTimer); _oauthPopupCheckTimer = null; }
+                    if (_oauthPopup && !_oauthPopup.closed) _oauthPopup.close();
+
+                    if (data.authenticated) {
+                        // Cookie is set server-side via Set-Cookie header
+                        var nextUrl = '{{ next_url }}';
+                        window.location.href = nextUrl || '/';
+                    } else {
+                        showOAuthError(data.error || 'Authentication failed');
+                        resetOAuthBtn();
+                    }
+                })
+                .catch(function() {});
+        }
+
+        function showOAuthError(msg) {
+            var errorDiv = document.getElementById('oauth-error');
+            document.getElementById('oauth-error-text').textContent = msg;
+            errorDiv.style.display = 'flex';
+            document.getElementById('oauth-status').style.display = 'none';
+            lucide.createIcons();
+        }
+
+        function resetOAuthBtn() {
+            var btn = document.getElementById('plex-oauth-btn');
+            btn.disabled = false;
+            btn.innerHTML = _plexBtnLabel;
+            btn.style.display = '';
+        }
+    </script>
+</body>
+</html>
