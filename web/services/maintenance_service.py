@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Any, Tuple
 
-from web.config import PROJECT_ROOT, DATA_DIR, CONFIG_DIR, SETTINGS_FILE
+from web.config import DATA_DIR, CONFIG_DIR, SETTINGS_FILE
 from core.system_utils import get_array_direct_path, format_bytes, translate_container_to_host_path, translate_host_to_container_path, remove_from_exclude_file, remove_from_timestamps_file
 from core.file_operations import PLEXCACHED_EXTENSION, VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS, MEDIA_EXTENSIONS
 
@@ -20,17 +20,18 @@ from core.file_operations import PLEXCACHED_EXTENSION, VIDEO_EXTENSIONS, SUBTITL
 def _strip_plexcached(path: str) -> str:
     """Safely strip .plexcached suffix from a path.
 
-    Returns the original path (with media extension intact).
-    Raises ValueError if the result would lack a media extension,
-    which indicates a malformed .plexcached file.
+    Returns the original path (with file extension intact).
+    Raises ValueError if the result would have no file extension at all,
+    which indicates a malformed .plexcached file (e.g., 'MovieName.plexcached'
+    instead of 'MovieName.mkv.plexcached').
     """
     if not path.endswith(PLEXCACHED_EXTENSION):
         raise ValueError(f"Not a .plexcached file: {path}")
     original = path[:-len(PLEXCACHED_EXTENSION)]
     _, ext = os.path.splitext(original)
-    if ext.lower() not in VIDEO_EXTENSIONS:
+    if not ext:
         raise ValueError(
-            f"Malformed .plexcached file (no media extension): {os.path.basename(path)}"
+            f"Malformed .plexcached file (no file extension): {os.path.basename(path)}"
         )
     return original
 
@@ -102,6 +103,7 @@ class AuditResults:
 
     # Issues
     unprotected_files: List[UnprotectedFile] = field(default_factory=list)
+    grouped_unprotected: List[dict] = field(default_factory=list)  # Grouped by directory
     orphaned_plexcached: List[OrphanedBackup] = field(default_factory=list)
     extensionless_files: List[ExtensionlessFile] = field(default_factory=list)
     stale_exclude_entries: List[str] = field(default_factory=list)
@@ -400,10 +402,9 @@ class MaintenanceService:
         return results
 
     def get_cache_files(self) -> Set[str]:
-        """Get all media files currently on cache"""
+        """Get all files currently on cache (videos, subtitles, artwork, metadata, etc.)"""
         cache_dirs, _ = self._get_paths()
         cache_files = set()
-        extensions = tuple(MEDIA_EXTENSIONS)
 
         def _walk_error(err):
             logging.warning(f"Permission error scanning directory: {err}")
@@ -414,7 +415,7 @@ class MaintenanceService:
                     # Prune excluded directories (modifying dirs in-place skips them)
                     dirs[:] = [d for d in dirs if not self._should_skip_directory(d)]
                     for f in files:
-                        if f.lower().endswith(extensions):
+                        if not f.startswith('.'):
                             cache_files.add(os.path.join(root, f))
 
         return cache_files
@@ -462,6 +463,56 @@ class MaintenanceService:
             if array_file.startswith(array_dir):
                 return array_file.replace(array_dir, cache_dirs[i], 1)
         return None
+
+    def _group_unprotected_by_directory(self, files: List[UnprotectedFile]) -> List[dict]:
+        """Group unprotected files by directory, with video as primary and sidecars as children."""
+        from collections import OrderedDict
+        groups: OrderedDict[str, List[UnprotectedFile]] = OrderedDict()
+        for f in files:
+            directory = os.path.dirname(f.cache_path)
+            groups.setdefault(directory, []).append(f)
+
+        result = []
+        for directory, dir_files in groups.items():
+            # Find the video file (if any) to use as primary
+            video = None
+            children = []
+            for f in dir_files:
+                ext = os.path.splitext(f.filename)[1].lower()
+                if ext in VIDEO_EXTENSIONS:
+                    if video is None:
+                        video = f
+                    else:
+                        children.append(f)
+                else:
+                    children.append(f)
+
+            if video and children:
+                # Video with sidecars — group them
+                total_size = video.size + sum(c.size for c in children)
+                result.append({
+                    "primary": video,
+                    "children": children,
+                    "total_size_display": format_bytes(total_size),
+                    "folder": os.path.basename(directory),
+                })
+            elif not video and len(children) > 1:
+                # Multiple sidecars without a video — group under folder name
+                primary = children[0]
+                rest = children[1:]
+                total_size = sum(c.size for c in dir_files)
+                result.append({
+                    "primary": primary,
+                    "children": rest,
+                    "total_size_display": format_bytes(total_size),
+                    "folder": os.path.basename(directory),
+                })
+            else:
+                # Single file or single video — no grouping needed
+                for f in dir_files:
+                    result.append({"primary": f, "children": [], "total_size_display": f.size_display, "folder": None})
+
+        return result
 
     def _check_plexcached_backup(self, cache_file: str) -> tuple:
         """Check if a .plexcached backup exists on array for a cache file"""
@@ -559,6 +610,9 @@ class MaintenanceService:
         # Sort unprotected files by filename (default)
         results.unprotected_files.sort(key=lambda f: f.filename.lower())
 
+        # Group by directory: video file as primary, sidecars as children
+        results.grouped_unprotected = self._group_unprotected_by_directory(results.unprotected_files)
+
         # Find orphaned .plexcached files and extensionless duplicates
         results.orphaned_plexcached, results.extensionless_files = self._get_orphaned_plexcached()
 
@@ -635,28 +689,31 @@ class MaintenanceService:
                         try:
                             original_name = _strip_plexcached(f)
                         except ValueError:
-                            # Malformed .plexcached (no media extension)
-                            # Check if a media sibling exists — if so, we can repair the backup
+                            # Malformed .plexcached (no file extension)
+                            # Check if a sibling file exists — if so, we can repair the backup
                             # by renaming e.g. "Name.plexcached" → "Name.mkv.plexcached"
                             #
-                            # The sibling .mkv may be on the array (file_set) OR on the cache
-                            # (cache_files). After Sonarr/Radarr renames, the .mkv typically
+                            # The sibling may be on the array (file_set) OR on the cache
+                            # (cache_files). After Sonarr/Radarr renames, the file typically
                             # lives on cache while the malformed .plexcached is on the array.
                             stem = f[:-len(PLEXCACHED_EXTENSION)]  # strip .plexcached
                             repair_ext = None
-                            for ext in VIDEO_EXTENSIONS:
-                                # Check array sibling first
-                                if (stem + ext) in file_set:
-                                    repair_ext = ext
-                                    break
-                                # Check corresponding cache path
-                                relative = os.path.relpath(
-                                    os.path.join(root, stem + ext), array_dir
-                                )
-                                cache_candidate = os.path.join(cache_dir, relative)
-                                if cache_candidate in cache_files:
-                                    repair_ext = ext
-                                    break
+                            # Search for any sibling file that shares this stem
+                            for candidate in file_set:
+                                if candidate.startswith(stem) and candidate != f:
+                                    _, cand_ext = os.path.splitext(candidate)
+                                    if cand_ext and candidate == stem + cand_ext:
+                                        repair_ext = cand_ext
+                                        break
+                            if not repair_ext:
+                                # Check corresponding cache paths
+                                for cache_file in cache_files:
+                                    cache_basename = os.path.basename(cache_file)
+                                    if cache_basename.startswith(stem) and cache_basename != f:
+                                        _, cand_ext = os.path.splitext(cache_basename)
+                                        if cand_ext and cache_basename == stem + cand_ext:
+                                            repair_ext = cand_ext
+                                            break
 
                             try:
                                 size = os.path.getsize(plexcached_path)
@@ -679,7 +736,7 @@ class MaintenanceService:
                                 ))
                             else:
                                 # Truly malformed — no sibling to infer extension from
-                                logging.warning(f"Malformed .plexcached file (no media extension): {f}")
+                                logging.warning(f"Malformed .plexcached file (no file extension): {f}")
                                 backups_to_cleanup.append(OrphanedBackup(
                                     plexcached_path=plexcached_path,
                                     original_filename=f,

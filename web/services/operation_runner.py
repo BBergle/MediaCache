@@ -74,6 +74,7 @@ class FileActivity:
     filename: str
     size_bytes: int = 0
     users: List[str] = field(default_factory=list)
+    associated_files: List[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         fmt = get_time_format()
@@ -92,7 +93,7 @@ class FileActivity:
         else:
             date_display = self.timestamp.strftime("%a, %b ") + str(self.timestamp.day)
 
-        return {
+        result = {
             "timestamp": self.timestamp.isoformat(),
             "time_display": time_display,
             "date_key": entry_date.isoformat(),
@@ -100,8 +101,11 @@ class FileActivity:
             "action": self.action,
             "filename": self.filename,
             "size": self._format_size(self.size_bytes),
-            "users": self.users
+            "users": self.users,
         }
+        if self.associated_files:
+            result["associated_files"] = self.associated_files
+        return result
 
     def _format_size(self, size_bytes: int) -> str:
         if size_bytes == 0:
@@ -135,7 +139,8 @@ def _load_activity_unlocked() -> List[FileActivity]:
                         action=item['action'],
                         filename=item['filename'],
                         size_bytes=item.get('size_bytes', 0),
-                        users=item.get('users', [])
+                        users=item.get('users', []),
+                        associated_files=item.get('associated_files', [])
                     ))
             except (KeyError, ValueError):
                 continue  # Skip malformed entries
@@ -161,13 +166,16 @@ def _save_activity_unlocked(activities: List[FileActivity]) -> None:
         data = []
         for activity in activities:
             if activity.timestamp > cutoff:
-                data.append({
+                entry = {
                     'timestamp': activity.timestamp.isoformat(),
                     'action': activity.action,
                     'filename': activity.filename,
                     'size_bytes': activity.size_bytes,
-                    'users': activity.users
-                })
+                    'users': activity.users,
+                }
+                if activity.associated_files:
+                    entry['associated_files'] = activity.associated_files
+                data.append(entry)
 
         save_json_atomically(str(ACTIVITY_FILE), data, label="activity")
 
@@ -213,6 +221,7 @@ class OperationResult:
     bytes_restored_so_far: int = 0
     last_completed_file: str = ""
     error_count: int = 0
+    error_messages: List[str] = field(default_factory=list)
     # Byte-level batch progress (from FileMover callback)
     batch_bytes_copied: int = 0
     batch_bytes_total: int = 0
@@ -469,11 +478,15 @@ class OperationRunner:
                 clean_msg = msg.split(sep, 1)[-1]
                 break
 
-        # Count errors
+        # Count errors and capture messages
         if ' - ERROR - ' in msg or ' - CRITICAL - ' in msg:
             with self._lock:
                 if self._current_result:
                     self._current_result.error_count += 1
+                    # Extract just the message portion after ERROR/CRITICAL
+                    error_text = clean_msg.strip() if clean_msg else msg.strip()
+                    if len(self._current_result.error_messages) < 10:
+                        self._current_result.error_messages.append(error_text)
 
         # Detect phase transitions
         for marker, phase_key, phase_display in self._PHASE_MARKERS:
@@ -725,16 +738,15 @@ class OperationRunner:
             # Byte-level progress callback for smooth operation banner updates
             def _bytes_cb(bytes_copied: int, bytes_total: int):
                 with self._lock:
-                    if self._current_result:
-                        r = self._current_result
-                        if bytes_copied == 0:
-                            # New batch starting — snapshot cumulative progress
-                            r.batch_copy_start_time = time.time()
-                            r._prev_batch_cumulative = r.cumulative_bytes_copied
-                            r.cumulative_bytes_total = r._prev_batch_cumulative + bytes_total
-                        r.batch_bytes_copied = bytes_copied
-                        r.batch_bytes_total = bytes_total
-                        r.cumulative_bytes_copied = r._prev_batch_cumulative + bytes_copied
+                    r = self._current_result
+                    if bytes_copied == 0:
+                        # New batch starting — snapshot cumulative progress
+                        r.batch_copy_start_time = time.time()
+                        r._prev_batch_cumulative = r.cumulative_bytes_copied
+                        r.cumulative_bytes_total = r._prev_batch_cumulative + bytes_total
+                    r.batch_bytes_copied = bytes_copied
+                    r.batch_bytes_total = bytes_total
+                    r.cumulative_bytes_copied = r._prev_batch_cumulative + bytes_copied
 
             # Create and run the app
             app = PlexCacheApp(
@@ -759,12 +771,22 @@ class OperationRunner:
                 self._current_result.bytes_cached = self._current_result.bytes_cached_so_far
                 self._current_result.bytes_restored = self._current_result.bytes_restored_so_far
 
+            # Merge sibling activity entries into their parent video rows
+            if hasattr(app, 'sibling_map') and app.sibling_map:
+                try:
+                    self._merge_sibling_activities(app.sibling_map)
+                except Exception as e:
+                    logging.debug(f"Failed to merge sibling activities: {e}")
+
             # Check if we were stopped early
             if self._stop_requested:
                 self._add_log_message("Operation stopped by user")
             else:
                 self._add_log_message("Operation completed successfully")
 
+        except ConnectionError as e:
+            # Plex unreachable — already logged cleanly by app.run(), no traceback needed
+            self._add_log_message(f"ERROR: {e}")
         except Exception as e:
             error_message = str(e)
             self._add_log_message(f"ERROR: {error_message}")
@@ -817,6 +839,121 @@ class OperationRunner:
                 get_maintenance_runner()._try_dequeue()
             except Exception:
                 pass
+
+    def _merge_sibling_activities(self, sibling_map: Dict[str, list]) -> None:
+        """Merge sibling file activities into their parent video's associated_files.
+
+        After an operation completes, folds NFO/artwork/subtitle activity rows
+        into the parent video row as a compact "+N" badge.
+
+        Args:
+            sibling_map: Maps video real paths to lists of sibling file paths.
+        """
+        import os
+
+        # Build reverse map: sibling basename → parent video basename
+        # Skip ambiguous mappings (same sibling basename from multiple parents)
+        sibling_to_parent: Dict[str, str] = {}
+        ambiguous: set = set()
+        for video_path, siblings in sibling_map.items():
+            video_basename = os.path.basename(video_path)
+            for sib_path in siblings:
+                sib_basename = os.path.basename(sib_path)
+                if sib_basename in ambiguous:
+                    continue
+                if sib_basename in sibling_to_parent and sibling_to_parent[sib_basename] != video_basename:
+                    # Same sibling name mapped to different parents — ambiguous
+                    ambiguous.add(sib_basename)
+                    del sibling_to_parent[sib_basename]
+                else:
+                    sibling_to_parent[sib_basename] = video_basename
+
+        if not sibling_to_parent:
+            return
+
+        # "Restored" (rename) and "Moved" (copy) are both "return to array" —
+        # sidecars often use "Moved" while the video uses "Restored"
+        _COMPATIBLE_ACTIONS = {
+            "Restored": ("Restored", "Moved"),
+            "Moved": ("Restored", "Moved"),
+            "Cached": ("Cached",),
+        }
+
+        with _activity_file_lock:
+            activities = _load_activity_unlocked()
+            if not activities:
+                return
+
+            # Index parent video activities by (basename, action) for fast lookup
+            parent_index: Dict[tuple, int] = {}
+            for i, act in enumerate(activities):
+                key = (act.filename, act.action)
+                if key not in parent_index:
+                    parent_index[key] = i
+
+            merged_indices: set = set()
+            for i, act in enumerate(activities):
+                if act.filename in sibling_to_parent:
+                    parent_basename = sibling_to_parent[act.filename]
+                    # Try compatible actions (e.g. Moved sibling → Restored parent)
+                    compatible = _COMPATIBLE_ACTIONS.get(act.action, (act.action,))
+                    for try_action in compatible:
+                        parent_key = (parent_basename, try_action)
+                        if parent_key in parent_index:
+                            parent_idx = parent_index[parent_key]
+                            parent_act = activities[parent_idx]
+                            parent_act.associated_files.append({
+                                "filename": act.filename,
+                                "size": format_bytes(act.size_bytes) if act.size_bytes > 0 else "",
+                            })
+                            merged_indices.add(i)
+                            break
+
+            if merged_indices:
+                activities = [a for i, a in enumerate(activities) if i not in merged_indices]
+                _save_activity_unlocked(activities)
+
+        # Update in-memory list and merge _current_run_files for banner pill
+        with self._lock:
+            self._recent_activity = activities
+            self._merge_run_files(sibling_to_parent, _COMPATIBLE_ACTIONS)
+
+    def _merge_run_files(self, sibling_to_parent: Dict[str, str], compatible_actions: dict) -> None:
+        """Merge sibling entries in _current_run_files (banner pill detail view).
+
+        Caller MUST hold self._lock.
+        """
+        if not self._current_run_files:
+            return
+
+        # Index parents by (filename, action)
+        parent_index: Dict[tuple, int] = {}
+        for i, f in enumerate(self._current_run_files):
+            key = (f["filename"], f["action"])
+            if key not in parent_index:
+                parent_index[key] = i
+
+        merged_indices: set = set()
+        for i, f in enumerate(self._current_run_files):
+            if f["filename"] in sibling_to_parent:
+                parent_basename = sibling_to_parent[f["filename"]]
+                compatible = compatible_actions.get(f["action"], (f["action"],))
+                for try_action in compatible:
+                    parent_key = (parent_basename, try_action)
+                    if parent_key in parent_index:
+                        parent_idx = parent_index[parent_key]
+                        parent_entry = self._current_run_files[parent_idx]
+                        if "associated_files" not in parent_entry:
+                            parent_entry["associated_files"] = []
+                        parent_entry["associated_files"].append({
+                            "filename": f["filename"],
+                            "size": f.get("size", ""),
+                        })
+                        merged_indices.add(i)
+                        break
+
+        if merged_indices:
+            self._current_run_files = [f for i, f in enumerate(self._current_run_files) if i not in merged_indices]
 
     def get_status_dict(self) -> dict:
         """Get status as a dictionary for API responses"""
@@ -934,6 +1071,7 @@ class OperationRunner:
             status["bytes_cached_display"] = self._format_bytes(result.bytes_cached) if result.bytes_cached > 0 else ""
             status["bytes_restored_display"] = self._format_bytes(result.bytes_restored) if result.bytes_restored > 0 else ""
             status["error_count"] = result.error_count
+            status["error_messages"] = result.error_messages[:5]
             status["was_stopped"] = self._stop_requested
 
             # Files processed in this run for hover detail

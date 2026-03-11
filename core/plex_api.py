@@ -188,6 +188,7 @@ class PlexManager:
         self._api_lock = threading.Lock()  # For rate limiting plex.tv calls
         self._plex_tv_reachable = True  # Track if plex.tv is accessible
         self._watchlist_data_complete = True  # Track if we got complete watchlist data
+        self._ondeck_data_complete = True  # Track if we got complete OnDeck data
 
     def connect(self) -> None:
         """Connect to the Plex server."""
@@ -197,8 +198,14 @@ class PlexManager:
             self.plex = PlexServer(self.plex_url, self.plex_token)
             logging.debug(f"Plex server version: {self.plex.version}")
         except Exception as e:
-            _log_api_error("connect to Plex server", e)
-            raise ConnectionError(f"Error connecting to the Plex server: {e}")
+            # Extract the root cause from nested exception chains
+            root = e
+            while root.__cause__:
+                root = root.__cause__
+            reason = str(root)
+            # Log clean message (no traceback), raise with concise reason
+            logging.error(f"Cannot connect to Plex server at {self.plex_url}: {reason}")
+            raise ConnectionError(f"Cannot connect to Plex server: {reason}") from None
 
     def _rate_limited_api_call(self) -> None:
         """Enforce rate limiting for plex.tv API calls."""
@@ -468,6 +475,10 @@ class PlexManager:
         """Mark watchlist data as incomplete (e.g., after fetch failure)."""
         self._watchlist_data_complete = False
 
+    def is_ondeck_data_complete(self) -> bool:
+        """Check if OnDeck data is complete (no fetch failures)."""
+        return self._ondeck_data_complete
+
     def resolve_user_uuid(self, uuid: str) -> Optional[str]:
         """Try to resolve a UUID to a username by querying the Plex API.
 
@@ -701,6 +712,10 @@ class PlexManager:
             # Invalidate token on auth failure
             if "401" in str(e) or "Unauthorized" in str(e):
                 self.invalidate_user_token(username)
+            # Mark OnDeck data incomplete if main account fails
+            if not user:
+                self._ondeck_data_complete = False
+                logging.warning("OnDeck data incomplete — main account fetch failed")
             return []
     
     def _process_episode_ondeck(self, video: Episode, number_episodes: int, on_deck_files: List[OnDeckItem], username: str = "unknown") -> None:

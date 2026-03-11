@@ -70,7 +70,7 @@
                 <div id="remote-watchlist-options"{% if not settings.remote_watchlist_toggle %} style="display: none;"{% endif %}>
                     <div class="form-group">
                         <label for="remote_watchlist_rss_url">Remote Watchlist RSS URL</label>
-                        <input type="url" id="remote_watchlist_rss_url" name="remote_watchlist_rss_url"
+                        <input type="text" id="remote_watchlist_rss_url" name="remote_watchlist_rss_url"
                                value="{{ settings.remote_watchlist_rss_url | default('') }}"
                                placeholder="https://rss.plex.tv/...">
                     </div>
@@ -182,6 +182,16 @@
                     <option value="move" {% if settings.hardlinked_files == 'move' %}selected{% endif %}>Move (break hardlinks)</option>
                 </select>
                 <div class="form-hint">Files with multiple hardlinks (e.g., seeding torrents). Skip preserves links, Move copies the file.</div>
+            </div>
+
+            <div class="form-group">
+                <label for="cache_associated_files">Associated Files</label>
+                <select id="cache_associated_files" name="cache_associated_files">
+                    <option value="all" {% if settings.cache_associated_files == 'all' %}selected{% endif %}>All (subtitles, artwork, NFOs, metadata)</option>
+                    <option value="subtitles" {% if settings.cache_associated_files == 'subtitles' or not settings.cache_associated_files %}selected{% endif %}>Subtitles Only</option>
+                    <option value="none" {% if settings.cache_associated_files == 'none' %}selected{% endif %}>None (video files only)</option>
+                </select>
+                <div class="form-hint">Which files to cache alongside videos. Subtitles affect playback; artwork and NFOs improve browsing with array spun down.</div>
             </div>
 
             <div class="form-hint" style="margin-bottom: 1rem;">

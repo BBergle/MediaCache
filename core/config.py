@@ -195,6 +195,12 @@ class CacheConfig:
     # "move" - Cache hard-linked files; seed copy preserved via remaining hard link
     hardlinked_files: str = "skip"
 
+    # Associated files handling: which sibling files to cache alongside media
+    # "all" - Cache all sibling files (subtitles, artwork, NFOs, metadata)
+    # "subtitles" - Cache subtitle files only
+    # "none" - Cache video files only, no sidecars
+    cache_associated_files: str = "subtitles"
+
     # Clean up empty parent folders on cache after moving files to array
     # Disable if you use year-based or other intentional empty folder structures
     cleanup_empty_folders: bool = True
@@ -458,6 +464,13 @@ class ConfigManager:
             logging.warning(f"Invalid hardlinked_files '{hardlinked_files}', using 'skip'")
             hardlinked_files = 'skip'
         self.cache.hardlinked_files = hardlinked_files
+
+        # Load associated files caching mode (default "subtitles" for backward compat)
+        cache_associated_files = self.settings_data.get('cache_associated_files', 'subtitles')
+        if cache_associated_files not in ('all', 'subtitles', 'none'):
+            logging.warning(f"Invalid cache_associated_files '{cache_associated_files}', using 'subtitles'")
+            cache_associated_files = 'subtitles'
+        self.cache.cache_associated_files = cache_associated_files
 
         # Load cleanup_empty_folders setting (default True to preserve existing behavior)
         self.cache.cleanup_empty_folders = self.settings_data.get('cleanup_empty_folders', True)
@@ -751,6 +764,23 @@ class ConfigManager:
             error_msg = "Configuration validation errors: " + "; ".join(errors)
             logging.error(error_msg)
             raise ValueError(error_msg)
+
+        # Warn about duplicate cache_path values among enabled, cacheable mappings
+        cache_path_to_names: Dict[str, List[str]] = {}
+        for mapping_data in self.settings_data.get('path_mappings', []):
+            if not mapping_data.get('enabled', True) or not mapping_data.get('cacheable', True):
+                continue
+            cp = mapping_data.get('cache_path', '')
+            if cp:
+                cache_path_to_names.setdefault(cp, []).append(mapping_data.get('name', 'Unnamed'))
+        for cp, names in cache_path_to_names.items():
+            if len(names) > 1:
+                logging.warning(
+                    "Path mappings %r and %r share the same cache_path %r "
+                    "\u2014 evictions may move files to wrong locations. "
+                    "Re-run setup or manually fix cache_path in plexcache_settings.json",
+                    names[0], names[1], cp,
+                )
 
         logging.debug("Value validation successful")
     

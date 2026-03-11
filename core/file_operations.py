@@ -77,6 +77,47 @@ def is_subtitle_file(filepath: str) -> bool:
     return ext in SUBTITLE_EXTENSIONS
 
 
+def is_video_file(filepath: str) -> bool:
+    """Check if a file is a video based on its extension."""
+    ext = os.path.splitext(filepath)[1].lower()
+    return ext in VIDEO_EXTENSIONS
+
+
+def is_directory_level_file(filepath: str, parent_video: str) -> bool:
+    """Check if a file is directory-level (not prefixed with the parent video's base name).
+
+    Directory-level files (e.g., poster.jpg, fanart.jpg) are shared by all videos
+    in a directory and need reference counting during eviction.
+
+    Name-prefixed files (e.g., Movie.nfo, S01E01.en.srt) are tied 1:1 to their
+    parent video.
+
+    Args:
+        filepath: Path to the file being checked.
+        parent_video: Path to the parent video file.
+
+    Returns:
+        True if the file is NOT prefixed with the parent video's base name.
+    """
+    video_base = os.path.splitext(os.path.basename(parent_video))[0]
+    return not os.path.basename(filepath).startswith(video_base)
+
+
+def is_season_like_folder(folder_name: str) -> bool:
+    """Check if a folder name looks like a TV season directory.
+
+    Matches: Season 01, Series 1, Specials, 01 (bare numeric).
+    Does NOT match: Movie (2020), Show Name, Extras, Behind the Scenes.
+
+    Uses the same patterns as _extract_media_name() for consistency.
+    """
+    return bool(
+        re.match(r'^(Season|Series)\s*\d+', folder_name, re.IGNORECASE)
+        or re.match(r'^\d+$', folder_name)
+        or re.match(r'^Specials$', folder_name, re.IGNORECASE)
+    )
+
+
 def format_bytes(bytes_value: int) -> str:
     """Format bytes into human-readable string (e.g., '1.5 GB').
 
@@ -126,19 +167,39 @@ def get_media_identity(filepath: str) -> str:
     return name
 
 
+def _get_file_category(filepath: str) -> str:
+    """Classify a file into one of three categories: video, subtitle, or sidecar.
+
+    Used for .plexcached matching to prevent cross-type false matches
+    (e.g., poster.jpg.plexcached matching a video upgrade).
+
+    Args:
+        filepath: Path or filename to classify.
+
+    Returns:
+        'video', 'subtitle', or 'sidecar'.
+    """
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext in VIDEO_EXTENSIONS:
+        return 'video'
+    if ext in SUBTITLE_EXTENSIONS:
+        return 'subtitle'
+    return 'sidecar'
+
+
 def find_matching_plexcached(array_path: str, media_identity: str, source_file: str) -> Optional[str]:
     """Find a .plexcached file in the array path that matches the media identity.
 
     This handles the case where Radarr/Sonarr upgraded a file - the .plexcached
     backup may have a different quality suffix but same core identity.
 
-    Only matches files of the same type (video matches video, subtitle matches subtitle)
+    Only matches files of the same category (video/subtitle/sidecar)
     to prevent cross-type false matches.
 
     Args:
         array_path: Directory path on the array to search
         media_identity: The core media identity to match (from get_media_identity)
-        source_file: The file being cached/uncached (used to determine file type)
+        source_file: The file being cached/uncached (used to determine file category)
 
     Returns:
         Full path to matching .plexcached file, or None if not found
@@ -146,20 +207,20 @@ def find_matching_plexcached(array_path: str, media_identity: str, source_file: 
     if not os.path.isdir(array_path):
         return None
 
-    source_is_subtitle = is_subtitle_file(source_file)
+    source_category = _get_file_category(source_file)
 
     try:
         for entry in os.scandir(array_path):
             if entry.is_file() and entry.name.endswith(PLEXCACHED_EXTENSION):
-                # Only match same file type (video<->video, subtitle<->subtitle)
+                # Only match same file category (video<->video, subtitle<->subtitle, sidecar<->sidecar)
                 entry_original_name = entry.name.replace(PLEXCACHED_EXTENSION, '')
-                entry_is_subtitle = is_subtitle_file(entry_original_name)
-                if source_is_subtitle != entry_is_subtitle:
+                entry_category = _get_file_category(entry_original_name)
+                if source_category != entry_category:
                     continue
                 entry_identity = get_media_identity(entry.name)
                 if entry_identity == media_identity:
                     return entry.path
-    except (OSError, PermissionError) as e:
+    except OSError as e:
         logging.warning(f"Error scanning for .plexcached files in {array_path}: {e}")
 
     return None
@@ -377,11 +438,13 @@ class CacheTimestampTracker:
     {
         "/path/to/file.mkv": {
             "cached_at": "2025-12-02T14:26:27.156439",
-            "source": "ondeck"  # or "watchlist"
+            "source": "ondeck",
+            "associated_files": ["/path/to/file.srt", "/path/to/poster.jpg"]
         }
     }
 
-    Backwards compatible with old format (plain timestamp string).
+    Backwards compatible with old format (plain timestamp string) and
+    old "subtitles" key (migrated to "associated_files" on load).
     """
 
     def __init__(self, timestamp_file: str):
@@ -393,7 +456,7 @@ class CacheTimestampTracker:
         self.timestamp_file = timestamp_file
         self._lock = threading.Lock()
         self._timestamps: Dict[str, dict] = {}
-        self._subtitle_to_parent: Dict[str, str] = {}  # reverse index: subtitle path -> parent video path
+        self._file_to_parent: Dict[str, str] = {}  # reverse index: associated file path -> parent video path
         self._load()
 
     def _load(self) -> None:
@@ -423,8 +486,11 @@ class CacheTimestampTracker:
                     self._save()
                     logging.info("[MIGRATION] Migrated timestamp file to new format with source tracking")
 
-                # Build reverse index from existing subtitle associations
-                self._build_subtitle_reverse_index()
+                # Migrate "subtitles" key → "associated_files" key
+                self._migrate_subtitles_to_associated()
+
+                # Build reverse index from existing file associations
+                self._build_reverse_index()
 
                 # Migrate standalone subtitle entries to parent associations
                 self._migrate_standalone_subtitles()
@@ -480,35 +546,35 @@ class CacheTimestampTracker:
     def remove_entry(self, cache_file_path: str) -> None:
         """Remove a file's timestamp entry (when file is restored to array).
 
-        If removing a parent video, also clears its subtitles from the reverse index.
-        If removing a subtitle, also removes it from the parent's subtitles list.
+        If removing a parent video, also clears its associated files from the reverse index.
+        If removing an associated file, also removes it from the parent's list.
 
         Args:
             cache_file_path: The path to the cached file.
         """
         with self._lock:
             if cache_file_path in self._timestamps:
-                # If this is a parent with subtitles, clear reverse index entries
+                # If this is a parent with associated files, clear reverse index entries
                 entry = self._timestamps[cache_file_path]
-                if isinstance(entry, dict) and "subtitles" in entry:
-                    for sub_path in entry["subtitles"]:
-                        self._subtitle_to_parent.pop(sub_path, None)
+                if isinstance(entry, dict) and "associated_files" in entry:
+                    for file_path in entry["associated_files"]:
+                        self._file_to_parent.pop(file_path, None)
                 del self._timestamps[cache_file_path]
                 self._save()
                 logging.debug(f"Removed cache timestamp for: {cache_file_path}")
-            elif cache_file_path in self._subtitle_to_parent:
-                # This is a subtitle — remove from parent's list and reverse index
-                parent_path = self._subtitle_to_parent.pop(cache_file_path)
+            elif cache_file_path in self._file_to_parent:
+                # This is an associated file — remove from parent's list and reverse index
+                parent_path = self._file_to_parent.pop(cache_file_path)
                 parent_entry = self._timestamps.get(parent_path)
-                if parent_entry and isinstance(parent_entry, dict) and "subtitles" in parent_entry:
+                if parent_entry and isinstance(parent_entry, dict) and "associated_files" in parent_entry:
                     try:
-                        parent_entry["subtitles"].remove(cache_file_path)
+                        parent_entry["associated_files"].remove(cache_file_path)
                     except ValueError:
                         pass
-                    if not parent_entry["subtitles"]:
-                        del parent_entry["subtitles"]
+                    if not parent_entry["associated_files"]:
+                        del parent_entry["associated_files"]
                 self._save()
-                logging.debug(f"Removed subtitle entry for: {cache_file_path}")
+                logging.debug(f"Removed associated file entry for: {cache_file_path}")
 
     def get_entry(self, cache_file_path: str) -> Optional[Dict]:
         """Get the timestamp entry for a cached file.
@@ -540,7 +606,8 @@ class CacheTimestampTracker:
     def is_within_retention_period(self, cache_file_path: str, retention_hours: int) -> bool:
         """Check if a file is still within its cache retention period.
 
-        For subtitles associated with a parent video, delegates to the parent's entry.
+        For associated files (subtitles, artwork, etc.) linked to a parent video,
+        delegates to the parent's entry.
 
         Args:
             cache_file_path: The path to the cached file.
@@ -552,8 +619,8 @@ class CacheTimestampTracker:
         """
         with self._lock:
             if cache_file_path not in self._timestamps:
-                # Check if this is a subtitle with a parent
-                parent = self._subtitle_to_parent.get(cache_file_path)
+                # Check if this is an associated file with a parent
+                parent = self._file_to_parent.get(cache_file_path)
                 if parent and parent in self._timestamps:
                     cache_file_path = parent
                 else:
@@ -594,7 +661,7 @@ class CacheTimestampTracker:
     def get_retention_remaining(self, cache_file_path: str, retention_hours: int) -> float:
         """Get hours remaining in retention period for a cached file.
 
-        For subtitles associated with a parent video, delegates to the parent's entry.
+        For associated files linked to a parent video, delegates to the parent's entry.
 
         Args:
             cache_file_path: The path to the cached file.
@@ -606,7 +673,7 @@ class CacheTimestampTracker:
         """
         with self._lock:
             if cache_file_path not in self._timestamps:
-                parent = self._subtitle_to_parent.get(cache_file_path)
+                parent = self._file_to_parent.get(cache_file_path)
                 if parent and parent in self._timestamps:
                     cache_file_path = parent
                 else:
@@ -641,7 +708,7 @@ class CacheTimestampTracker:
         """
         with self._lock:
             if cache_file_path not in self._timestamps:
-                parent = self._subtitle_to_parent.get(cache_file_path)
+                parent = self._file_to_parent.get(cache_file_path)
                 if parent and parent in self._timestamps:
                     cache_file_path = parent
                 else:
@@ -665,7 +732,7 @@ class CacheTimestampTracker:
         with self._lock:
             entry = self._timestamps.get(cache_file_path)
             if not entry:
-                parent = self._subtitle_to_parent.get(cache_file_path)
+                parent = self._file_to_parent.get(cache_file_path)
                 if parent:
                     entry = self._timestamps.get(parent)
             if entry and isinstance(entry, dict):
@@ -686,100 +753,207 @@ class CacheTimestampTracker:
         with self._lock:
             entry = self._timestamps.get(cache_file_path)
             if not entry:
-                parent = self._subtitle_to_parent.get(cache_file_path)
+                parent = self._file_to_parent.get(cache_file_path)
                 if parent:
                     entry = self._timestamps.get(parent)
             if entry and isinstance(entry, dict):
                 return entry.get("episode_info")
             return None
 
-    def associate_subtitles(self, subtitle_map: Dict[str, List[str]]) -> None:
-        """Bulk-link subtitle files to their parent video entries.
+    def associate_files(self, file_map: Dict[str, List[str]]) -> None:
+        """Bulk-link associated files (subtitles, artwork, metadata) to their parent video entries.
 
-        For each (video, [subtitles]) pair:
-        - Adds a "subtitles" list to the parent's timestamp entry
-        - Removes any standalone subtitle entries from _timestamps
+        For each (video, [files]) pair:
+        - Adds an "associated_files" list to the parent's timestamp entry
+        - Removes any standalone entries from _timestamps
         - Updates the reverse index
 
         Args:
-            subtitle_map: Dict mapping parent video cache paths to lists of subtitle cache paths.
+            file_map: Dict mapping parent video cache paths to lists of associated file cache paths.
         """
         with self._lock:
             changed = False
-            for parent_path, sub_paths in subtitle_map.items():
-                if not sub_paths:
+            for parent_path, file_paths in file_map.items():
+                if not file_paths:
                     continue
                 parent_entry = self._timestamps.get(parent_path)
                 if parent_entry is None or not isinstance(parent_entry, dict):
-                    # Parent not tracked — leave subtitles as standalone
+                    # Parent not tracked — leave files as standalone
                     continue
 
-                existing_subs = set(parent_entry.get("subtitles", []))
-                for sub_path in sub_paths:
-                    if sub_path not in existing_subs:
-                        existing_subs.add(sub_path)
+                existing_files = set(parent_entry.get("associated_files", []))
+                for file_path in file_paths:
+                    if file_path not in existing_files:
+                        existing_files.add(file_path)
                         changed = True
-                    # Remove standalone subtitle entry if it exists
-                    if sub_path in self._timestamps:
-                        del self._timestamps[sub_path]
+                    # Remove standalone entry if it exists
+                    if file_path in self._timestamps:
+                        del self._timestamps[file_path]
                         changed = True
                     # Update reverse index
-                    self._subtitle_to_parent[sub_path] = parent_path
+                    self._file_to_parent[file_path] = parent_path
 
-                parent_entry["subtitles"] = sorted(existing_subs)
+                parent_entry["associated_files"] = sorted(existing_files)
 
             if changed:
                 self._save()
-                logging.debug(f"Associated subtitles for {len(subtitle_map)} parent videos")
+                logging.debug(f"Associated files for {len(file_map)} parent videos")
 
-    def get_subtitles(self, parent_path: str) -> List[str]:
-        """Get the list of subtitle files associated with a parent video.
+    # Backward compatibility alias
+    def associate_subtitles(self, subtitle_map: Dict[str, List[str]]) -> None:
+        """Backward-compatible alias for associate_files()."""
+        self.associate_files(subtitle_map)
+
+    def get_associated_files(self, parent_path: str) -> List[str]:
+        """Get the list of associated files (subtitles, artwork, etc.) for a parent video.
 
         Args:
             parent_path: Cache path of the parent video file.
 
         Returns:
-            List of subtitle cache paths, or empty list if none.
+            List of associated file cache paths, or empty list if none.
         """
         with self._lock:
             entry = self._timestamps.get(parent_path)
             if entry and isinstance(entry, dict):
-                return list(entry.get("subtitles", []))
+                return list(entry.get("associated_files", []))
             return []
 
-    def find_parent_video(self, subtitle_path: str) -> Optional[str]:
-        """Find the parent video for a subtitle file via the reverse index.
+    # Backward compatibility alias
+    def get_subtitles(self, parent_path: str) -> List[str]:
+        """Backward-compatible alias for get_associated_files()."""
+        return self.get_associated_files(parent_path)
+
+    def find_parent_video(self, file_path: str) -> Optional[str]:
+        """Find the parent video for an associated file via the reverse index.
+
+        Works for subtitles, artwork, NFOs, and any other associated file.
 
         Args:
-            subtitle_path: Cache path of the subtitle file.
+            file_path: Cache path of the associated file.
 
         Returns:
             Cache path of the parent video, or None if not associated.
         """
         with self._lock:
-            return self._subtitle_to_parent.get(subtitle_path)
+            return self._file_to_parent.get(file_path)
 
-    def _build_subtitle_reverse_index(self) -> None:
-        """Build _subtitle_to_parent from existing subtitle lists in entries.
+    def get_other_videos_in_directory(self, directory: str, excluding: str) -> List[str]:
+        """Find other tracked video files in the same directory.
+
+        Used for reference counting directory-level files during eviction.
+
+        Args:
+            directory: Directory path to check.
+            excluding: Video path to exclude from results (the video being evicted).
+
+        Returns:
+            List of other tracked video paths in the same directory.
+        """
+        with self._lock:
+            result = []
+            for path in self._timestamps:
+                if path == excluding:
+                    continue
+                if os.path.dirname(path) == directory and is_video_file(path):
+                    result.append(path)
+            return result
+
+    def get_other_videos_in_subdirectories(self, parent_dir: str, excluding: str) -> List[str]:
+        """Find other tracked video files in any subdirectory of a parent directory.
+
+        Used for reference counting show-root files during eviction. When a show-root
+        file (e.g., poster.jpg) is associated with an episode being evicted, this
+        checks if any other episodes from any season remain cached.
+
+        Args:
+            parent_dir: Show root directory path to check.
+            excluding: Video path to exclude from results (the video being evicted).
+
+        Returns:
+            List of other tracked video paths in subdirectories of parent_dir.
+        """
+        with self._lock:
+            result = []
+            norm_parent = os.path.normpath(parent_dir) + os.sep
+            for path in self._timestamps:
+                if path == excluding:
+                    continue
+                if os.path.normpath(path).startswith(norm_parent) and is_video_file(path):
+                    result.append(path)
+            return result
+
+    def reassociate_file(self, file_path: str, from_parent: str, to_parent: str) -> None:
+        """Move an associated file from one parent video to another.
+
+        Used for reference counting: when a video is evicted but a directory-level
+        file (e.g., poster.jpg) should stay because other videos remain.
+
+        Args:
+            file_path: Path of the associated file to reassociate.
+            from_parent: Current parent video path.
+            to_parent: New parent video path.
+        """
+        with self._lock:
+            # Remove from old parent's list
+            from_entry = self._timestamps.get(from_parent)
+            if from_entry and isinstance(from_entry, dict) and "associated_files" in from_entry:
+                try:
+                    from_entry["associated_files"].remove(file_path)
+                except ValueError:
+                    pass
+                if not from_entry["associated_files"]:
+                    del from_entry["associated_files"]
+
+            # Add to new parent's list
+            to_entry = self._timestamps.get(to_parent)
+            if to_entry and isinstance(to_entry, dict):
+                existing = to_entry.get("associated_files", [])
+                if file_path not in existing:
+                    existing.append(file_path)
+                    to_entry["associated_files"] = sorted(existing)
+
+            # Update reverse index
+            self._file_to_parent[file_path] = to_parent
+            self._save()
+            logging.debug(f"Reassociated {os.path.basename(file_path)} from {os.path.basename(from_parent)} to {os.path.basename(to_parent)}")
+
+    def _build_reverse_index(self) -> None:
+        """Build _file_to_parent from existing associated_files lists in entries.
 
         Called during _load() — no lock needed (called within __init__).
         """
-        self._subtitle_to_parent.clear()
+        self._file_to_parent.clear()
         for parent_path, entry in self._timestamps.items():
+            if isinstance(entry, dict) and "associated_files" in entry:
+                for file_path in entry["associated_files"]:
+                    self._file_to_parent[file_path] = parent_path
+
+    def _migrate_subtitles_to_associated(self) -> None:
+        """One-time migration: rename 'subtitles' key to 'associated_files' in all entries.
+
+        Called during _load() — no lock needed (called within __init__).
+        """
+        migrated_count = 0
+        for path, entry in self._timestamps.items():
             if isinstance(entry, dict) and "subtitles" in entry:
-                for sub_path in entry["subtitles"]:
-                    self._subtitle_to_parent[sub_path] = parent_path
+                entry["associated_files"] = entry.pop("subtitles")
+                migrated_count += 1
+
+        if migrated_count:
+            self._save()
+            logging.info(f"[MIGRATION] Renamed 'subtitles' to 'associated_files' in {migrated_count} timestamp entries")
 
     def _migrate_standalone_subtitles(self) -> None:
         """One-time migration: move standalone subtitle entries to parent associations.
 
-        Scans all entries for subtitle files not already in _subtitle_to_parent.
+        Scans all entries for subtitle files not already in _file_to_parent.
         Derives the parent video path and links them if the parent exists.
         Called during _load() — no lock needed (called within __init__).
         """
         standalone_subs = []
         for path in list(self._timestamps.keys()):
-            if is_subtitle_file(path) and path not in self._subtitle_to_parent:
+            if is_subtitle_file(path) and path not in self._file_to_parent:
                 standalone_subs.append(path)
 
         if not standalone_subs:
@@ -792,11 +966,11 @@ class CacheTimestampTracker:
                 # Link to parent
                 parent_entry = self._timestamps[parent_path]
                 if isinstance(parent_entry, dict):
-                    subs = parent_entry.get("subtitles", [])
-                    if sub_path not in subs:
-                        subs.append(sub_path)
-                    parent_entry["subtitles"] = sorted(subs)
-                    self._subtitle_to_parent[sub_path] = parent_path
+                    files = parent_entry.get("associated_files", [])
+                    if sub_path not in files:
+                        files.append(sub_path)
+                    parent_entry["associated_files"] = sorted(files)
+                    self._file_to_parent[sub_path] = parent_path
                     del self._timestamps[sub_path]
                     migrated_count += 1
 
@@ -874,7 +1048,7 @@ class CacheTimestampTracker:
     def cleanup_missing_files(self) -> int:
         """Remove entries for files that no longer exist on cache.
 
-        Also prunes missing subtitle files from parent entries' subtitle lists
+        Also prunes missing associated files from parent entries' lists
         and updates the reverse index.
 
         Returns:
@@ -883,34 +1057,34 @@ class CacheTimestampTracker:
         with self._lock:
             missing = [path for path in self._timestamps if not os.path.exists(path)]
             for path in missing:
-                # If parent with subtitles, clear reverse index
+                # If parent with associated files, clear reverse index
                 entry = self._timestamps[path]
-                if isinstance(entry, dict) and "subtitles" in entry:
-                    for sub_path in entry["subtitles"]:
-                        self._subtitle_to_parent.pop(sub_path, None)
+                if isinstance(entry, dict) and "associated_files" in entry:
+                    for file_path in entry["associated_files"]:
+                        self._file_to_parent.pop(file_path, None)
                 del self._timestamps[path]
 
-            # Prune missing subtitle files from remaining parent entries
-            missing_subs = 0
+            # Prune missing associated files from remaining parent entries
+            missing_files = 0
             for path, entry in self._timestamps.items():
-                if isinstance(entry, dict) and "subtitles" in entry:
-                    original_count = len(entry["subtitles"])
-                    entry["subtitles"] = [s for s in entry["subtitles"] if os.path.exists(s)]
-                    removed_count = original_count - len(entry["subtitles"])
+                if isinstance(entry, dict) and "associated_files" in entry:
+                    original_count = len(entry["associated_files"])
+                    entry["associated_files"] = [f for f in entry["associated_files"] if os.path.exists(f)]
+                    removed_count = original_count - len(entry["associated_files"])
                     if removed_count > 0:
-                        missing_subs += removed_count
+                        missing_files += removed_count
                         # Update reverse index
-                        for sub_path in list(self._subtitle_to_parent):
-                            if self._subtitle_to_parent[sub_path] == path and sub_path not in entry["subtitles"]:
-                                del self._subtitle_to_parent[sub_path]
-                    if not entry["subtitles"]:
-                        del entry["subtitles"]
+                        for file_path in list(self._file_to_parent):
+                            if self._file_to_parent[file_path] == path and file_path not in entry["associated_files"]:
+                                del self._file_to_parent[file_path]
+                    if not entry["associated_files"]:
+                        del entry["associated_files"]
 
-            total_removed = len(missing) + missing_subs
+            total_removed = len(missing) + missing_files
             if total_removed:
                 self._save()
-                if missing_subs:
-                    logging.info(f"[CACHE] Cleaned up {len(missing)} stale timestamp entries and {missing_subs} missing subtitle references")
+                if missing_files:
+                    logging.info(f"[CACHE] Cleaned up {len(missing)} stale timestamp entries and {missing_files} missing associated file references")
                 else:
                     logging.info(f"[CACHE] Cleaned up {len(missing)} stale timestamp entries")
             return total_removed
@@ -1544,7 +1718,7 @@ class CachePriorityManager:
 
         Higher score = more likely to be watched soon = keep longer.
         Lower score = evict first when space is needed.
-        Subtitle files delegate to their parent video's score.
+        Non-video associated files delegate to their parent video's score.
 
         Eviction philosophy: Watchlist items evicted first, OnDeck protected.
 
@@ -1554,8 +1728,8 @@ class CachePriorityManager:
         Returns:
             Priority score between 0 and 100.
         """
-        # Subtitle delegation: use parent's priority so they're evicted together
-        if is_subtitle_file(cache_path):
+        # Associated file delegation: use parent's priority so they're evicted together
+        if not is_video_file(cache_path):
             parent = self.timestamp_tracker.find_parent_video(cache_path)
             if parent:
                 return self.calculate_priority(parent)
@@ -1727,7 +1901,7 @@ class CachePriorityManager:
 
             try:
                 file_size = os.path.getsize(cache_path)
-            except (OSError, IOError):
+            except OSError:
                 continue
 
             candidates.append(cache_path)
@@ -1769,7 +1943,7 @@ class CachePriorityManager:
                         filename = filename[:47] + "..."
                     stale_entries.append(filename)
                     continue
-            except (OSError, IOError):
+            except OSError:
                 # Can't access file - track as stale and skip
                 filename = os.path.basename(cache_path)
                 if len(filename) > 50:
@@ -2600,16 +2774,73 @@ class MultiPathModifier:
         }
 
 
-class SubtitleFinder:
-    """Handles subtitle file discovery and operations."""
-    
+class SiblingFileFinder:
+    """Discovers sibling files (subtitles, artwork, metadata) alongside video files.
+
+    Finds all non-video, non-hidden files in the same directory as a video file.
+    This includes subtitles (.srt, .sub), artwork (poster.jpg, fanart.jpg),
+    metadata (.nfo), and any other files that should be cached alongside the video.
+    """
+
     def __init__(self, subtitle_extensions: Optional[List[str]] = None):
         if subtitle_extensions is None:
             subtitle_extensions = sorted(SUBTITLE_EXTENSIONS)
         self.subtitle_extensions = subtitle_extensions
-    
+
+    def get_media_siblings_grouped(self, media_files: List[str], files_to_skip: Optional[Set[str]] = None) -> Dict[str, List[str]]:
+        """Get all sibling files grouped by their parent video file.
+
+        Discovers all non-video, non-hidden files in the same directory as each video.
+        This includes subtitles, artwork, NFOs, and any other sidecar files.
+
+        Args:
+            media_files: List of media file paths.
+            files_to_skip: Set of file paths to skip.
+
+        Returns:
+            Dict mapping each video path to its list of sibling file paths.
+            Videos without siblings have an empty list.
+        """
+        logging.debug("Finding sibling files for media...")
+
+        files_to_skip = set() if files_to_skip is None else set(files_to_skip)
+        processed_files = set()
+        scanned_parent_dirs: Set[str] = set()
+        result: Dict[str, List[str]] = {}
+
+        for file in media_files:
+            if file in files_to_skip or file in processed_files:
+                continue
+            processed_files.add(file)
+
+            sibling_files = []
+            directory_path = os.path.dirname(file)
+            if os.path.exists(directory_path):
+                sibling_files = self._find_sibling_files(directory_path, file)
+                for sibling_file in sibling_files:
+                    logging.debug(f"Sibling found: {sibling_file}")
+
+                # TV show root scan: if this video is in a Season-like folder,
+                # also discover show-root assets (poster.jpg, fanart.jpg, etc.)
+                folder_name = os.path.basename(directory_path)
+                parent_dir = os.path.dirname(directory_path)
+                if is_season_like_folder(folder_name) and parent_dir not in scanned_parent_dirs:
+                    scanned_parent_dirs.add(parent_dir)
+                    if os.path.exists(parent_dir):
+                        parent_siblings = self._find_sibling_files(parent_dir, file)
+                        for parent_file in parent_siblings:
+                            logging.debug(f"Show root sibling found: {parent_file}")
+                        sibling_files.extend(parent_siblings)
+
+            result[file] = sibling_files
+
+        return result
+
     def get_media_subtitles_grouped(self, media_files: List[str], files_to_skip: Optional[Set[str]] = None) -> Dict[str, List[str]]:
         """Get subtitle files grouped by their parent video file.
+
+        Backward-compatible wrapper — delegates to get_media_siblings_grouped()
+        and filters to subtitle files only.
 
         Args:
             media_files: List of media file paths.
@@ -2619,27 +2850,11 @@ class SubtitleFinder:
             Dict mapping each video path to its list of subtitle paths.
             Videos without subtitles have an empty list.
         """
-        logging.debug("Fetching subtitles (grouped)...")
-
-        files_to_skip = set() if files_to_skip is None else set(files_to_skip)
-        processed_files = set()
-        result: Dict[str, List[str]] = {}
-
-        for file in media_files:
-            if file in files_to_skip or file in processed_files:
-                continue
-            processed_files.add(file)
-
-            subtitle_files = []
-            directory_path = os.path.dirname(file)
-            if os.path.exists(directory_path):
-                subtitle_files = self._find_subtitle_files(directory_path, file)
-                for subtitle_file in subtitle_files:
-                    logging.debug(f"Subtitle found: {subtitle_file}")
-
-            result[file] = subtitle_files
-
-        return result
+        all_siblings = self.get_media_siblings_grouped(media_files, files_to_skip)
+        return {
+            video: [f for f in siblings if is_subtitle_file(f)]
+            for video, siblings in all_siblings.items()
+        }
 
     def get_media_subtitles(self, media_files: List[str], files_to_skip: Optional[Set[str]] = None) -> List[str]:
         """Get subtitle files for media files (flat list including originals).
@@ -2657,9 +2872,46 @@ class SubtitleFinder:
         for subs in grouped.values():
             all_files.extend(subs)
         return all_files
-    
+
+    def _find_sibling_files(self, directory_path: str, file: str) -> List[str]:
+        """Find all non-video, non-hidden sibling files in a directory.
+
+        Returns ALL non-video files in the directory — subtitles, artwork, NFOs,
+        and anything else. No extension filtering.
+
+        Args:
+            directory_path: Directory to scan.
+            file: The video file (excluded from results along with other videos).
+
+        Returns:
+            List of sibling file paths.
+        """
+        file_basename = os.path.basename(file)
+
+        try:
+            sibling_files = [
+                entry.path
+                for entry in os.scandir(directory_path)
+                if entry.is_file()
+                and not entry.name.startswith('.')
+                and not entry.name.endswith('.plexcached')
+                and entry.name != file_basename
+                and not is_video_file(entry.name)
+            ]
+        except PermissionError as e:
+            logging.error(f"Cannot access directory {directory_path}. Permission denied. {type(e).__name__}: {e}")
+            sibling_files = []
+        except OSError as e:
+            logging.error(f"Cannot access directory {directory_path}. {type(e).__name__}: {e}")
+            sibling_files = []
+
+        return sibling_files
+
     def _find_subtitle_files(self, directory_path: str, file: str) -> List[str]:
-        """Find subtitle files in a directory for a given media file."""
+        """Find subtitle files in a directory for a given media file.
+
+        Kept for callers that need subtitle-only discovery.
+        """
         file_basename = os.path.basename(file)
         file_name, _ = os.path.splitext(file_basename)
 
@@ -2678,6 +2930,10 @@ class SubtitleFinder:
             subtitle_files = []
 
         return subtitle_files
+
+
+# Backward compatibility alias
+SubtitleFinder = SiblingFileFinder
 
 
 class FileFilter:
@@ -2729,8 +2985,8 @@ class FileFilter:
         Returns:
             Tuple of (media_type, episode_info) if found, None for regex fallback.
         """
-        # 0. Subtitle delegation: if this is a subtitle with a tracked parent, use parent's info
-        if is_subtitle_file(file_path) and self.timestamp_tracker:
+        # 0. Associated file delegation: if this is a non-video file with a tracked parent, use parent's info
+        if not is_video_file(file_path) and self.timestamp_tracker:
             parent = self.timestamp_tracker.find_parent_video(file_path)
             if parent:
                 return self._lookup_media_info(parent)
@@ -2963,10 +3219,13 @@ class FileFilter:
 
         # Check for upgrade scenario: old .plexcached with different filename but same media identity
         # In this case, we still want to move the file so _move_to_array can handle the upgrade
-        # NOTE: Only treat as upgrade if the .plexcached has a DIFFERENT name than expected
+        # NOTE: Only for video files — sidecar files (poster.jpg, fanart.jpg) are not upgrades of each other
         expected_plexcached = array_file + PLEXCACHED_EXTENSION
-        cache_identity = get_media_identity(cache_file_name)
-        old_plexcached = find_matching_plexcached(array_path, cache_identity, cache_file_name)
+        if is_video_file(cache_file_name):
+            cache_identity = get_media_identity(cache_file_name)
+            old_plexcached = find_matching_plexcached(array_path, cache_identity, cache_file_name)
+        else:
+            old_plexcached = None
         if old_plexcached and old_plexcached != expected_plexcached:
             # Found a .plexcached with different filename - this is a true upgrade scenario
             # Let _move_to_array handle it
@@ -3311,6 +3570,55 @@ class FileFilter:
                 files_to_move_back.append(array_file)
                 move_back_exclude_paths.append(cache_file)
 
+            # Second pass: collect associated files for videos being evicted
+            # and apply reference counting for directory-level files
+            if self.timestamp_tracker:
+                eviction_set = set(move_back_exclude_paths)
+                additional_move_back = []
+                additional_exclude_paths = []
+
+                for cache_file in list(move_back_exclude_paths):
+                    check_path = self._translate_from_host_path(cache_file)
+                    associated = self.timestamp_tracker.get_associated_files(check_path)
+                    for assoc_file in associated:
+                        if assoc_file in eviction_set:
+                            continue  # Already being evicted
+
+                        if is_directory_level_file(assoc_file, check_path):
+                            # Directory-level file: check if other videos remain
+                            directory = os.path.dirname(assoc_file)
+                            video_dir = os.path.dirname(check_path)
+                            if directory != video_dir:
+                                # Cross-directory: show-root file linked to Season video
+                                others = self.timestamp_tracker.get_other_videos_in_subdirectories(directory, excluding=check_path)
+                            else:
+                                others = self.timestamp_tracker.get_other_videos_in_directory(directory, excluding=check_path)
+                            # Filter out others that are also being evicted
+                            remaining = [v for v in others if self._translate_to_host_path(v) not in eviction_set]
+                            if remaining:
+                                # Re-associate to a remaining video instead of evicting
+                                self.timestamp_tracker.reassociate_file(assoc_file, from_parent=check_path, to_parent=remaining[0])
+                                logging.debug(f"Reassociated {os.path.basename(assoc_file)} to {os.path.basename(remaining[0])}")
+                                continue
+
+                        # Evict this associated file
+                        if self.path_modifier:
+                            array_assoc, _ = self.path_modifier.convert_cache_to_real(assoc_file)
+                            if array_assoc is None:
+                                continue
+                        else:
+                            array_assoc = assoc_file.replace(self.cache_dir, self.real_source, 1)
+
+                        host_assoc = self._translate_to_host_path(assoc_file)
+                        additional_move_back.append(array_assoc)
+                        additional_exclude_paths.append(host_assoc)
+                        eviction_set.add(host_assoc)
+
+                files_to_move_back.extend(additional_move_back)
+                move_back_exclude_paths.extend(additional_exclude_paths)
+                if additional_move_back:
+                    logging.debug(f"Added {len(additional_move_back)} associated files for eviction")
+
             # Log retention summary
             if retention_holds:
                 grouped = self._group_retention_holds(retention_holds)
@@ -3392,6 +3700,7 @@ class FileFilter:
         Extract a comparable media identifier from a file path.
         - For movies: returns cleaned file title
         - For TV shows: returns show name (but episode comparison is handled separately)
+        - For non-video files (artwork, NFOs, etc.): derives name from parent directory
         """
         try:
             normalized_path = os.path.normpath(file_path)
@@ -3420,6 +3729,12 @@ class FileFilter:
                 while prev_name != name:
                     prev_name = name
                     name = re.sub(pattern, '', name, flags=re.IGNORECASE)
+            elif not is_video_file(file_path):
+                # Non-video, non-subtitle file (artwork, NFO, etc.)
+                # Use parent directory name as the media identifier
+                parent_dir = os.path.basename(os.path.dirname(file_path))
+                if parent_dir:
+                    return parent_dir
 
             cleaned = re.sub(r'\s*\([^)]*\)$', '', name).strip()
             return cleaned
@@ -4334,8 +4649,9 @@ class FileMover:
             old_cache_file_to_remove = None
 
             # Step 0: Check for upgrade scenario - clean up old .plexcached if needed
-            # Only relevant when backups are enabled
-            if self.create_plexcached_backups and not os.path.isfile(plexcached_file):
+            # Only relevant when backups are enabled and only for video files
+            # (sidecar files like poster.jpg/fanart.jpg are not "upgrades" of each other)
+            if self.create_plexcached_backups and not os.path.isfile(plexcached_file) and is_video_file(cache_file_name):
                 cache_identity = get_media_identity(cache_file_name)
                 old_plexcached = find_matching_plexcached(array_path, cache_identity, array_file)
                 if old_plexcached and old_plexcached != plexcached_file:
@@ -4785,11 +5101,12 @@ class FileMover:
                     logging.debug(f"Restored array file: {plexcached_file} -> {array_file}")
 
             # Scenario 2: Check for filename-change upgrade (different .plexcached with same media identity)
-            elif os.path.isfile(cache_file):
+            # Only for video files — sidecar files are not upgrades of each other
+            elif os.path.isfile(cache_file) and is_video_file(cache_file):
                 cache_identity = get_media_identity(cache_file)
                 old_plexcached = find_matching_plexcached(array_path, cache_identity, cache_file)
 
-                # Scenario 2: Upgraded file - old .plexcached exists with different name
+                # Scenario 2a: Upgraded file - old .plexcached exists with different name
                 if old_plexcached and old_plexcached != plexcached_file:
                     operation_type = "Moved"  # Copy operation (upgrade)
                     old_name = os.path.basename(old_plexcached).replace(PLEXCACHED_EXTENSION, '')
@@ -4827,22 +5144,16 @@ class FileMover:
                             os.remove(array_file)
                             return 1
 
-                # Scenario 3: No .plexcached at all - copy to array (preserving ownership)
-                # CRITICAL: Use /mnt/user0/ (array direct) to check if file truly exists on array
+                # Scenario 2b: No .plexcached, video not on array - copy to array
                 elif not os.path.isfile(get_array_direct_path(array_file)):
                     operation_type = "Moved"  # Copy operation (no backup)
                     logging.debug(f"No .plexcached found, copying from cache to array: {cache_file}")
                     cache_size = os.path.getsize(cache_file)
-                    # For Docker: translate cache path to host path for log display
                     display_src = self._translate_to_host_path(cache_file) if self.file_utils.is_docker else None
-                    # CRITICAL: Copy to /mnt/user0/ (array direct), NOT /mnt/user/ (FUSE)
-                    # If we copy to /mnt/user/, Unraid's cache policy may put the file
-                    # back on cache (if shareUseCache=yes), causing data loss
                     array_direct_file = get_array_direct_path(array_file)
                     array_direct_dir = os.path.dirname(array_direct_file)
                     os.makedirs(array_direct_dir, exist_ok=True)
 
-                    # Build stop check for cancellable copy
                     def combined_stop_check():
                         if self._stop_requested:
                             return True
@@ -4856,13 +5167,43 @@ class FileMover:
                     )
                     logging.debug(f"Copied to array: {array_direct_file}")
 
-                    # Verify copy succeeded by comparing file sizes
                     if os.path.isfile(array_direct_file):
                         array_size = os.path.getsize(array_direct_file)
                         if cache_size != array_size:
                             logging.error(f"Size mismatch after copy! Cache: {cache_size}, Array: {array_size}. Keeping cache file.")
                             os.remove(array_direct_file)
                             return 1
+
+            # Scenario 3: Non-video file (sidecar/asset) with no .plexcached - copy to array
+            elif os.path.isfile(cache_file) and not os.path.isfile(get_array_direct_path(array_file)):
+                operation_type = "Moved"
+                logging.debug(f"No .plexcached found for associated file, copying to array: {cache_file}")
+                cache_size = os.path.getsize(cache_file)
+                display_src = self._translate_to_host_path(cache_file) if self.file_utils.is_docker else None
+                # CRITICAL: Copy to /mnt/user0/ (array direct), NOT /mnt/user/ (FUSE)
+                array_direct_file = get_array_direct_path(array_file)
+                array_direct_dir = os.path.dirname(array_direct_file)
+                os.makedirs(array_direct_dir, exist_ok=True)
+
+                def combined_stop_check():
+                    if self._stop_requested:
+                        return True
+                    if self._stop_check and self._stop_check():
+                        return True
+                    return False
+
+                self.file_utils.copy_file_with_permissions(
+                    cache_file, array_direct_file, verbose=True, display_src=display_src,
+                    stop_check=combined_stop_check, progress_callback=byte_callback
+                )
+                logging.debug(f"Copied to array: {array_direct_file}")
+
+                if os.path.isfile(array_direct_file):
+                    array_size = os.path.getsize(array_direct_file)
+                    if cache_size != array_size:
+                        logging.error(f"Size mismatch after copy! Cache: {cache_size}, Array: {array_size}. Keeping cache file.")
+                        os.remove(array_direct_file)
+                        return 1
 
             # Delete cache copy only if array file truly exists on array
             # CRITICAL: Use /mnt/user0/ to avoid FUSE false positive where cache file appears as array file
