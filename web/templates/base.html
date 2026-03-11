@@ -8,16 +8,16 @@
     <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 
-    <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Lucide Icons (vendored) -->
+    <script src="/static/js/vendor/lucide.min.js"></script>
 
     <!-- Custom Plex Theme -->
     <link rel="stylesheet" href="/static/css/plex-theme.css">
     <link rel="stylesheet" href="/static/css/custom.css">
 
-    <!-- HTMX -->
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/ws.js"></script>
+    <!-- HTMX (vendored) -->
+    <script src="/static/js/vendor/htmx.min.js"></script>
+    <script src="/static/js/vendor/htmx-ws.js"></script>
 
     <!-- Apply saved theme and sidebar state immediately to prevent flash -->
     <script>
@@ -61,10 +61,10 @@
         <nav class="sidebar">
             <div class="sidebar-brand">
                 <div class="sidebar-brand-icon"><i data-lucide="hard-drive"></i></div>
-                <span>PlexCache-D</span>
-                {% if image_tag is defined and image_tag != 'latest' %}
-                <span class="dev-badge">{{ image_tag | upper }}</span>
-                {% endif %}
+                <div class="sidebar-brand-text">
+                    <span>PlexCache-D</span>
+                    <small class="sidebar-brand-version">v{{ product_version }}{% if tag_label %} <span class="dev-badge">{{ tag_label }}</span>{% endif %}</small>
+                </div>
             </div>
             <ul class="sidebar-nav">
                 <li>
@@ -104,9 +104,18 @@
                     </a>
                 </li>
             </ul>
+            {% if request.state.user is defined and request.state.user %}
+            <form method="post" action="/auth/logout" style="margin: 0; padding: 0 0.5rem;">
+                <button type="submit" class="sidebar-logout-btn" title="Sign out ({{ request.state.user.plex_username }})">
+                    <i data-lucide="log-out"></i>
+                    <span>Sign Out</span>
+                </button>
+            </form>
+            {% endif %}
             <div class="sidebar-footer">
                 <button class="sidebar-collapse-btn" onclick="toggleSidebarCollapse()" title="Collapse sidebar">
                     <i data-lucide="panel-left-close"></i>
+                    <span>Collapse</span>
                 </button>
             </div>
         </nav>
