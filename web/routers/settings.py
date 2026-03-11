@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 import requests
 from fastapi import APIRouter, Depends, Request, Form, Query
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from starlette.datastructures import ImmutableMultiDict
 
 from web.config import templates, CONFIG_DIR, PLEXCACHE_PRODUCT_VERSION
@@ -1097,20 +1097,16 @@ def save_security_settings(
 
 @router.post("/security/logout-all", response_class=HTMLResponse)
 def security_logout_all(request: Request):
-    """Sign out all active sessions"""
+    """Sign out all active sessions and redirect to login"""
     from web.services.auth_service import get_auth_service
 
     auth_service = get_auth_service()
     auth_service.destroy_all_sessions()
 
-    return templates.TemplateResponse(
-        "partials/alert.html",
-        {
-            "request": request,
-            "type": "success",
-            "message": "All sessions signed out"
-        }
-    )
+    response = Response(status_code=200)
+    response.headers["HX-Redirect"] = "/auth/login"
+    response.delete_cookie(key="plexcache_session", path="/")
+    return response
 
 
 # =============================================================================
