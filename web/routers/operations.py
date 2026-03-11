@@ -1,11 +1,15 @@
 """Operation routes - run cache operations"""
 
+import logging
+
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from web.config import templates
 from web.services import get_operation_runner
 from web.services.maintenance_runner import get_maintenance_runner
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
