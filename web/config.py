@@ -117,6 +117,7 @@ def format_datetime(value, include_seconds=False):
 templates.env.filters["format_datetime"] = format_datetime
 
 
+
 def truncate_filename(value, length=55, end='...'):
     """Truncate a filename while preserving the file extension.
 
