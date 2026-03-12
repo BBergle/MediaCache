@@ -2809,6 +2809,12 @@ class SiblingFileFinder:
         Discovers all non-video, non-hidden files in the same directory as each video.
         This includes subtitles, artwork, NFOs, and any other sidecar files.
 
+        When multiple videos share a directory (e.g., 4K + 1080p versions), siblings
+        are assigned by name-prefix matching: a file named "Movie - [1080P]-FGT-fanart.jpg"
+        is assigned to "Movie - [1080P]-FGT.mkv", not to "Movie - [2160P]-REMUX.mkv".
+        Siblings that don't match any video's stem are assigned to the first video
+        in the directory.
+
         Args:
             media_files: List of media file paths.
             files_to_skip: Set of file paths to skip.
@@ -2824,31 +2830,67 @@ class SiblingFileFinder:
         scanned_parent_dirs: Set[str] = set()
         result: Dict[str, List[str]] = {}
 
+        # Group videos by directory so we can disambiguate multi-video folders
+        dir_to_videos: Dict[str, List[str]] = {}
         for file in media_files:
             if file in files_to_skip or file in processed_files:
                 continue
             processed_files.add(file)
-
-            sibling_files = []
+            result[file] = []
             directory_path = os.path.dirname(file)
-            if os.path.exists(directory_path):
-                sibling_files = self._find_sibling_files(directory_path, file)
-                for sibling_file in sibling_files:
-                    logging.debug(f"Sibling found: {sibling_file}")
+            dir_to_videos.setdefault(directory_path, []).append(file)
 
-                # TV show root scan: if this video is in a Season-like folder,
-                # also discover show-root assets (poster.jpg, fanart.jpg, etc.)
-                folder_name = os.path.basename(directory_path)
-                parent_dir = os.path.dirname(directory_path)
-                if is_season_like_folder(folder_name) and parent_dir not in scanned_parent_dirs:
-                    scanned_parent_dirs.add(parent_dir)
-                    if os.path.exists(parent_dir):
-                        parent_siblings = self._find_sibling_files(parent_dir, file)
-                        for parent_file in parent_siblings:
-                            logging.debug(f"Show root sibling found: {parent_file}")
-                        sibling_files.extend(parent_siblings)
+        for directory_path, videos in dir_to_videos.items():
+            if not os.path.exists(directory_path):
+                continue
 
-            result[file] = sibling_files
+            # Get all non-video siblings in this directory once
+            all_siblings = self._find_sibling_files(directory_path, videos[0])
+            # _find_sibling_files excludes the passed video, so re-add filtering for all videos
+            video_basenames = {os.path.basename(v) for v in videos}
+            all_siblings = [s for s in all_siblings if os.path.basename(s) not in video_basenames]
+
+            if len(videos) == 1:
+                # Single video in directory — all siblings belong to it (fast path)
+                result[videos[0]] = all_siblings
+                for sib in all_siblings:
+                    logging.debug(f"Sibling found: {sib}")
+            else:
+                # Multiple videos — assign siblings by name-prefix matching
+                video_stems = {v: os.path.splitext(os.path.basename(v))[0] for v in videos}
+                unmatched = []
+
+                for sib_path in all_siblings:
+                    sib_name = os.path.basename(sib_path)
+                    matched_video = None
+                    for video, stem in video_stems.items():
+                        if sib_name.startswith(stem):
+                            matched_video = video
+                            break
+                    if matched_video:
+                        result[matched_video].append(sib_path)
+                        logging.debug(f"Sibling found: {sib_path} → {os.path.basename(matched_video)}")
+                    else:
+                        unmatched.append(sib_path)
+
+                # Assign unmatched siblings (e.g., generic "poster.jpg") to first video
+                if unmatched:
+                    result[videos[0]].extend(unmatched)
+                    for sib in unmatched:
+                        logging.debug(f"Sibling found (unmatched, assigned to {os.path.basename(videos[0])}): {sib}")
+
+            # TV show root scan: if any video is in a Season-like folder,
+            # also discover show-root assets (poster.jpg, fanart.jpg, etc.)
+            folder_name = os.path.basename(directory_path)
+            parent_dir = os.path.dirname(directory_path)
+            if is_season_like_folder(folder_name) and parent_dir not in scanned_parent_dirs:
+                scanned_parent_dirs.add(parent_dir)
+                if os.path.exists(parent_dir):
+                    parent_siblings = self._find_sibling_files(parent_dir, videos[0])
+                    for parent_file in parent_siblings:
+                        logging.debug(f"Show root sibling found: {parent_file}")
+                    # Show-root assets are shared — assign to first video
+                    result[videos[0]].extend(parent_siblings)
 
         return result
 
