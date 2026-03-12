@@ -3631,7 +3631,13 @@ class FileFilter:
             # Second pass: collect associated files for videos being evicted
             # and apply reference counting for directory-level files
             if self.timestamp_tracker:
-                eviction_set = set(move_back_exclude_paths)
+                # Track eviction by BOTH host paths (from exclude file) and cache paths
+                # (from timestamp tracker) to correctly detect duplicates in Docker
+                # where host=/mnt/cache_downloads but container=/mnt/cache
+                eviction_set_host = set(move_back_exclude_paths)
+                eviction_set_cache = set()
+                for hp in move_back_exclude_paths:
+                    eviction_set_cache.add(self._translate_from_host_path(hp))
                 additional_move_back = []
                 additional_exclude_paths = []
 
@@ -3639,7 +3645,7 @@ class FileFilter:
                     check_path = self._translate_from_host_path(cache_file)
                     associated = self.timestamp_tracker.get_associated_files(check_path)
                     for assoc_file in associated:
-                        if assoc_file in eviction_set:
+                        if assoc_file in eviction_set_cache:
                             continue  # Already being evicted
 
                         if is_directory_level_file(assoc_file, check_path):
@@ -3652,7 +3658,7 @@ class FileFilter:
                             else:
                                 others = self.timestamp_tracker.get_other_videos_in_directory(directory, excluding=check_path)
                             # Filter out others that are also being evicted
-                            remaining = [v for v in others if self._translate_to_host_path(v) not in eviction_set]
+                            remaining = [v for v in others if v not in eviction_set_cache]
                             if remaining:
                                 # Re-associate to a remaining video instead of evicting
                                 self.timestamp_tracker.reassociate_file(assoc_file, from_parent=check_path, to_parent=remaining[0])
@@ -3670,7 +3676,8 @@ class FileFilter:
                         host_assoc = self._translate_to_host_path(assoc_file)
                         additional_move_back.append(array_assoc)
                         additional_exclude_paths.append(host_assoc)
-                        eviction_set.add(host_assoc)
+                        eviction_set_host.add(host_assoc)
+                        eviction_set_cache.add(assoc_file)
 
                 files_to_move_back.extend(additional_move_back)
                 move_back_exclude_paths.extend(additional_exclude_paths)

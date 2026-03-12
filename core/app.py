@@ -1607,6 +1607,8 @@ class PlexCacheApp:
         being restored to their sidecar files, so the web UI can group them.
         """
         array_set = set(self.media_to_array)
+        restore_groups = 0
+        restore_siblings = 0
         for array_path in list(self.media_to_array):
             # Convert to cache path for timestamp tracker lookup
             cache_path = None
@@ -1640,6 +1642,13 @@ class PlexCacheApp:
 
             if real_siblings:
                 self.sibling_map[array_path] = real_siblings
+                restore_groups += 1
+                restore_siblings += len(real_siblings)
+
+        if restore_groups > 0:
+            logging.debug(f"Restore sibling map: {restore_groups} parents with {restore_siblings} associated files")
+        elif self.media_to_array:
+            logging.debug(f"Restore sibling map: no associated files found for {len(self.media_to_array)} files being restored")
 
     def _move_files(self) -> None:
         """Move files to their destinations."""
