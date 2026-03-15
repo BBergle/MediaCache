@@ -649,6 +649,7 @@ async def update_library_paths(request: Request, section_id: int):
             "cacheable": cacheable == "on",
             "enabled": True,
             "section_id": existing.get("section_id"),
+            # Clear auto_fill flag — user has reviewed paths
         })
 
     raw["path_mappings"] = all_mappings
