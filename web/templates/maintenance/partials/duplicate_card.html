@@ -100,11 +100,10 @@
                         <td><span class="badge badge-muted">Multi-Version</span></td>
                     </tr>
                     <tr class="dup-detail-row" data-parent="{{ item.rating_key }}" style="display: none;">
-                        <td colspan="5" style="padding: 0 0 0 2rem; background: var(--plex-bg);">
+                        <td colspan="5" style="padding: 0 0 0 2rem; background: rgba(255,255,255,0.02);">
                             <table style="margin: 0; font-size: 0.9rem;">
                                 <thead>
                                     <tr>
-                                        <th style="width: 40px;"></th>
                                         <th>File</th>
                                         <th style="width: 70px;">Resolution</th>
                                         <th style="width: 70px;">Codec</th>
@@ -115,7 +114,6 @@
                                 <tbody>
                                     {% for file in item.files %}
                                     <tr>
-                                        <td></td>
                                         <td title="{{ file.fs_path }}" style="max-width: 350px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                                             <span class="text-muted" style="margin-right: 0.25rem;">↳</span>{{ file.fs_path.split('/')[-1] }}
                                         </td>
@@ -242,7 +240,7 @@
                 </tr>
                 <!-- Expanded file details (hidden by default) -->
                 <tr class="dup-detail-row" data-parent="{{ item.rating_key }}" style="display: none;">
-                    <td colspan="5" style="padding: 0; background: var(--plex-bg);">
+                    <td colspan="5" style="padding: 0 0 0 2rem; background: rgba(255,255,255,0.02);">
                         <table style="margin: 0; font-size: 0.9rem;">
                             <thead>
                                 <tr>
