@@ -100,7 +100,7 @@
                         <td><span class="badge badge-muted">Multi-Version</span></td>
                     </tr>
                     <tr class="dup-detail-row" data-parent="{{ item.rating_key }}" style="display: none;">
-                        <td colspan="5" style="padding: 0; background: var(--plex-bg);">
+                        <td colspan="5" style="padding: 0 0 0 2rem; background: var(--plex-bg);">
                             <table style="margin: 0; font-size: 0.9rem;">
                                 <thead>
                                     <tr>
@@ -117,7 +117,7 @@
                                     <tr>
                                         <td></td>
                                         <td title="{{ file.fs_path }}" style="max-width: 350px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                                            {{ file.fs_path.split('/')[-1] }}
+                                            <span class="text-muted" style="margin-right: 0.25rem;">↳</span>{{ file.fs_path.split('/')[-1] }}
                                         </td>
                                         <td class="text-muted">{{ file.resolution }}{% if file.resolution not in ('?', '4k', 'sd') %}p{% endif %}</td>
                                         <td class="text-muted">{{ file.video_codec }}</td>
@@ -263,7 +263,7 @@
                                         {% endif %}
                                     </td>
                                     <td title="{{ file.fs_path }}" style="max-width: 350px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                                        {{ file.fs_path.split('/')[-1] }}
+                                        <span class="text-muted" style="margin-right: 0.25rem;">↳</span>{{ file.fs_path.split('/')[-1] }}
                                     </td>
                                     <td class="text-muted">{{ file.resolution }}{% if file.resolution not in ('?', '4k', 'sd') %}p{% endif %}</td>
                                     <td class="text-muted">{{ file.video_codec }}</td>
