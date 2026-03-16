@@ -839,15 +839,13 @@ def get_duplicates(request: Request, show_ignored: bool = Query(default=False)):
     service = get_duplicate_service()
     ignores = service.load_ignores()
 
-    if show_ignored:
-        results = service.load_scan_results()  # raw — includes ignored
-    else:
-        results = service.load_scan_results_filtered()  # excludes ignored
+    # Always use filtered results for the main list (excludes ignored items)
+    results = service.load_scan_results_filtered()
 
     # Build ignored items list from raw results for the ignored section
     ignored_items = []
     if ignores and show_ignored:
-        raw = service.load_scan_results() if not show_ignored else results
+        raw = service.load_scan_results()
         if raw:
             ignored_items = [item for item in raw.items
                             if item.rating_key in ignores and not item.is_multi_version]
