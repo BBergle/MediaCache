@@ -683,7 +683,7 @@ class CacheService:
 
         # Count ondeck and watchlist items
         ondeck_count = len(ondeck)
-        watchlist_cached_count = sum(1 for f in all_files if f.is_watchlist and not f.is_ondeck)
+        watchlist_cached_count = sum(1 for f in all_files if f.is_watchlist)
         watchlist_tracked_count = len(watchlist)
 
         # Calculate eviction threshold status
