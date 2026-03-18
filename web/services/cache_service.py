@@ -683,7 +683,8 @@ class CacheService:
 
         # Count ondeck and watchlist items
         ondeck_count = len(ondeck)
-        watchlist_count = len(watchlist)
+        watchlist_cached_count = sum(1 for f in all_files if f.is_watchlist and not f.is_ondeck)
+        watchlist_tracked_count = len(watchlist)
 
         # Calculate eviction threshold status
         eviction_over_threshold = False
@@ -793,7 +794,8 @@ class CacheService:
             "cached_files_size": format_bytes(cached_files_size),  # PlexCache files only
             "cached_files_size_bytes": cached_files_size,
             "ondeck_count": ondeck_count,
-            "watchlist_count": watchlist_count,
+            "watchlist_count": watchlist_cached_count,
+            "watchlist_tracked_count": watchlist_tracked_count,
             "eviction_over_threshold": eviction_over_threshold,
             "eviction_over_by_display": eviction_over_by_display,
             "cache_limit_exceeded": cache_limit_exceeded,

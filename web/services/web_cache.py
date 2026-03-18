@@ -292,6 +292,7 @@ def init_web_cache():
             "usage_percent": cache_stats["usage_percent"],
             "ondeck_count": cache_stats["ondeck_count"],
             "watchlist_count": cache_stats["watchlist_count"],
+            "watchlist_tracked_count": cache_stats.get("watchlist_tracked_count", 0),
             "last_run": last_run,
             "is_running": operation_runner.is_running,
             "plex_connected": plex_connected,
