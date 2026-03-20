@@ -1,12 +1,15 @@
 """Web cache service - manages in-memory and disk caching for web UI performance"""
 
 import json
+import logging
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 from web.config import PROJECT_ROOT, DATA_DIR
 from core.system_utils import format_bytes, format_duration
@@ -144,7 +147,7 @@ class WebCacheService:
                 self.set(key, data)
                 return data
             except Exception as e:
-                print(f"[WebCache] Error refreshing '{key}': {e}")
+                logger.error("Error refreshing '%s': %s", key, e)
         return None
 
     def refresh_all(self):
@@ -174,12 +177,12 @@ class WebCacheService:
                     break  # Stop signal received
 
                 # Refresh all registered callbacks
-                print(f"[WebCache] Background refresh triggered at {datetime.now().strftime('%H:%M:%S')}")
+                logger.info("Background refresh triggered at %s", datetime.now().strftime('%H:%M:%S'))
                 self.refresh_all()
 
         self._refresh_thread = threading.Thread(target=refresh_loop, daemon=True, name="WebCacheRefresh")
         self._refresh_thread.start()
-        print(f"[WebCache] Background refresh started (interval: {interval_seconds}s)")
+        logger.info("Background refresh started (interval: %ds)", interval_seconds)
 
     def stop_background_refresh(self):
         """Stop the background refresh thread"""
@@ -204,9 +207,9 @@ class WebCacheService:
                         data=entry_data['data'],
                         updated_at=updated_at
                     )
-            print(f"[WebCache] Loaded {len(disk_data)} entries from disk cache")
+            logger.info("Loaded %d entries from disk cache", len(disk_data))
         except (json.JSONDecodeError, IOError, KeyError) as e:
-            print(f"[WebCache] Warning: Could not load disk cache: {e}")
+            logger.warning("Could not load disk cache: %s", e)
 
     def _save_to_disk(self):
         """Save current cache to disk"""
@@ -231,7 +234,7 @@ class WebCacheService:
                 json.dump(disk_data, f, indent=2, default=str)
 
         except IOError as e:
-            print(f"[WebCache] Warning: Could not save disk cache: {e}")
+            logger.warning("Could not save disk cache: %s", e)
 
 
 # Cache keys
@@ -338,7 +341,7 @@ def init_web_cache():
         for key in [CACHE_KEY_DASHBOARD_STATS, CACHE_KEY_MAINTENANCE_HEALTH]:
             data, updated_at = service.get_with_age(key)
             if data is None or (updated_at and (datetime.now() - updated_at).total_seconds() > 3600):
-                print(f"[WebCache] Initial refresh: {key}")
+                logger.info("Initial refresh: %s", key)
                 service.refresh(key)
 
     # Run initial refresh in background thread
