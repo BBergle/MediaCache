@@ -681,9 +681,11 @@ class CacheService:
             except (OSError, AttributeError) as e:
                 logging.warning(f"Could not get disk usage for {cache_dir}: {e}")
 
-        # Count ondeck and watchlist items
-        ondeck_count = len(ondeck)
-        watchlist_count = len(watchlist)
+        # Count ondeck and watchlist items (cached = on disk, tracked = in tracker)
+        ondeck_cached_count = sum(1 for f in all_files if f.is_ondeck)
+        ondeck_tracked_count = len(ondeck)
+        watchlist_cached_count = sum(1 for f in all_files if f.is_watchlist)
+        watchlist_tracked_count = len(watchlist)
 
         # Calculate eviction threshold status
         eviction_over_threshold = False
@@ -792,8 +794,10 @@ class CacheService:
             "usage_percent": usage_percent,
             "cached_files_size": format_bytes(cached_files_size),  # PlexCache files only
             "cached_files_size_bytes": cached_files_size,
-            "ondeck_count": ondeck_count,
-            "watchlist_count": watchlist_count,
+            "ondeck_count": ondeck_cached_count,
+            "ondeck_tracked_count": ondeck_tracked_count,
+            "watchlist_count": watchlist_cached_count,
+            "watchlist_tracked_count": watchlist_tracked_count,
             "eviction_over_threshold": eviction_over_threshold,
             "eviction_over_by_display": eviction_over_by_display,
             "cache_limit_exceeded": cache_limit_exceeded,
