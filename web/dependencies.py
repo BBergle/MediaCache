@@ -5,12 +5,24 @@ from pathlib import Path
 from functools import lru_cache
 from typing import Optional
 
+from fastapi import Request
+from starlette.datastructures import ImmutableMultiDict
+
 # Add project root to path for core imports
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from web.config import SETTINGS_FILE, DATA_DIR, LOGS_DIR
+
+
+async def parse_form(request: Request) -> ImmutableMultiDict:
+    """Parse form data from request for use in sync route handlers.
+
+    Use as Depends(parse_form) to receive pre-parsed form data in def handlers,
+    avoiding the need for async def just to call await request.form().
+    """
+    return await request.form()
 
 
 @lru_cache()
