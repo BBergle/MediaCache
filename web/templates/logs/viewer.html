@@ -501,6 +501,10 @@ var LogViewer = (function() {
                 } else if (data.type === 'append') {
                     renderLogLines(data.lines, true);
                     mergeBadgeCounts(data.counts || {});
+                } else if (data.type === 'complete') {
+                    // Operation finished — switch to file tailing for any remaining lines
+                    disconnectWebSocket();
+                    setTimeout(function() { connectWebSocket(); }, 1000);
                 } else if (data.type === 'error') {
                     console.error('WebSocket error:', data.message);
                 }
@@ -593,8 +597,8 @@ var LogViewer = (function() {
             reapplySearchHighlights();
         }
 
-        // Auto-scroll
-        if (els.autoScroll.checked) {
+        // Auto-scroll only when live streaming (not when viewing completed logs)
+        if (els.autoScroll.checked && els.liveUpdates.checked) {
             els.logContent.scrollTop = els.logContent.scrollHeight;
         }
 
@@ -628,18 +632,30 @@ var LogViewer = (function() {
         var html = '';
         var errCount = (badgeCounts.ERROR || 0) + (badgeCounts.CRITICAL || 0);
         if (errCount) {
-            html += '<span class="badge badge-error">' + errCount + ' error' + (errCount !== 1 ? 's' : '') + '</span>';
+            html += '<span class="badge badge-error log-level-badge" data-level="ERROR" style="cursor:pointer;">' + errCount + ' error' + (errCount !== 1 ? 's' : '') + '</span>';
         }
         if (badgeCounts.WARNING) {
-            html += '<span class="badge badge-warning">' + badgeCounts.WARNING + ' warning' + (badgeCounts.WARNING !== 1 ? 's' : '') + '</span>';
+            html += '<span class="badge badge-warning log-level-badge" data-level="WARNING" style="cursor:pointer;">' + badgeCounts.WARNING + ' warning' + (badgeCounts.WARNING !== 1 ? 's' : '') + '</span>';
         }
         if (badgeCounts.INFO) {
-            html += '<span class="badge badge-info">' + badgeCounts.INFO + ' info</span>';
+            html += '<span class="badge badge-info log-level-badge" data-level="INFO" style="cursor:pointer;">' + badgeCounts.INFO + ' info</span>';
         }
         if (badgeCounts.DEBUG) {
-            html += '<span class="badge badge-muted">' + badgeCounts.DEBUG + ' debug</span>';
+            html += '<span class="badge badge-muted log-level-badge" data-level="DEBUG" style="cursor:pointer;">' + badgeCounts.DEBUG + ' debug</span>';
         }
         container.innerHTML = html;
+
+        // Attach click handlers to filter by level (toggle on/off)
+        container.querySelectorAll('.log-level-badge').forEach(function(badge) {
+            badge.addEventListener('click', function() {
+                var level = this.dataset.level;
+                var current = els.levelFilter.value;
+                // Toggle: if already filtering this level, reset to all
+                els.levelFilter.value = (current === level) ? 'all' : level;
+                applyAllFilters();
+                savePreferences();
+            });
+        });
     }
 
     // ---- HTMX Integration ----
@@ -658,7 +674,7 @@ var LogViewer = (function() {
                 evt.detail.target.scrollTop = savedScrollPosition;
                 reapplySearchHighlights();
                 savedScrollPosition = null;
-            } else if (els.autoScroll.checked) {
+            } else if (els.autoScroll.checked && els.liveUpdates.checked) {
                 evt.detail.target.scrollTop = evt.detail.target.scrollHeight;
             }
         }
