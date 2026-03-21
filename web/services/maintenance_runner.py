@@ -96,6 +96,7 @@ class MaintenanceHistoryEntry:
     error_count: int = 0
     affected_files: List[str] = field(default_factory=list)
     source: str = "async"   # "async" or "sync"
+    message: str = ""       # ActionResult summary message
 
     def to_dict(self) -> dict:
         return {
@@ -114,6 +115,7 @@ class MaintenanceHistoryEntry:
             "error_count": self.error_count,
             "affected_files": self.affected_files,
             "source": self.source,
+            "message": self.message,
         }
 
     @classmethod
@@ -134,6 +136,7 @@ class MaintenanceHistoryEntry:
             error_count=data.get("error_count", 0),
             affected_files=data.get("affected_files", []),
             source=data.get("source", "async"),
+            message=data.get("message", ""),
         )
 
 
@@ -175,7 +178,7 @@ class MaintenanceHistory:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(entries, f, indent=2)
                 os.replace(tmp_path, str(self._file))
-            except Exception:
+            except OSError:
                 # Clean up temp file on failure
                 try:
                     os.unlink(tmp_path)
@@ -698,6 +701,7 @@ class MaintenanceRunner:
                 error_count=error_count,
                 affected_files=affected_files,
                 source="async",
+                message=action_result.message if action_result else "",
             )
 
             get_maintenance_history().record(entry)

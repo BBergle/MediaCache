@@ -13,13 +13,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Set, Optional, Tuple
 import os
+import platform
+
+try:
+    import pwd
+except ImportError:
+    pwd = None
 
 from core import __version__
 from core.config import ConfigManager
 from core.logging_config import LoggingManager, reset_warning_error_flag
 from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock, get_disk_usage, get_array_direct_path, detect_zfs, set_zfs_prefixes, format_bytes
 from core.plex_api import PlexManager, OnDeckItem
-from core.file_operations import MultiPathModifier, SubtitleFinder, FileFilter, FileMover, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration, get_media_identity, find_matching_plexcached
+from core.file_operations import MultiPathModifier, SiblingFileFinder, FileFilter, FileMover, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration, get_media_identity, find_matching_plexcached, is_directory_level_file
 
 
 class PlexCacheApp:
@@ -47,7 +53,7 @@ class PlexCacheApp:
         self.logging_manager = None
         self.plex_manager = None
         self.file_path_modifier = None
-        self.subtitle_finder = None
+        self.sibling_finder = None
         self.file_filter = None
         self.file_mover = None
         
@@ -60,7 +66,7 @@ class PlexCacheApp:
         self.watchlist_items = set()
         self.source_map = {}  # Maps file paths to source ('ondeck' or 'watchlist')
         self.media_info_map = {}  # Maps file paths to Plex media type info
-        self.subtitle_map: Dict[str, List[str]] = {}  # Maps video real paths to subtitle paths
+        self.sibling_map: Dict[str, List[str]] = {}  # Maps video real paths to sibling file paths
         # Tracking for restore vs move operations (for summary)
         self.restored_count = 0
         self.restored_bytes = 0
@@ -159,6 +165,11 @@ class PlexCacheApp:
             if self.config_manager.cache.hardlinked_files == "move":
                 logging.info("[CONFIG] Hard-linked files mode: MOVE - Hard-linked files will be cached (seed copies preserved via remaining hard links)")
 
+            # Log associated files mode
+            assoc_mode = self.config_manager.cache.cache_associated_files
+            assoc_labels = {"all": "ALL (subtitles, artwork, NFOs, metadata)", "subtitles": "SUBTITLES ONLY", "none": "NONE (video files only)"}
+            logging.info(f"[CONFIG] Associated files mode: {assoc_labels.get(assoc_mode, assoc_mode)}")
+
             # Clean up stale exclude list entries (self-healing)
             # Skip in dry-run mode to avoid modifying tracking files
             if not self.dry_run:
@@ -209,6 +220,11 @@ class PlexCacheApp:
             # Log summary and cleanup
             self._finish()
             
+        except ConnectionError as e:
+            # Plex server unreachable — log clean message, no traceback
+            logging.error(f"{e}")
+            logging.warning("No files were moved. Will retry on next scheduled run.")
+            raise
         except Exception as e:
             if self.logging_manager:
                 logging.critical(f"Application error: {type(e).__name__}: {e}", exc_info=True)
@@ -335,15 +351,12 @@ class PlexCacheApp:
 
     def _log_startup_diagnostics(self) -> None:
         """Log system diagnostics at startup in verbose mode for debugging."""
-        import platform
-
         logging.debug("=== Startup Diagnostics ===")
         logging.debug(f"Platform: {platform.system()} {platform.release()}")
         logging.debug(f"Python: {platform.python_version()}")
 
         if self.system_detector.is_linux:
             try:
-                import pwd
                 uid = os.getuid()
                 gid = os.getgid()
                 username = pwd.getpwuid(uid).pw_name
@@ -433,8 +446,8 @@ class PlexCacheApp:
                 logging.info("[MOVER] Unraid mover detected via pgrep (age_mover)")
                 return True
 
-        except (subprocess.SubprocessError, FileNotFoundError):
-            pass
+        except (subprocess.SubprocessError, FileNotFoundError) as e:
+            logging.debug(f"[MOVER] pgrep check failed: {e}")
 
         return False
 
@@ -467,7 +480,7 @@ class PlexCacheApp:
             logging.info("[CONFIG] These are deprecated and can be removed from your settings file.")
             logging.info("[CONFIG] Path conversion now uses path_mappings exclusively.")
 
-        self.subtitle_finder = SubtitleFinder()
+        self.sibling_finder = SiblingFileFinder()
 
     def _init_trackers(self, mover_exclude, timestamp_file) -> None:
         """Initialize timestamp, watchlist, and OnDeck trackers."""
@@ -1030,19 +1043,25 @@ class PlexCacheApp:
             logging.info("Operation stopped during media processing")
             return
 
-        # Fetch subtitles for OnDeck media (already using real paths)
-        logging.debug("Finding subtitles for OnDeck media...")
-        ondeck_subtitle_map = self.subtitle_finder.get_media_subtitles_grouped(list(self.ondeck_items), files_to_skip=set(self.files_to_skip))
-        self.subtitle_map.update(ondeck_subtitle_map)
-        subtitle_count = sum(len(subs) for subs in ondeck_subtitle_map.values())
-        # Add all subtitles to the modified paths set
-        for subs in ondeck_subtitle_map.values():
-            modified_paths_set.update(subs)
-        logging.debug(f"Found {subtitle_count} subtitle files for OnDeck media")
+        # Fetch sibling files for OnDeck media (already using real paths)
+        assoc_mode = self.config_manager.cache.cache_associated_files
+        logging.debug(f"Finding sibling files for OnDeck media (mode: {assoc_mode})...")
+        if assoc_mode == "all":
+            ondeck_sibling_map = self.sibling_finder.get_media_siblings_grouped(list(self.ondeck_items), files_to_skip=set(self.files_to_skip))
+        elif assoc_mode == "subtitles":
+            ondeck_sibling_map = self.sibling_finder.get_media_subtitles_grouped(list(self.ondeck_items), files_to_skip=set(self.files_to_skip))
+        else:
+            ondeck_sibling_map = {}
+        self.sibling_map.update(ondeck_sibling_map)
+        sibling_count = sum(len(siblings) for siblings in ondeck_sibling_map.values())
+        # Add all siblings to the modified paths set
+        for siblings in ondeck_sibling_map.values():
+            modified_paths_set.update(siblings)
+        logging.debug(f"Found {sibling_count} sibling files for OnDeck media")
 
-        # Track source for OnDeck subtitles
-        for subs in ondeck_subtitle_map.values():
-            for item in subs:
+        # Track source for OnDeck siblings
+        for siblings in ondeck_sibling_map.values():
+            for item in siblings:
                 if item not in self.source_map:
                     self.source_map[item] = "ondeck"
 
@@ -1109,9 +1128,12 @@ class PlexCacheApp:
 
         # Check for files that should be moved back to array (no longer needed in cache)
         # Only check if watched_move is enabled - otherwise files stay on cache indefinitely
-        # Skip if watchlist data is incomplete (plex.tv unreachable) to prevent accidental moves
+        # Skip if OnDeck or watchlist data is incomplete to prevent accidental moves
         if self.config_manager.cache.watched_move:
-            if not self.plex_manager.is_watchlist_data_complete():
+            if not self.plex_manager.is_ondeck_data_complete():
+                logging.warning("Skipping array restore - OnDeck data incomplete (Plex server unreachable)")
+                logging.warning("Files will remain on cache until next successful run")
+            elif not self.plex_manager.is_watchlist_data_complete():
                 logging.warning("Skipping array restore - watchlist data incomplete (plex.tv unreachable)")
                 logging.warning("Files will remain on cache until next successful run")
             else:
@@ -1225,10 +1247,16 @@ class PlexCacheApp:
                 }
 
             result_set.update(modified_items)
-            watchlist_subtitle_map = self.subtitle_finder.get_media_subtitles_grouped(modified_items, files_to_skip=set(self.files_to_skip))
-            self.subtitle_map.update(watchlist_subtitle_map)
-            for subs in watchlist_subtitle_map.values():
-                result_set.update(subs)
+            wl_assoc_mode = self.config_manager.cache.cache_associated_files
+            if wl_assoc_mode == "all":
+                watchlist_sibling_map = self.sibling_finder.get_media_siblings_grouped(modified_items, files_to_skip=set(self.files_to_skip))
+            elif wl_assoc_mode == "subtitles":
+                watchlist_sibling_map = self.sibling_finder.get_media_subtitles_grouped(modified_items, files_to_skip=set(self.files_to_skip))
+            else:
+                watchlist_sibling_map = {}
+            self.sibling_map.update(watchlist_sibling_map)
+            for siblings in watchlist_sibling_map.values():
+                result_set.update(siblings)
 
         except Exception as e:
             logging.exception(f"An error occurred while processing the watchlist: {type(e).__name__}: {e}")
@@ -1547,6 +1575,47 @@ class PlexCacheApp:
             if len(files_to_move) > 6:
                 logging.info(f"  ...and {len(files_to_move) - 6} more")
 
+    def _build_restore_sibling_map(self) -> None:
+        """Populate sibling_map with restore-direction associations.
+
+        Uses the timestamp tracker's associated_files data to map videos
+        being restored to their sidecar files, so the web UI can group them.
+        """
+        array_set = set(self.media_to_array)
+        for array_path in list(self.media_to_array):
+            # Convert to cache path for timestamp tracker lookup
+            cache_path = None
+            if self.file_mover and self.file_mover.path_modifier:
+                cache_path, _ = self.file_mover.path_modifier.convert_real_to_cache(array_path)
+            elif self.config_manager.paths.real_source and self.config_manager.paths.cache_dir:
+                cache_path = array_path.replace(
+                    self.config_manager.paths.real_source,
+                    self.config_manager.paths.cache_dir, 1
+                )
+            if not cache_path:
+                continue
+
+            associated = self.timestamp_tracker.get_associated_files(cache_path)
+            if not associated:
+                continue
+
+            # Convert associated cache paths back to real/array paths
+            real_siblings = []
+            for assoc_cache in associated:
+                assoc_real = None
+                if self.file_mover and self.file_mover.path_modifier:
+                    assoc_real, _ = self.file_mover.path_modifier.convert_cache_to_real(assoc_cache)
+                elif self.config_manager.paths.real_source and self.config_manager.paths.cache_dir:
+                    assoc_real = assoc_cache.replace(
+                        self.config_manager.paths.cache_dir,
+                        self.config_manager.paths.real_source, 1
+                    )
+                if assoc_real and assoc_real in array_set:
+                    real_siblings.append(assoc_real)
+
+            if real_siblings:
+                self.sibling_map[array_path] = real_siblings
+
     def _move_files(self) -> None:
         """Move files to their destinations."""
         logging.info("")
@@ -1554,6 +1623,11 @@ class PlexCacheApp:
 
         # Step 1: Move watched files to array (frees space naturally)
         if self.config_manager.cache.watched_move and self.media_to_array:
+            # Build restore sibling map from timestamp tracker associations
+            # so the web UI can group sidecars under their parent video
+            if self.timestamp_tracker:
+                self._build_restore_sibling_map()
+
             # Log restore vs move summary before processing
             files_to_restore, files_to_move = self._separate_restore_and_move(self.media_to_array)
             if files_to_restore or files_to_move:
@@ -1601,11 +1675,11 @@ class PlexCacheApp:
                 logging.info(f"  ...and {len(self.media_to_cache) - 6} more")
         self._safe_move_files(self.media_to_cache, 'cache')
 
-        # Associate subtitles with their parent videos in the timestamp tracker
-        if self.timestamp_tracker and self.subtitle_map:
-            cache_subtitle_map: Dict[str, List[str]] = {}
-            for real_video, real_subs in self.subtitle_map.items():
-                if not real_subs:
+        # Associate sibling files with their parent videos in the timestamp tracker
+        if self.timestamp_tracker and self.sibling_map:
+            cache_sibling_map: Dict[str, List[str]] = {}
+            for real_video, real_siblings in self.sibling_map.items():
+                if not real_siblings:
                     continue
                 # Convert real paths to cache paths
                 cache_video = None
@@ -1617,23 +1691,23 @@ class PlexCacheApp:
                         self.config_manager.paths.cache_dir, 1
                     )
                 if cache_video:
-                    cache_subs = []
-                    for real_sub in real_subs:
+                    cache_siblings = []
+                    for real_sibling in real_siblings:
                         if self.file_mover and self.file_mover.path_modifier:
-                            cache_sub, _ = self.file_mover.path_modifier.convert_real_to_cache(real_sub)
+                            cache_sibling, _ = self.file_mover.path_modifier.convert_real_to_cache(real_sibling)
                         elif self.config_manager.paths.real_source and self.config_manager.paths.cache_dir:
-                            cache_sub = real_sub.replace(
+                            cache_sibling = real_sibling.replace(
                                 self.config_manager.paths.real_source,
                                 self.config_manager.paths.cache_dir, 1
                             )
                         else:
-                            cache_sub = None
-                        if cache_sub:
-                            cache_subs.append(cache_sub)
-                    if cache_subs:
-                        cache_subtitle_map[cache_video] = cache_subs
-            if cache_subtitle_map:
-                self.timestamp_tracker.associate_subtitles(cache_subtitle_map)
+                            cache_sibling = None
+                        if cache_sibling:
+                            cache_siblings.append(cache_sibling)
+                    if cache_siblings:
+                        cache_sibling_map[cache_video] = cache_siblings
+            if cache_sibling_map:
+                self.timestamp_tracker.associate_files(cache_sibling_map)
 
         # Enrich pre-existing cached files with media type metadata
         # Files already on cache were recorded as "pre-existing" without media_type.
@@ -1695,99 +1769,57 @@ class PlexCacheApp:
                 logging.critical(error_msg)
                 sys.exit(1)
 
-    def _get_effective_cache_limit(self, cache_dir: str) -> tuple:
-        """Calculate effective cache limit in bytes, handling percentage-based limits.
+    def _get_effective_limit(self, value_bytes: int, cache_dir: str, label: str) -> tuple:
+        """Calculate an effective byte limit, resolving percentage-based values against drive size.
+
+        Negative values encode percentages (e.g. -80 means 80% of drive).
+        Zero means disabled. Positive values are absolute byte counts.
 
         Args:
-            cache_dir: Path to the cache directory.
+            value_bytes: Raw config value (positive=bytes, negative=percentage, 0=disabled).
+            cache_dir: Path to the cache directory (for drive size lookup).
+            label: Human-readable name for log messages (e.g. "cache_limit").
 
         Returns:
-            Tuple of (limit_bytes, limit_readable_str). Returns (0, None) if no limit set.
+            Tuple of (resolved_bytes, readable_str). Returns (0, None) if disabled.
         """
-        cache_limit_bytes = self.config_manager.cache.cache_limit_bytes
-
-        if cache_limit_bytes == 0:
+        if value_bytes == 0:
             return (0, None)
 
-        if cache_limit_bytes < 0:
+        if value_bytes < 0:
             # Negative value indicates percentage
-            percent = abs(cache_limit_bytes)
+            percent = abs(value_bytes)
             try:
-                # Use manual override if configured (important for ZFS)
                 drive_size_override = self.config_manager.cache.cache_drive_size_bytes
                 disk_usage = get_disk_usage(cache_dir, drive_size_override)
                 total_drive_size = disk_usage.total
-                limit_bytes = int(total_drive_size * percent / 100)
-                limit_readable = f"{percent}% of {total_drive_size / (1024**3):.1f}GB = {limit_bytes / (1024**3):.1f}GB"
-                return (limit_bytes, limit_readable)
+                resolved = int(total_drive_size * percent / 100)
+                readable = f"{percent}% of {total_drive_size / (1024**3):.2f}GB = {resolved / (1024**3):.2f}GB"
+                return (resolved, readable)
             except Exception as e:
-                logging.warning(f"Could not calculate cache drive size for percentage limit: {e}")
+                logging.warning(f"Could not calculate cache drive size for {label} percentage: {e}")
                 return (0, None)
         else:
-            limit_readable = f"{cache_limit_bytes / (1024**3):.1f}GB"
-            return (cache_limit_bytes, limit_readable)
+            readable = f"{value_bytes / (1024**3):.2f}GB"
+            return (value_bytes, readable)
+
+    def _get_effective_cache_limit(self, cache_dir: str) -> tuple:
+        """Calculate effective cache limit in bytes, handling percentage-based limits."""
+        return self._get_effective_limit(
+            self.config_manager.cache.cache_limit_bytes, cache_dir, "cache_limit"
+        )
 
     def _get_effective_min_free_space(self, cache_dir: str) -> tuple:
-        """Calculate effective min free space in bytes, handling percentage-based values.
-
-        Args:
-            cache_dir: Path to the cache directory.
-
-        Returns:
-            Tuple of (min_free_bytes, readable_str). Returns (0, None) if disabled.
-        """
-        min_free_bytes = self.config_manager.cache.min_free_space_bytes
-
-        if min_free_bytes == 0:
-            return (0, None)
-
-        if min_free_bytes < 0:
-            # Negative value indicates percentage
-            percent = abs(min_free_bytes)
-            try:
-                drive_size_override = self.config_manager.cache.cache_drive_size_bytes
-                disk_usage = get_disk_usage(cache_dir, drive_size_override)
-                total_drive_size = disk_usage.total
-                free_bytes = int(total_drive_size * percent / 100)
-                readable = f"{percent}% of {total_drive_size / (1024**3):.1f}GB = {free_bytes / (1024**3):.1f}GB"
-                return (free_bytes, readable)
-            except Exception as e:
-                logging.warning(f"Could not calculate cache drive size for min_free_space percentage: {e}")
-                return (0, None)
-        else:
-            readable = f"{min_free_bytes / (1024**3):.1f}GB"
-            return (min_free_bytes, readable)
+        """Calculate effective min free space in bytes, handling percentage-based values."""
+        return self._get_effective_limit(
+            self.config_manager.cache.min_free_space_bytes, cache_dir, "min_free_space"
+        )
 
     def _get_effective_plexcache_quota(self, cache_dir: str) -> tuple:
-        """Calculate effective plexcache quota in bytes, handling percentage-based values.
-
-        Args:
-            cache_dir: Path to the cache directory.
-
-        Returns:
-            Tuple of (quota_bytes, readable_str). Returns (0, None) if disabled.
-        """
-        quota_bytes = self.config_manager.cache.plexcache_quota_bytes
-
-        if quota_bytes == 0:
-            return (0, None)
-
-        if quota_bytes < 0:
-            # Negative value indicates percentage
-            percent = abs(quota_bytes)
-            try:
-                drive_size_override = self.config_manager.cache.cache_drive_size_bytes
-                disk_usage = get_disk_usage(cache_dir, drive_size_override)
-                total_drive_size = disk_usage.total
-                resolved_bytes = int(total_drive_size * percent / 100)
-                readable = f"{percent}% of {total_drive_size / (1024**3):.1f}GB = {resolved_bytes / (1024**3):.1f}GB"
-                return (resolved_bytes, readable)
-            except Exception as e:
-                logging.warning(f"Could not calculate cache drive size for plexcache_quota percentage: {e}")
-                return (0, None)
-        else:
-            readable = f"{quota_bytes / (1024**3):.1f}GB"
-            return (quota_bytes, readable)
+        """Calculate effective plexcache quota in bytes, handling percentage-based values."""
+        return self._get_effective_limit(
+            self.config_manager.cache.plexcache_quota_bytes, cache_dir, "plexcache_quota"
+        )
 
     def _get_plexcache_tracked_size(self) -> tuple:
         """Calculate current PlexCache tracked size from exclude file.
@@ -1877,7 +1909,7 @@ class PlexCacheApp:
         if plexcache_quota_bytes > 0:
             plexcache_tracked, _ = self._get_plexcache_tracked_size()
             quota_available = plexcache_quota_bytes - plexcache_tracked
-            logging.info(f"[QUOTA] PlexCache quota: {plexcache_quota_bytes / (1024**3):.1f}GB (tracked: {plexcache_tracked / (1024**3):.2f}GB, available: {quota_available / (1024**3):.2f}GB)")
+            logging.info(f"[QUOTA] PlexCache quota: {plexcache_quota_bytes / (1024**3):.2f}GB (tracked: {plexcache_tracked / (1024**3):.2f}GB, available: {quota_available / (1024**3):.2f}GB)")
             if available_space is None or quota_available < available_space:
                 available_space = quota_available
                 bottleneck = "plexcache_quota"
@@ -2141,7 +2173,7 @@ class PlexCacheApp:
             total_drive_usage = plexcache_tracked  # Fallback if can't get disk usage
 
         if total_drive_usage < threshold_bytes and needed_space_bytes == 0:
-            logging.debug(f"Cache usage ({total_drive_usage/1e9:.1f}GB) below threshold ({threshold_bytes/1e9:.1f}GB), skipping eviction")
+            logging.debug(f"Cache usage ({total_drive_usage/1e9:.2f}GB) below threshold ({threshold_bytes/1e9:.2f}GB), skipping eviction")
             return (0, 0)
 
         # Calculate how much space to free based on total drive usage
@@ -2152,8 +2184,8 @@ class PlexCacheApp:
         if needed_space_bytes > 0:
             logging.info(f"[EVICTION] Smart eviction: drive over limit, need to free {space_to_free/1e9:.2f}GB")
         else:
-            logging.info(f"[EVICTION] Smart eviction: drive usage ({total_drive_usage/1e9:.1f}GB) over threshold ({threshold_bytes/1e9:.1f}GB), need to free {space_to_free/1e9:.2f}GB")
-            logging.debug(f"PlexCache-tracked: {plexcache_tracked/1e9:.1f}GB, Other files: {(total_drive_usage-plexcache_tracked)/1e9:.1f}GB")
+            logging.info(f"[EVICTION] Smart eviction: drive usage ({total_drive_usage/1e9:.2f}GB) over threshold ({threshold_bytes/1e9:.2f}GB), need to free {space_to_free/1e9:.2f}GB")
+            logging.debug(f"PlexCache-tracked: {plexcache_tracked/1e9:.2f}GB, Other files: {(total_drive_usage-plexcache_tracked)/1e9:.2f}GB")
 
         # Get eviction candidates based on mode
         if eviction_mode == "smart":
@@ -2192,7 +2224,7 @@ class PlexCacheApp:
         # Check if candidates can free enough space
         candidate_bytes = sum(os.path.getsize(f) for f in candidates if os.path.exists(f))
         if candidate_bytes < space_to_free:
-            logging.warning(f"Can only evict {candidate_bytes/1e9:.1f}GB of {space_to_free/1e9:.1f}GB needed - non-PlexCache files may be filling the drive")
+            logging.warning(f"Can only evict {candidate_bytes/1e9:.2f}GB of {space_to_free/1e9:.2f}GB needed - non-PlexCache files may be filling the drive")
 
         # Log what we're evicting
         for cache_path in candidates:
@@ -2205,7 +2237,7 @@ class PlexCacheApp:
                 size_mb = os.path.getsize(cache_path) / (1024**2)
             except (OSError, FileNotFoundError):
                 size_mb = 0
-            logging.info(f"[EVICTION] Evicting ({priority_info}): {os.path.basename(cache_path)} ({size_mb:.1f}MB)")
+            logging.info(f"[EVICTION] Evicting ({priority_info}): {os.path.basename(cache_path)} ({size_mb:.2f}MB)")
 
         if self.dry_run:
             logging.info(f"[EVICTION] DRY-RUN: Would evict {len(candidates)} files")
