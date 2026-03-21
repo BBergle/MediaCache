@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from web import __version__
 from web.config import templates, STATIC_DIR, PROJECT_ROOT, CONFIG_DIR, SETTINGS_FILE
-from web.routers import dashboard, cache, settings, operations, logs, api, maintenance, setup
+from web.routers import dashboard, cache, settings, operations, logs, api, maintenance, setup, auth
 from web.services import get_scheduler_service, get_settings_service
 from web.services.web_cache import init_web_cache, get_web_cache_service
 import os
@@ -149,6 +149,14 @@ async def lifespan(app: FastAPI):
     web_cache.stop_background_refresh()
 
 
+# Raise Starlette's default max_fields limit for multipart form parsing.
+# Maintenance bulk actions (untracked files, orphaned backups) can submit >1000 paths.
+import starlette.requests
+_original_form = starlette.requests.Request.form
+def _form_with_higher_limit(self, *, max_files=1000, max_fields=10000, max_part_size=20*1024*1024):
+    return _original_form(self, max_files=max_files, max_fields=max_fields, max_part_size=max_part_size)
+starlette.requests.Request.form = _form_with_higher_limit
+
 # Create FastAPI app
 app = FastAPI(
     title="PlexCache-D",
@@ -169,6 +177,7 @@ app.include_router(logs.router, prefix="/logs", tags=["logs"])
 app.include_router(api.router, prefix="/api", tags=["api"])
 app.include_router(maintenance.router, prefix="/maintenance", tags=["maintenance"])
 app.include_router(setup.router, tags=["setup"])
+app.include_router(auth.router, prefix="/auth", tags=["auth"])
 
 
 # Middleware to redirect to setup wizard if not configured
@@ -179,15 +188,81 @@ async def setup_redirect_middleware(request: Request, call_next):
     path = request.url.path
     if (path.startswith("/setup") or
         path.startswith("/static") or
-        path.startswith("/api/health") or
-        path.startswith("/api/status")):
+        path.startswith("/api/health")):
         return await call_next(request)
 
     # Check if setup is complete
     if not setup.is_setup_complete():
+        # During setup, also allow path browsing for the wizard
+        if path.startswith("/api/browse") or path.startswith("/api/validate-path"):
+            return await call_next(request)
         return RedirectResponse(url="/setup", status_code=307)
 
     return await call_next(request)
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Block unauthenticated access when auth is enabled"""
+    from web.services.auth_service import get_auth_service
+
+    auth_service = get_auth_service()
+
+    if not auth_service.is_auth_enabled():
+        return await call_next(request)
+
+    path = request.url.path
+
+    # Exempt paths
+    if (path.startswith("/auth/") or
+        path.startswith("/static") or
+        path.startswith("/api/health")):
+        return await call_next(request)
+
+    # Setup wizard: only exempt from auth before initial setup is complete
+    if path.startswith("/setup") and not setup.is_setup_complete():
+        return await call_next(request)
+
+    # WebSocket upgrades bypass HTTP middleware (can't return 302/401).
+    # Each WebSocket handler must validate auth independently.
+    if request.headers.get("upgrade", "").lower() == "websocket":
+        return await call_next(request)
+
+    # Check session cookie
+    session_token = request.cookies.get("plexcache_session")
+    if session_token:
+        session = auth_service.validate_session(session_token)
+        if session:
+            request.state.user = session
+            response = await call_next(request)
+
+            # Sliding session: extend expiry when past the halfway point
+            if auth_service.refresh_session_if_needed(session_token):
+                ttl = auth_service.get_session_ttl(session.remember_me)
+                response.set_cookie(
+                    key="plexcache_session",
+                    value=session_token,
+                    max_age=ttl,
+                    httponly=True,
+                    samesite="lax",
+                    secure=str(request.url.scheme) == "https",
+                    path="/",
+                )
+
+            return response
+
+    # HTMX requests: 401 + HX-Redirect (prevents partial HTML swap)
+    # Use HX-Current-URL (the actual page) so login redirects back to the page,
+    # not to an API/partial endpoint like /api/operation-banner
+    if request.headers.get("HX-Request") == "true":
+        current_page = request.headers.get("HX-Current-URL", "")
+        next_path = urlparse(current_page).path if current_page else "/"
+        response = Response(status_code=401)
+        response.headers["HX-Redirect"] = f"/auth/login?next={next_path}"
+        return response
+
+    # Normal requests: 302 redirect
+    return RedirectResponse(url=f"/auth/login?next={path}", status_code=302)
 
 
 @app.middleware("http")
@@ -232,6 +307,26 @@ async def csrf_origin_check(request: Request, call_next):
         return Response("Cross-origin request blocked", status_code=403)
 
     return await call_next(request)
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Add security headers to all responses"""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self' ws: wss:; "
+        "font-src 'self'"
+    )
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+    return response
 
 
 @app.exception_handler(404)

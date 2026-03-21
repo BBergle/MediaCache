@@ -6,10 +6,12 @@ import time
 import requests
 from typing import Optional, Dict, Any, List
 
-from fastapi import APIRouter, Request, Form, Query
+from fastapi import APIRouter, Depends, Request, Form, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from starlette.datastructures import ImmutableMultiDict
 
 from web.config import templates, PROJECT_ROOT, PLEXCACHE_PRODUCT_VERSION
+from web.dependencies import parse_form
 from web.services import get_settings_service
 
 router = APIRouter()
@@ -23,6 +25,14 @@ _oauth_state: Dict[str, Any] = {}
 # Store setup wizard state in memory until completion
 # This prevents writing partial/broken config if setup is abandoned
 _setup_state: Dict[str, Any] = {}
+
+
+def _safe_int(value, default: int) -> int:
+    """Parse integer from form value with fallback to default."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def get_setup_state() -> Dict[str, Any]:
@@ -76,7 +86,7 @@ def setup_wizard(request: Request, step: int = 1):
         "request": request,
         "page_title": "Setup",
         "step": step,
-        "total_steps": 6,
+        "total_steps": 7,
         "settings": settings,
     }
 
@@ -135,11 +145,20 @@ def setup_wizard(request: Request, step: int = 1):
         context["cache_limit"] = settings.get("cache_limit", "")
 
     elif step == 6:
+        # Security (optional)
+        context["auth_enabled"] = settings.get("auth_enabled", False)
+        context["auth_session_hours"] = settings.get("auth_session_hours", 24)
+        context["auth_password_enabled"] = settings.get("auth_password_enabled", False)
+        context["auth_password_username"] = settings.get("auth_password_username", "")
+        context["admin_username"] = settings.get("auth_admin_username", "")
+
+    elif step == 7:
         # Summary - gather all configured settings from setup state
         context["plex_url"] = settings.get("PLEX_URL", "")
         context["libraries_count"] = len(settings.get("valid_sections", []))
         context["path_mappings_count"] = len(settings.get("path_mappings", []))
         context["users_count"] = len(settings.get("users", [])) + 1  # +1 for main account
+        context["auth_enabled"] = settings.get("auth_enabled", False)
 
     return templates.TemplateResponse(f"setup/step{step}.html", context)
 
@@ -170,7 +189,7 @@ def setup_step2_post(
                 "request": request,
                 "page_title": "Setup",
                 "step": 2,
-                "total_steps": 6,
+                "total_steps": 7,
                 "plex_url": plex_url,
                 "plex_token": plex_token,
                 "error": f"Could not connect to Plex: {str(e)}"
@@ -201,9 +220,8 @@ def setup_step2_post(
 
 
 @router.post("/setup/step3", response_class=HTMLResponse)
-async def setup_step3_post(request: Request):
+def setup_step3_post(request: Request, form_data: ImmutableMultiDict = Depends(parse_form)):
     """Handle step 3 (Libraries & Paths) form submission"""
-    form_data = await request.form()
 
     # Get cache_dir from form, default to standard Docker mount point
     cache_dir = form_data.get("cache_dir", "").strip() or "/mnt/cache"
@@ -270,9 +288,15 @@ async def setup_step3_post(request: Request):
                         real_path = plex_path_normalized.replace(docker_prefix, host_prefix, 1)
                         break
 
-                # Generate cache_path from library folder name
-                lib_folder = plex_path_normalized.rstrip('/').split('/')[-1]
-                cache_path = f"{cache_dir_normalized}/{lib_folder}/" if is_cacheable else None
+                # Derive cache_path using prefix swap to preserve full structure
+                # e.g., /data/GUEST/Movies/ -> /mnt/cache/GUEST/Movies/
+                cache_path = None
+                if is_cacheable:
+                    cache_path = plex_path_normalized
+                    for docker_prefix in ['/data/', '/media/']:
+                        if plex_path_normalized.startswith(docker_prefix):
+                            cache_path = plex_path_normalized.replace(docker_prefix, cache_dir_normalized + '/', 1)
+                            break
                 # host_cache_path defaults to same as cache_path (user can override in settings)
                 host_cache_path = cache_path
 
@@ -298,9 +322,8 @@ async def setup_step3_post(request: Request):
 
 
 @router.post("/setup/step4", response_class=HTMLResponse)
-async def setup_step4_post(request: Request):
+def setup_step4_post(request: Request, form_data: ImmutableMultiDict = Depends(parse_form)):
     """Handle step 4 (Users) form submission"""
-    form_data = await request.form()
 
     users_toggle = form_data.get("users_toggle") == "on"
 
@@ -405,20 +428,19 @@ async def setup_step4_post(request: Request):
 
 
 @router.post("/setup/step5", response_class=HTMLResponse)
-async def setup_step5_post(request: Request):
+def setup_step5_post(request: Request, form_data: ImmutableMultiDict = Depends(parse_form)):
     """Handle step 5 (Behavior & Schedule) form submission"""
-    form_data = await request.form()
 
     # Parse form values (checkboxes come as "on" or are absent)
     watchlist_toggle = form_data.get("watchlist_toggle") == "on"
     watched_move = form_data.get("watched_move") == "on"
 
     # Parse numeric values with defaults
-    number_episodes = int(form_data.get("number_episodes") or 6)
-    days_to_monitor = int(form_data.get("days_to_monitor") or 183)
-    watchlist_episodes = int(form_data.get("watchlist_episodes") or 3)
-    watchlist_retention_days = int(form_data.get("watchlist_retention_days") or 0)
-    cache_retention_hours = int(form_data.get("cache_retention_hours") or 12)
+    number_episodes = _safe_int(form_data.get("number_episodes"), 6)
+    days_to_monitor = _safe_int(form_data.get("days_to_monitor"), 183)
+    watchlist_episodes = _safe_int(form_data.get("watchlist_episodes"), 3)
+    watchlist_retention_days = _safe_int(form_data.get("watchlist_retention_days"), 0)
+    cache_retention_hours = _safe_int(form_data.get("cache_retention_hours"), 12)
     cache_limit = form_data.get("cache_limit", "").strip()
 
     # Store in memory (not to disk yet)
@@ -442,6 +464,62 @@ async def setup_step5_post(request: Request):
     })
 
     return RedirectResponse(url="/setup?step=6", status_code=303)
+
+
+@router.post("/setup/step6", response_class=HTMLResponse)
+def setup_step6_post(request: Request, form_data: ImmutableMultiDict = Depends(parse_form)):
+    """Handle step 6 (Security) form submission"""
+
+    auth_enabled = form_data.get("auth_enabled") == "on"
+
+    # Clear all auth keys so toggling off doesn't leave stale data
+    auth_state = {
+        "auth_enabled": auth_enabled,
+        "auth_session_hours": 24,
+        "auth_admin_plex_id": "",
+        "auth_admin_username": "",
+        "auth_password_enabled": False,
+        "auth_password_username": "",
+        "auth_password_hash": "",
+        "auth_password_salt": "",
+    }
+
+    if auth_enabled:
+        auth_state["auth_session_hours"] = int(form_data.get("auth_session_hours") or 24)
+
+        # Capture admin identity using the Plex token from step 2
+        plex_token = _setup_state.get("PLEX_TOKEN", "")
+        if plex_token:
+            try:
+                from plexapi.myplex import MyPlexAccount
+                account = MyPlexAccount(token=plex_token)
+                account_id = str(account.id) if hasattr(account, 'id') else ""
+                username = account.username if hasattr(account, 'username') else ""
+
+                if account_id:
+                    auth_state["auth_admin_plex_id"] = account_id
+                    auth_state["auth_admin_username"] = username
+            except Exception:
+                pass
+
+        # Password fallback — only save credentials when toggle is on
+        password_enabled = form_data.get("auth_password_enabled") == "on"
+        auth_state["auth_password_enabled"] = password_enabled
+
+        if password_enabled:
+            pw_username = form_data.get("auth_password_username", "").strip()
+            pw_password = form_data.get("auth_password", "").strip()
+
+            if pw_username:
+                auth_state["auth_password_username"] = pw_username
+            if pw_password:
+                from web.services.auth_service import AuthService
+                pw_hash, pw_salt = AuthService.hash_password(pw_password)
+                auth_state["auth_password_hash"] = pw_hash
+                auth_state["auth_password_salt"] = pw_salt
+
+    update_setup_state(auth_state)
+    return RedirectResponse(url="/setup?step=7", status_code=303)
 
 
 @router.post("/setup/complete", response_class=HTMLResponse)
@@ -526,6 +604,12 @@ def oauth_poll(client_id: str = Query(...)):
         return JSONResponse({"success": False, "error": "Invalid client ID"})
 
     state = _oauth_state[client_id]
+
+    # Reject expired OAuth state (10-minute window)
+    if time.time() - state.get("created", 0) > 600:
+        del _oauth_state[client_id]
+        return JSONResponse({"success": False, "error": "OAuth session expired, please try again"})
+
     pin_id = state["pin_id"]
 
     headers = {
@@ -786,11 +870,10 @@ def detect_import_files():
 
 
 @router.post("/setup/import/execute")
-async def execute_import(request: Request):
+def execute_import(request: Request, form_data: ImmutableMultiDict = Depends(parse_form)):
     """Execute the import operation"""
     from web.services import get_import_service
 
-    form_data = await request.form()
     cli_cache_prefix = form_data.get("cli_cache_prefix", "/mnt/cache_downloads/")
     docker_cache_prefix = form_data.get("docker_cache_prefix", "/mnt/cache/")
 
