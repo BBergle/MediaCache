@@ -802,15 +802,14 @@ class SettingsService:
                 except Exception:
                     pass
 
-            # Add prefetched users
+            # Add prefetched users (all users from account.users() have server access)
             for u in prefetched:
-                if u.get('has_access', True):
-                    users.append({
-                        "username": u.get('title', ''),
-                        "title": u.get('title', ''),
-                        "is_admin": False,
-                        "is_home": u.get('is_home', False)
-                    })
+                users.append({
+                    "username": u.get('title', ''),
+                    "title": u.get('title', ''),
+                    "is_admin": False,
+                    "is_home": u.get('is_home', False)
+                })
 
             with self._cache_lock:
                 self._plex_users_cache = users
@@ -856,19 +855,11 @@ class SettingsService:
                 account_error = str(e)
                 logging.warning(f"Could not get main account: {e}")
 
-            # Add shared users
+            # Add shared users (all users from account.users() have server access)
             try:
                 account = plex.myPlexAccount()
                 shared_count = 0
                 for user in account.users():
-                    # Check if user has access to this server
-                    try:
-                        token = user.get_token(plex.machineIdentifier)
-                        if token is None:
-                            continue
-                    except Exception:
-                        continue
-
                     is_home = getattr(user, "home", False)
                     users.append({
                         "username": user.title,
@@ -981,15 +972,18 @@ class SettingsService:
             if admin_name not in existing_users:
                 added_count += 1
 
-            # Add shared users
+            # Add shared users (all users from account.users() have server access)
             for user in account.users():
                 name = user.title
                 try:
                     token = user.get_token(machine_id)
-                    if token is None:
-                        continue
                 except Exception:
-                    continue
+                    token = None
+
+                # Preserve existing cached token when API returns None (Plex security change)
+                if token is None:
+                    existing = existing_users.get(name, {})
+                    token = existing.get("token")
 
                 # Extract user ID and UUID
                 user_id = getattr(user, "id", None)
