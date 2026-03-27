@@ -100,7 +100,7 @@
     <div class="card-body">
         <div class="form-group mb-0">
             <label for="plex_db_path">Plex Database Path</label>
-            <input type="text" name="plex_db_path" id="plex_db_path" class="form-control"
+            <input type="text" name="plex_db_path" id="plex_db_path" class="form-control path-browse-input"
                    value="{{ settings.plex_db_path }}"
                    placeholder="/config/plex-db/com.plexapp.plugins.library.db (mount Databases folder to /config/plex-db)">
             <div class="form-hint">
@@ -200,4 +200,5 @@ var copyAuthLink = function() {
     }
 };
 </script>
+<script src="/static/js/path-browser.js"></script>
 {% endblock %}
