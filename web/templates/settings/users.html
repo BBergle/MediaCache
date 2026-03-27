@@ -72,7 +72,7 @@
                        onchange="document.getElementById('auth-link-url').style.display = this.checked ? 'block' : 'none';">
                 <span>Enable Self-Service Auth Link</span>
             </label>
-            <div class="form-hint">Allow shared users to link their Plex account by visiting a URL. Requires PlexCache to be reachable from outside your network (reverse proxy, Tailscale, etc.).</div>
+            <div class="form-hint">Allow shared users to link their Plex account by visiting a URL. This captures their access token so PlexCache can monitor their OnDeck items. Requires PlexCache to be reachable by the user (reverse proxy, Tailscale, etc.).</div>
         </div>
 
         <div id="auth-link-url" class="form-group mb-0" style="{% if not settings.auth_link_enabled %}display: none;{% endif %}">
