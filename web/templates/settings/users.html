@@ -156,17 +156,25 @@
 
 var copyAuthLink = function() {
     var input = document.getElementById('auth-link-url-input');
-    if (input && navigator.clipboard) {
-        navigator.clipboard.writeText(input.value).then(function() {
-            var btn = input.nextElementSibling;
-            var original = btn.innerHTML;
-            btn.innerHTML = '<i data-lucide="check" style="width: 14px; height: 14px;"></i>';
+    if (!input) return;
+
+    var showSuccess = function() {
+        var btn = input.nextElementSibling;
+        var original = btn.innerHTML;
+        btn.innerHTML = '<i data-lucide="check" style="width: 14px; height: 14px;"></i>';
+        lucide.createIcons({nameAttr: 'data-lucide', node: btn});
+        setTimeout(function() {
+            btn.innerHTML = original;
             lucide.createIcons({nameAttr: 'data-lucide', node: btn});
-            setTimeout(function() {
-                btn.innerHTML = original;
-                lucide.createIcons({nameAttr: 'data-lucide', node: btn});
-            }, 2000);
-        });
+        }, 2000);
+    };
+
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(input.value).then(showSuccess);
+    } else {
+        input.select();
+        document.execCommand('copy');
+        showSuccess();
     }
 };
 </script>
