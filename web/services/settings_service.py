@@ -926,7 +926,8 @@ class SettingsService:
             "skip_watchlist": raw.get("skip_watchlist", []),
             "remote_watchlist_toggle": raw.get("remote_watchlist_toggle", False),
             "remote_watchlist_rss_url": raw.get("remote_watchlist_rss_url", ""),
-            "auth_link_enabled": raw.get("auth_link_enabled", False)
+            "auth_link_enabled": raw.get("auth_link_enabled", False),
+            "plex_db_path": raw.get("plex_db_path", "")
         }
 
     def sync_users_from_plex(self) -> Dict[str, Any]:
@@ -1057,7 +1058,8 @@ class SettingsService:
     def save_user_settings(self, users: List[Dict[str, Any]], users_toggle: bool,
                            remote_watchlist_toggle: bool = False,
                            remote_watchlist_rss_url: str = "",
-                           auth_link_enabled: bool = False) -> bool:
+                           auth_link_enabled: bool = False,
+                           plex_db_path: str = "") -> bool:
         """Save user preferences and rebuild skip lists.
 
         Args:
@@ -1066,6 +1068,7 @@ class SettingsService:
             remote_watchlist_toggle: Whether remote watchlist RSS is enabled
             remote_watchlist_rss_url: RSS URL for remote watchlists
             auth_link_enabled: Whether self-service auth link is enabled
+            plex_db_path: Path to Plex SQLite database for DB fallback
         """
         raw = self._load_raw()
 
@@ -1075,6 +1078,7 @@ class SettingsService:
         raw["remote_watchlist_toggle"] = remote_watchlist_toggle
         raw["remote_watchlist_rss_url"] = remote_watchlist_rss_url
         raw["auth_link_enabled"] = auth_link_enabled
+        raw["plex_db_path"] = plex_db_path
 
         # Rebuild skip lists from user preferences (use title/username for skip lists)
         raw["skip_ondeck"] = [u["title"] for u in users if u.get("skip_ondeck")]
