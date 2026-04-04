@@ -141,6 +141,10 @@ class OperationRunner:
         self._log_file = LOGS_DIR / "plexcache_log_latest.log"
         # Cache parsed external log state between polls (avoids re-parsing entire file)
         self._external_log_state: Optional[dict] = None
+        # Track external run lifecycle for completion detection
+        self._external_was_running = False
+        self._external_completed_at: Optional[datetime] = None
+        self._external_completed_status: Optional[dict] = None
 
     # ── External CLI process detection ─────────────────────────────────
 
@@ -385,6 +389,49 @@ class OperationRunner:
         }
 
         return status
+
+    def _build_external_completed_dict(self, log_state: dict) -> dict:
+        """Build a completed status dict after an external CLI run finishes."""
+        files_cached = log_state["files_cached_so_far"]
+        files_restored = log_state["files_restored_so_far"]
+        bytes_cached = log_state["bytes_cached_so_far"]
+        bytes_restored = log_state["bytes_restored_so_far"]
+
+        # Calculate duration from log timestamps
+        duration = 0
+        started_at = log_state.get("started_at")
+        if started_at:
+            duration = (datetime.now() - started_at).total_seconds()
+
+        message = f"Completed: {files_cached} cached, {files_restored} restored ({self._format_duration(duration)})"
+
+        return {
+            "state": "completed",
+            "is_running": False,
+            "external": True,
+            "dry_run": False,
+            "started_at": started_at.isoformat() if started_at else None,
+            "completed_at": datetime.now().isoformat(),
+            "duration_seconds": round(duration, 1),
+            "duration_display": self._format_duration(duration),
+            "files_cached": files_cached,
+            "files_restored": files_restored,
+            "bytes_cached": bytes_cached,
+            "bytes_restored": bytes_restored,
+            "bytes_cached_display": self._format_bytes(bytes_cached) if bytes_cached > 0 else "",
+            "bytes_restored_display": self._format_bytes(bytes_restored) if bytes_restored > 0 else "",
+            "error_message": None,
+            "error_count": log_state["error_count"],
+            "error_messages": [],
+            "was_stopped": False,
+            "recent_files": log_state["recent_files"],
+            "message": message,
+        }
+
+    def dismiss_external(self):
+        """Dismiss the external completion banner."""
+        self._external_completed_status = None
+        self._external_completed_at = None
 
     def _load_trackers(self) -> None:
         """Load OnDeck and Watchlist trackers for user lookups"""
@@ -1074,8 +1121,25 @@ class OperationRunner:
         if self._state != OperationState.RUNNING:
             ext_pid = self._check_external_process()
             if ext_pid is not None:
+                self._external_was_running = True
                 return self._get_external_status_dict(ext_pid)
-            # Clear stale external log state when no external process
+
+            # External run just finished — parse final log state for completion banner
+            if self._external_was_running:
+                self._external_was_running = False
+                self._external_completed_at = datetime.now()
+                log_state = self._parse_external_log()
+                self._external_completed_status = self._build_external_completed_dict(log_state)
+
+            # Show external completion banner for 60 seconds
+            if self._external_completed_status and self._external_completed_at:
+                age = (datetime.now() - self._external_completed_at).total_seconds()
+                if age < 60:
+                    return self._external_completed_status
+                else:
+                    self._external_completed_status = None
+                    self._external_completed_at = None
+
             self._external_log_state = None
 
         if result is None:

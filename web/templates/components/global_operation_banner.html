@@ -931,9 +931,11 @@ function dismissMaintCompletionBanner() {
     if (!wasStopped && filesCached === 0 && filesRestored === 0) summaryParts.push('No files processed');
     var compactSummary = summaryParts.join(' · ');
 
+    var isExternal = {{ 'true' if status.external|default(false) else 'false' }};
     var colorMod = (errorCount > 0 || wasStopped) ? 'completed-errors' : 'completed';
     var iconName = wasStopped ? 'square' : (errorCount > 0 ? 'alert-triangle' : 'check');
     var labelText = wasStopped ? 'Stopped' : (isDryRun ? 'Dry Run Complete' : 'Completed');
+    var cliBadge = isExternal ? '<span class="di-cli-badge">CLI</span>' : '';
     var errorBadge = errorCount > 0 ? '<span class="di-error-badge">' + errorCount + ' error' + (errorCount !== 1 ? 's' : '') + '</span>' : '';
 
     // Expanded summary stats
@@ -1015,6 +1017,7 @@ function dismissMaintCompletionBanner() {
             <div class="di-pill__compact">
                 <div class="di-pill__left">
                     <div class="di-icon"><i data-lucide="${iconName}" style="width: 14px; height: 14px;"></i></div>
+                    ${cliBadge}
                     <span class="di-label">${labelText}</span>
                     ${errorBadge}
                 </div>
@@ -1027,7 +1030,8 @@ function dismissMaintCompletionBanner() {
                 <div class="di-expanded__header">
                     <div class="di-expanded__header-left">
                         <div class="di-icon"><i data-lucide="${iconName}" style="width: 14px; height: 14px;"></i></div>
-                        <span class="di-label">${wasStopped ? 'Operation Stopped' : (isDryRun ? 'Dry Run' : 'Operation') + ' Completed'}</span>
+                        ${cliBadge}
+                        <span class="di-label">${wasStopped ? 'Operation Stopped' : (isDryRun ? 'Dry Run' : (isExternal ? 'CLI Run' : 'Operation')) + ' Completed'}</span>
                         ${errorBadge}
                         <span class="di-metric--muted">${durationDisplay}</span>
                     </div>

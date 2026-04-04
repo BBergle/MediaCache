@@ -590,7 +590,9 @@ def get_operation_banner(request: Request):
 @router.post("/dismiss-operation")
 def dismiss_operation():
     """Dismiss a completed/failed operation banner, resetting state to idle."""
-    get_operation_runner().dismiss()
+    runner = get_operation_runner()
+    runner.dismiss()
+    runner.dismiss_external()
     return JSONResponse({"ok": True})
 
 
