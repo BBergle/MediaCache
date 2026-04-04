@@ -138,7 +138,7 @@ class OperationRunner:
         self._watchlist_tracker: Dict = {}
         # External CLI process detection
         self._lock_file = PROJECT_ROOT / "plexcache.lock"
-        self._log_file = LOGS_DIR / "plexcache.log"
+        self._log_file = LOGS_DIR / "plexcache_log_latest.log"
         # Cache parsed external log state between polls (avoids re-parsing entire file)
         self._external_log_state: Optional[dict] = None
 
