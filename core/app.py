@@ -33,12 +33,14 @@ class PlexCacheApp:
 
     def __init__(self, config_file: str, dry_run: bool = False,
                  quiet: bool = False, verbose: bool = False,
-                 bytes_progress_callback=None):
+                 bytes_progress_callback=None,
+                 record_activity: bool = True):
         self.config_file = config_file
         self.dry_run = dry_run  # Don't move files, just simulate
         self.quiet = quiet  # Override notification level to errors-only
         self.verbose = verbose  # Enable DEBUG level logging
         self._bytes_progress_callback = bytes_progress_callback  # Byte-level progress for operation banner
+        self._record_activity = record_activity  # Write to shared activity feed (disabled when web OperationRunner handles it)
         self.start_time = time.time()
         
         # Initialize components
@@ -81,6 +83,16 @@ class PlexCacheApp:
 
         # Stop request flag (for web UI to abort operations)
         self._stop_requested = False
+
+    def _record_file_activity(self, action: str, filename: str, size_bytes: int) -> None:
+        """Record a file operation to the shared activity feed (CLI runs only).
+
+        Called by FileMover after each successful file move. When run through
+        the web OperationRunner, this callback is not set (OperationRunner
+        handles activity recording via log parsing instead).
+        """
+        from core.activity import record_file_activity
+        record_file_activity(action=action, filename=filename, size_bytes=size_bytes)
 
     def request_stop(self) -> None:
         """Request the operation to stop gracefully after current file."""
@@ -541,7 +553,8 @@ class PlexCacheApp:
             use_symlinks=self.config_manager.cache.use_symlinks,
             bytes_progress_callback=self._bytes_progress_callback,
             ondeck_tracker=self.ondeck_tracker,
-            watchlist_tracker=self.watchlist_tracker
+            watchlist_tracker=self.watchlist_tracker,
+            file_activity_callback=self._record_file_activity if self._record_activity else None
         )
 
     def _init_cache_management(self) -> None:
@@ -2640,6 +2653,24 @@ class PlexCacheApp:
 
         # Log results summary for all runs (INFO level)
         self._log_results_summary()
+
+        # Save last run time and summary to shared activity files
+        # so the Web UI dashboard reflects CLI-triggered runs too.
+        # Skip in dry-run mode (no real files were moved).
+        if not self.dry_run and self._record_activity:
+            from core.activity import save_last_run_time, save_run_summary
+            save_last_run_time()
+            save_run_summary({
+                "status": "completed",
+                "timestamp": datetime.now().isoformat(),
+                "files_cached": cached_count,
+                "files_restored": restored_count,
+                "bytes_cached": cached_bytes,
+                "bytes_restored": restored_bytes,
+                "duration_seconds": round(execution_time_seconds, 1),
+                "error_count": 0,
+                "dry_run": False,
+            })
 
         logging.info("")
         logging.info(f"[RESULTS] Completed in {execution_time}")

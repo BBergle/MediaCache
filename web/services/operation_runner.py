@@ -16,46 +16,28 @@ from web.config import PROJECT_ROOT, DATA_DIR, SETTINGS_FILE as CONFIG_SETTINGS_
 from core.system_utils import format_bytes, format_duration
 from core.file_operations import save_json_atomically
 
-# Activity persistence settings - use DATA_DIR for Docker compatibility
-ACTIVITY_FILE = DATA_DIR / "recent_activity.json"
-LAST_RUN_FILE = DATA_DIR / "last_run.txt"
-LAST_RUN_SUMMARY_FILE = DATA_DIR / "last_run_summary.json"
+# Shared activity module — canonical implementations live in core/activity.py.
+# Re-exported here for backward compatibility with existing consumers.
+from core.activity import (
+    FileActivity,
+    load_activity,
+    save_activity,
+    save_last_run_time,
+    load_last_run_summary,
+    save_run_summary,
+    record_file_activity,
+    MAX_RECENT_ACTIVITY,
+    ACTIVITY_FILE,
+    LAST_RUN_FILE,
+    LAST_RUN_SUMMARY_FILE,
+    _activity_file_lock,
+    _load_activity_unlocked,
+    _save_activity_unlocked,
+    _get_activity_retention_hours,
+    DEFAULT_ACTIVITY_RETENTION_HOURS,
+)
+
 SETTINGS_FILE = CONFIG_SETTINGS_FILE
-DEFAULT_ACTIVITY_RETENTION_HOURS = 24
-_activity_file_lock = threading.Lock()
-
-
-def save_last_run_time():
-    """Save the current timestamp as the last run time."""
-    try:
-        LAST_RUN_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(LAST_RUN_FILE, 'w') as f:
-            f.write(datetime.now().isoformat())
-    except IOError:
-        pass
-
-
-def load_last_run_summary() -> Optional[dict]:
-    """Load the last run summary from disk."""
-    try:
-        if LAST_RUN_SUMMARY_FILE.exists():
-            with open(LAST_RUN_SUMMARY_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-    except (json.JSONDecodeError, IOError):
-        pass
-    return None
-
-
-def _get_activity_retention_hours() -> int:
-    """Load activity retention hours from settings, with fallback to default."""
-    try:
-        if SETTINGS_FILE.exists():
-            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                settings = json.load(f)
-            return settings.get('activity_retention_hours', DEFAULT_ACTIVITY_RETENTION_HOURS)
-    except (json.JSONDecodeError, IOError):
-        pass
-    return DEFAULT_ACTIVITY_RETENTION_HOURS
 
 
 class OperationState(str, Enum):
@@ -64,135 +46,6 @@ class OperationState(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
-
-
-@dataclass
-class FileActivity:
-    """Represents a file operation"""
-    timestamp: datetime
-    action: str  # "Cached", "Restored", "Protected", "Moved to Array", etc.
-    filename: str
-    size_bytes: int = 0
-    users: List[str] = field(default_factory=list)
-    associated_files: List[dict] = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        fmt = get_time_format()
-        if fmt == "12h":
-            time_display = self.timestamp.strftime("%-I:%M:%S %p")
-        else:
-            time_display = self.timestamp.strftime("%H:%M:%S")
-
-        # Date grouping fields (computed at render time, not stored on disk)
-        today = datetime.now().date()
-        entry_date = self.timestamp.date()
-        if entry_date == today:
-            date_display = "Today"
-        elif entry_date == today - timedelta(days=1):
-            date_display = "Yesterday"
-        else:
-            date_display = self.timestamp.strftime("%a, %b ") + str(self.timestamp.day)
-
-        result = {
-            "timestamp": self.timestamp.isoformat(),
-            "time_display": time_display,
-            "date_key": entry_date.isoformat(),
-            "date_display": date_display,
-            "action": self.action,
-            "filename": self.filename,
-            "size": self._format_size(self.size_bytes),
-            "users": self.users,
-        }
-        if self.associated_files:
-            result["associated_files"] = self.associated_files
-        return result
-
-    def _format_size(self, size_bytes: int) -> str:
-        if size_bytes == 0:
-            return "-"
-        return format_bytes(size_bytes)
-
-
-MAX_RECENT_ACTIVITY = 500
-
-
-def _load_activity_unlocked() -> List[FileActivity]:
-    """Load activity from disk without acquiring _activity_file_lock.
-
-    Caller MUST hold _activity_file_lock.
-    """
-    try:
-        if not ACTIVITY_FILE.exists():
-            return []
-        with open(ACTIVITY_FILE, 'r') as f:
-            data = json.load(f)
-
-        cutoff = datetime.now() - timedelta(hours=_get_activity_retention_hours())
-        activities = []
-
-        for item in data:
-            try:
-                timestamp = datetime.fromisoformat(item['timestamp'])
-                if timestamp > cutoff:
-                    activities.append(FileActivity(
-                        timestamp=timestamp,
-                        action=item['action'],
-                        filename=item['filename'],
-                        size_bytes=item.get('size_bytes', 0),
-                        users=item.get('users', []),
-                        associated_files=item.get('associated_files', [])
-                    ))
-            except (KeyError, ValueError):
-                continue  # Skip malformed entries
-
-        activities.sort(key=lambda x: x.timestamp, reverse=True)
-        return activities[:MAX_RECENT_ACTIVITY]
-
-    except Exception as e:
-        logging.debug(f"Could not load activity history: {e}")
-        return []
-
-
-def _save_activity_unlocked(activities: List[FileActivity]) -> None:
-    """Save activity to disk without acquiring _activity_file_lock.
-
-    Caller MUST hold _activity_file_lock.
-    """
-    try:
-        ACTIVITY_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-        cutoff = datetime.now() - timedelta(hours=_get_activity_retention_hours())
-
-        data = []
-        for activity in activities:
-            if activity.timestamp > cutoff:
-                entry = {
-                    'timestamp': activity.timestamp.isoformat(),
-                    'action': activity.action,
-                    'filename': activity.filename,
-                    'size_bytes': activity.size_bytes,
-                    'users': activity.users,
-                }
-                if activity.associated_files:
-                    entry['associated_files'] = activity.associated_files
-                data.append(entry)
-
-        save_json_atomically(str(ACTIVITY_FILE), data, label="activity")
-
-    except Exception as e:
-        logging.debug(f"Could not save activity history: {e}")
-
-
-def load_activity() -> List[FileActivity]:
-    """Load activity from disk, filtering out entries older than retention period."""
-    with _activity_file_lock:
-        return _load_activity_unlocked()
-
-
-def save_activity(activities: List[FileActivity]) -> None:
-    """Save activity to disk, filtering out old entries."""
-    with _activity_file_lock:
-        _save_activity_unlocked(activities)
 
 
 @dataclass
@@ -370,25 +223,21 @@ class OperationRunner:
 
     def _save_last_run_summary(self):
         """Save a summary of the completed operation to disk."""
-        try:
-            result = self._current_result
-            if not result:
-                return
-            LAST_RUN_SUMMARY_FILE.parent.mkdir(parents=True, exist_ok=True)
-            summary = {
-                "status": result.state.value,
-                "timestamp": datetime.now().isoformat(),
-                "files_cached": result.files_cached,
-                "files_restored": result.files_restored,
-                "bytes_cached": result.bytes_cached,
-                "bytes_restored": result.bytes_restored,
-                "duration_seconds": round(result.duration_seconds, 1),
-                "error_count": result.error_count,
-                "dry_run": result.dry_run,
-            }
-            save_json_atomically(str(LAST_RUN_SUMMARY_FILE), summary, label="last run summary")
-        except IOError:
-            pass
+        result = self._current_result
+        if not result:
+            return
+        summary = {
+            "status": result.state.value,
+            "timestamp": datetime.now().isoformat(),
+            "files_cached": result.files_cached,
+            "files_restored": result.files_restored,
+            "bytes_cached": result.bytes_cached,
+            "bytes_restored": result.bytes_restored,
+            "duration_seconds": round(result.duration_seconds, 1),
+            "error_count": result.error_count,
+            "dry_run": result.dry_run,
+        }
+        save_run_summary(summary)
 
     @property
     def state(self) -> OperationState:
@@ -754,7 +603,8 @@ class OperationRunner:
                 dry_run=dry_run,
                 quiet=False,
                 verbose=verbose,
-                bytes_progress_callback=_bytes_cb
+                bytes_progress_callback=_bytes_cb,
+                record_activity=False,  # OperationRunner handles activity via log parsing
             )
 
             # Store reference so stop_operation can signal it

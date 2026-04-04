@@ -43,7 +43,7 @@ class TestFileActivity:
 
     def test_to_dict_24h_format(self):
         """to_dict() uses 24h time format when configured."""
-        with patch('web.services.operation_runner.get_time_format', return_value='24h'):
+        with patch('core.activity.get_time_format', return_value='24h'):
             fa = FileActivity(
                 timestamp=datetime(2026, 1, 15, 14, 30, 5),
                 action="Cached",
@@ -62,7 +62,7 @@ class TestFileActivity:
     @pytest.mark.skipif(sys.platform == 'win32', reason="%-I strftime is Linux-only")
     def test_to_dict_12h_format(self):
         """to_dict() uses 12h time format with AM/PM when configured."""
-        with patch('web.services.operation_runner.get_time_format', return_value='12h'):
+        with patch('core.activity.get_time_format', return_value='12h'):
             fa = FileActivity(
                 timestamp=datetime(2026, 1, 15, 14, 30, 5),
                 action="Cached",
@@ -74,7 +74,7 @@ class TestFileActivity:
 
     def test_zero_size_dash_display(self):
         """Zero-byte files show dash instead of '0 B'."""
-        with patch('web.services.operation_runner.get_time_format', return_value='24h'):
+        with patch('core.activity.get_time_format', return_value='24h'):
             fa = FileActivity(
                 timestamp=datetime.now(),
                 action="Protected",
@@ -87,7 +87,7 @@ class TestFileActivity:
 
     def test_all_fields_present(self):
         """to_dict() includes all required fields."""
-        with patch('web.services.operation_runner.get_time_format', return_value='24h'):
+        with patch('core.activity.get_time_format', return_value='24h'):
             fa = FileActivity(
                 timestamp=datetime.now(),
                 action="Cached",
@@ -110,7 +110,7 @@ class TestLoadActivity:
 
     def test_missing_file_returns_empty(self, tmp_path):
         """Returns empty list when activity file doesn't exist."""
-        with patch('web.services.operation_runner.ACTIVITY_FILE', tmp_path / "nope.json"):
+        with patch('core.activity.ACTIVITY_FILE', tmp_path / "nope.json"):
             result = load_activity()
         assert result == []
 
@@ -118,7 +118,7 @@ class TestLoadActivity:
         """Returns empty list when activity file is empty."""
         f = tmp_path / "activity.json"
         f.write_text("")
-        with patch('web.services.operation_runner.ACTIVITY_FILE', f):
+        with patch('core.activity.ACTIVITY_FILE', f):
             result = load_activity()
         assert result == []
 
@@ -132,8 +132,8 @@ class TestLoadActivity:
         f = tmp_path / "activity.json"
         f.write_text(json.dumps(data, indent=2))
 
-        with patch('web.services.operation_runner.ACTIVITY_FILE', f):
-            with patch('web.services.operation_runner._get_activity_retention_hours', return_value=24):
+        with patch('core.activity.ACTIVITY_FILE', f):
+            with patch('core.activity._get_activity_retention_hours', return_value=24):
                 result = load_activity()
 
         assert len(result) == 2
@@ -150,8 +150,8 @@ class TestLoadActivity:
         f = tmp_path / "activity.json"
         f.write_text(json.dumps(data, indent=2))
 
-        with patch('web.services.operation_runner.ACTIVITY_FILE', f):
-            with patch('web.services.operation_runner._get_activity_retention_hours', return_value=24):
+        with patch('core.activity.ACTIVITY_FILE', f):
+            with patch('core.activity._get_activity_retention_hours', return_value=24):
                 result = load_activity()
 
         assert len(result) == 1
@@ -168,8 +168,8 @@ class TestLoadActivity:
         f = tmp_path / "activity.json"
         f.write_text(json.dumps(data, indent=2))
 
-        with patch('web.services.operation_runner.ACTIVITY_FILE', f):
-            with patch('web.services.operation_runner._get_activity_retention_hours', return_value=24):
+        with patch('core.activity.ACTIVITY_FILE', f):
+            with patch('core.activity._get_activity_retention_hours', return_value=24):
                 result = load_activity()
 
         assert len(result) == 1
@@ -180,7 +180,7 @@ class TestLoadActivity:
         f = tmp_path / "activity.json"
         f.write_text("{ not valid json }")
 
-        with patch('web.services.operation_runner.ACTIVITY_FILE', f):
+        with patch('core.activity.ACTIVITY_FILE', f):
             result = load_activity()
 
         assert result == []
@@ -196,8 +196,8 @@ class TestLoadActivity:
         f = tmp_path / "activity.json"
         f.write_text(json.dumps(data, indent=2))
 
-        with patch('web.services.operation_runner.ACTIVITY_FILE', f):
-            with patch('web.services.operation_runner._get_activity_retention_hours', return_value=24):
+        with patch('core.activity.ACTIVITY_FILE', f):
+            with patch('core.activity._get_activity_retention_hours', return_value=24):
                 result = load_activity()
 
         assert result[0].filename == "newest.mkv"
@@ -214,8 +214,8 @@ class TestLoadActivity:
         f = tmp_path / "activity.json"
         f.write_text(json.dumps(data, indent=2))
 
-        with patch('web.services.operation_runner.ACTIVITY_FILE', f):
-            with patch('web.services.operation_runner._get_activity_retention_hours', return_value=9999):
+        with patch('core.activity.ACTIVITY_FILE', f):
+            with patch('core.activity._get_activity_retention_hours', return_value=9999):
                 result = load_activity()
 
         assert len(result) == MAX_RECENT_ACTIVITY
@@ -235,8 +235,8 @@ class TestSaveActivity:
             FileActivity(timestamp=datetime.now(), action="Cached", filename="a.mkv", size_bytes=100),
         ]
 
-        with patch('web.services.operation_runner.ACTIVITY_FILE', f):
-            with patch('web.services.operation_runner._get_activity_retention_hours', return_value=24):
+        with patch('core.activity.ACTIVITY_FILE', f):
+            with patch('core.activity._get_activity_retention_hours', return_value=24):
                 save_activity(activities)
 
         content = f.read_text()
@@ -255,8 +255,8 @@ class TestSaveActivity:
             FileActivity(timestamp=now - timedelta(hours=48), action="Cached", filename="old.mkv"),
         ]
 
-        with patch('web.services.operation_runner.ACTIVITY_FILE', f):
-            with patch('web.services.operation_runner._get_activity_retention_hours', return_value=24):
+        with patch('core.activity.ACTIVITY_FILE', f):
+            with patch('core.activity._get_activity_retention_hours', return_value=24):
                 save_activity(activities)
 
         data = json.loads(f.read_text())
@@ -270,8 +270,8 @@ class TestSaveActivity:
             FileActivity(timestamp=datetime.now(), action="Cached", filename="a.mkv"),
         ]
 
-        with patch('web.services.operation_runner.ACTIVITY_FILE', f):
-            with patch('web.services.operation_runner._get_activity_retention_hours', return_value=24):
+        with patch('core.activity.ACTIVITY_FILE', f):
+            with patch('core.activity._get_activity_retention_hours', return_value=24):
                 save_activity(activities)
 
         assert f.exists()
@@ -290,8 +290,8 @@ class TestSaveActivity:
             ),
         ]
 
-        with patch('web.services.operation_runner.ACTIVITY_FILE', f):
-            with patch('web.services.operation_runner._get_activity_retention_hours', return_value=24):
+        with patch('core.activity.ACTIVITY_FILE', f):
+            with patch('core.activity._get_activity_retention_hours', return_value=24):
                 save_activity(original)
                 loaded = load_activity()
 
@@ -322,13 +322,13 @@ class TestMergePattern:
         existing = [
             FileActivity(timestamp=now - timedelta(seconds=10), action="Cached", filename="writer_a.mkv"),
         ]
-        with patch('web.services.operation_runner.ACTIVITY_FILE', f):
-            with patch('web.services.operation_runner._get_activity_retention_hours', return_value=24):
+        with patch('core.activity.ACTIVITY_FILE', f):
+            with patch('core.activity._get_activity_retention_hours', return_value=24):
                 save_activity(existing)
 
         # Writer B loads, adds entry, saves
-        with patch('web.services.operation_runner.ACTIVITY_FILE', f):
-            with patch('web.services.operation_runner._get_activity_retention_hours', return_value=24):
+        with patch('core.activity.ACTIVITY_FILE', f):
+            with patch('core.activity._get_activity_retention_hours', return_value=24):
                 loaded = load_activity()
                 loaded.append(FileActivity(
                     timestamp=now, action="Restored", filename="writer_b.mkv",
@@ -356,8 +356,8 @@ class TestMergePattern:
             for i in range(MAX_RECENT_ACTIVITY)
         ]
 
-        with patch('web.services.operation_runner.ACTIVITY_FILE', f):
-            with patch('web.services.operation_runner._get_activity_retention_hours', return_value=9999):
+        with patch('core.activity.ACTIVITY_FILE', f):
+            with patch('core.activity._get_activity_retention_hours', return_value=9999):
                 save_activity(existing)
 
                 # Load, add one more, save
@@ -399,7 +399,7 @@ class TestSaveActivityAtomicity:
             size_bytes=100,
         )
 
-        with patch('web.services.operation_runner.ACTIVITY_FILE', activity_file), \
+        with patch('core.activity.ACTIVITY_FILE', activity_file), \
              patch('web.services.operation_runner._load_activity_unlocked', return_value=[]) as mock_load, \
              patch('web.services.operation_runner._save_activity_unlocked') as mock_save, \
              patch('web.services.operation_runner.load_activity', return_value=[]):
@@ -441,9 +441,9 @@ class TestLastRunSummaryAtomicWrite:
 
         summary_file = tmp_path / "last_run_summary.json"
 
-        with patch('web.services.operation_runner.load_activity', return_value=[]), \
-             patch('web.services.operation_runner.LAST_RUN_SUMMARY_FILE', summary_file), \
-             patch('web.services.operation_runner.save_json_atomically') as mock_atomic:
+        with patch('core.activity.load_activity', return_value=[]), \
+             patch('core.activity.LAST_RUN_SUMMARY_FILE', summary_file), \
+             patch('core.activity.save_json_atomically') as mock_atomic:
             runner = OperationRunner()
             runner._current_result = OperationResult(
                 state=OperationState.COMPLETED,
