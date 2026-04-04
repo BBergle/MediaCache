@@ -190,9 +190,11 @@ class OperationRunner:
             "bytes_restored_so_far": 0,
             "last_completed_file": "",
             "error_count": 0,
+            "error_messages": [],
             "recent_logs": [],
             "recent_files": [],
             "started_at": None,
+            "dry_run": False,
         }
 
         try:
@@ -227,6 +229,12 @@ class OperationRunner:
             all_logs = []
             current_operation = None
 
+            # Detect dry run from early log lines (appears near header)
+            for line in run_lines[:20]:
+                if 'DRY RUN' in line or '--dry-run' in line or 'dry_run' in line:
+                    result["dry_run"] = True
+                    break
+
             for line in run_lines:
                 line = line.rstrip('\n')
                 if not line.strip():
@@ -241,15 +249,18 @@ class OperationRunner:
 
                 all_logs.append(line)
 
-                # Detect errors
+                # Detect errors and capture messages
                 if ' - ERROR - ' in line or ' - CRITICAL - ' in line:
                     result["error_count"] += 1
+                    if len(result["error_messages"]) < 10:
+                        result["error_messages"].append(clean_msg.strip())
 
                 # Detect phase transitions (reuse same markers)
                 for marker, phase_key, phase_display in self._PHASE_MARKERS:
                     if marker in clean_msg:
                         result["phase"] = phase_key
-                        result["current_phase_display"] = phase_display
+                        prefix = "Dry Run: " if result["dry_run"] else ""
+                        result["current_phase_display"] = prefix + phase_display
                         break
 
                 # Extract file count totals
@@ -290,11 +301,17 @@ class OperationRunner:
                         result["files_restored_so_far"] += 1
                         result["bytes_restored_so_far"] += size_bytes
 
+                    # Look up users from trackers (same as web runner)
+                    users = []
+                    if action == "Cached":
+                        users = self._get_users_for_file(filename)
+
                     result["last_completed_file"] = filename
                     result["recent_files"].insert(0, {
                         "action": action,
                         "filename": filename,
                         "size": format_bytes(size_bytes) if size_bytes else "",
+                        "users": users,
                     })
 
             # Trim recent files to last 8
@@ -329,6 +346,8 @@ class OperationRunner:
         log_state = self._parse_external_log()
         self._external_log_state = log_state
 
+        is_dry_run = log_state["dry_run"]
+
         # Calculate elapsed time
         elapsed = 0
         started_at = log_state.get("started_at")
@@ -357,7 +376,7 @@ class OperationRunner:
             "is_running": True,
             "external": True,
             "external_pid": pid,
-            "dry_run": False,
+            "dry_run": is_dry_run,
             "started_at": started_at.isoformat() if started_at else None,
             "completed_at": None,
             "duration_seconds": 0,
@@ -396,6 +415,7 @@ class OperationRunner:
         files_restored = log_state["files_restored_so_far"]
         bytes_cached = log_state["bytes_cached_so_far"]
         bytes_restored = log_state["bytes_restored_so_far"]
+        is_dry_run = log_state["dry_run"]
 
         # Calculate duration from log timestamps
         duration = 0
@@ -403,13 +423,16 @@ class OperationRunner:
         if started_at:
             duration = (datetime.now() - started_at).total_seconds()
 
-        message = f"Completed: {files_cached} cached, {files_restored} restored ({self._format_duration(duration)})"
+        if is_dry_run:
+            message = f"Dry run completed in {self._format_duration(duration)}"
+        else:
+            message = f"Completed: {files_cached} cached, {files_restored} restored ({self._format_duration(duration)})"
 
         return {
             "state": "completed",
             "is_running": False,
             "external": True,
-            "dry_run": False,
+            "dry_run": is_dry_run,
             "started_at": started_at.isoformat() if started_at else None,
             "completed_at": datetime.now().isoformat(),
             "duration_seconds": round(duration, 1),
@@ -422,7 +445,7 @@ class OperationRunner:
             "bytes_restored_display": self._format_bytes(bytes_restored) if bytes_restored > 0 else "",
             "error_message": None,
             "error_count": log_state["error_count"],
-            "error_messages": [],
+            "error_messages": log_state["error_messages"][:5],
             "was_stopped": False,
             "recent_files": log_state["recent_files"],
             "message": message,
