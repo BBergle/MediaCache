@@ -3,6 +3,7 @@ Main PlexCache application.
 Orchestrates all components and provides the main business logic.
 """
 
+import signal
 import sys
 import time
 import logging
@@ -126,6 +127,11 @@ class PlexCacheApp:
                 logging.critical("Another instance of PlexCache is already running. Exiting.")
                 print("ERROR: Another instance of PlexCache is already running. Exiting.")
                 return
+
+            # Register SIGTERM handler for graceful stop (allows web UI to stop CLI runs)
+            def _sigterm_handler(signum, frame):
+                self.request_stop()
+            signal.signal(signal.SIGTERM, _sigterm_handler)
 
             # Wait for Unraid mover to finish (prevents race condition)
             if self._is_mover_running():

@@ -772,13 +772,11 @@ function dismissMaintCompletionBanner() {
                 <a href="/logs?live=true" class="di-dismiss" title="View logs" onclick="event.stopPropagation();" style="text-decoration: none;">
                     <i data-lucide="file-text" style="width: 14px; height: 14px;"></i>
                 </a>
-                {% if not is_external %}
                 <button class="di-stop" title="Stop"
                         hx-post="/operations/stop" hx-target="#global-operation-banner" hx-swap="innerHTML"
                         onclick="event.stopPropagation()">
                     <div class="di-stop__inner"></div>
                 </button>
-                {% endif %}
                 <button class="di-dismiss" title="Minimize" onclick="event.stopPropagation(); diMinimize();">&minus;</button>
             </div>
         </div>
