@@ -1265,7 +1265,7 @@ textarea {
 
 .user-list-header {
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     padding: 0.625rem 1rem;
     background: rgba(0, 0, 0, 0.2);
     border-bottom: 1px solid var(--plex-border);
