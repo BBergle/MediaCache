@@ -344,7 +344,7 @@ def save_user_settings(request: Request, form_data: ImmutableMultiDict = Depends
         watchlist_days_str = form_data.get(f"watchlist_days_{title}", "").strip()
         if watchlist_days_str:
             try:
-                user["watchlist_retention_days"] = float(watchlist_days_str)
+                user["watchlist_retention_days"] = int(watchlist_days_str)
             except ValueError:
                 user.pop("watchlist_retention_days", None)
         else:
