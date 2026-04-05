@@ -62,7 +62,7 @@
                     <span class="monitor-col">
                         <input type="number" name="watchlist_days_{{ user.title }}"
                                value="{{ user.watchlist_retention_days if user.watchlist_retention_days is defined and user.watchlist_retention_days is not none else '' }}"
-                               placeholder="{{ settings.watchlist_retention_days|default(0) or 'off' }}"
+                               placeholder="{{ settings.watchlist_retention_days|default(0)|int or 'off' }}"
                                min="0" max="9999" class="monitor-input"
                                title="Watchlist retention days (blank = {{ settings.watchlist_retention_days|default(0) or 'off' }} global default)">
                     </span>
