@@ -1005,6 +1005,9 @@ class PlexCacheApp:
 
         # Populate OnDeck tracker with user info and episode metadata using modified paths
         for item in ondeck_items_list:
+            if self.should_stop:
+                logging.info("Operation stopped during media processing")
+                return
             real_path = plex_to_real.get(item.file_path, item.file_path)
             self.ondeck_tracker.update_entry(
                 real_path,
@@ -1192,6 +1195,9 @@ class PlexCacheApp:
             ))
 
             for item in fetched_watchlist:
+                if self.should_stop:
+                    logging.info("Operation stopped during watchlist processing")
+                    return result_set
                 file_path, username, watchlisted_at, episode_info, rating_key = item
 
                 # Update watchlist tracker with timestamp and rating_key
@@ -1205,6 +1211,10 @@ class PlexCacheApp:
 
                 result_set.add(file_path)
                 plex_path_to_info[file_path] = episode_info
+
+            if self.should_stop:
+                logging.info("Operation stopped during watchlist processing")
+                return result_set
 
             # --- Remote users via RSS ---
             if self.config_manager.cache.remote_watchlist_toggle and self.config_manager.cache.remote_watchlist_rss_url:
@@ -1224,6 +1234,9 @@ class PlexCacheApp:
                     logging.debug(f"Found {len(remote_items)} remote watchlist items from RSS")
                     rss_expired_count = 0
                     for item in remote_items:
+                        if self.should_stop:
+                            logging.info("Operation stopped during watchlist processing")
+                            return result_set
                         file_path, username, watchlisted_at, episode_info, rating_key = item
                         # Update tracker (RSS items use pubDate from feed)
                         self.watchlist_tracker.update_entry(file_path, username, watchlisted_at, rating_key=rating_key)
