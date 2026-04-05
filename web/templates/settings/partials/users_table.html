@@ -2,10 +2,20 @@
 <div class="user-list user-list-scrollable">
     <div class="user-list-header">
         <span class="user-col">User</span>
-        <span class="toggle-col">OnDeck</span>
-        <span class="toggle-col">Watchlist</span>
-        <span class="monitor-col" title="OnDeck monitoring window per user (blank = global default)">OnDeck Days</span>
-        <span class="monitor-col" title="Watchlist retention per user (blank = global default)">Watchlist Days</span>
+        <span class="user-col-group">
+            <span class="user-col-group__label">Sources</span>
+            <span class="user-col-group__cols">
+                <span class="toggle-col">OnDeck</span>
+                <span class="toggle-col">Watchlist</span>
+            </span>
+        </span>
+        <span class="user-col-group">
+            <span class="user-col-group__label">Monitoring Days</span>
+            <span class="user-col-group__cols">
+                <span class="monitor-col" title="OnDeck monitoring window per user (blank = global default)">OnDeck</span>
+                <span class="monitor-col" title="Watchlist retention per user (blank = global default)">Watchlist</span>
+            </span>
+        </span>
         <span class="token-status-col">Token</span>
     </div>
     <div class="user-list-body">
@@ -22,36 +32,40 @@
                         <span class="badge badge-warning">Remote</span>
                     {% endif %}
                 </span>
-                <span class="toggle-col">
-                    <label class="toggle-switch">
-                        <input type="checkbox" name="include_ondeck_{{ user.title }}" value="on"
-                               {% if not user.skip_ondeck %}checked{% endif %}
-                               {% if user.is_admin %}disabled checked{% endif %}>
-                        <span class="toggle-slider"></span>
-                    </label>
+                <span class="user-col-group">
+                    <span class="toggle-col">
+                        <label class="toggle-switch">
+                            <input type="checkbox" name="include_ondeck_{{ user.title }}" value="on"
+                                   {% if not user.skip_ondeck %}checked{% endif %}
+                                   {% if user.is_admin %}disabled checked{% endif %}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </span>
+                    <span class="toggle-col" style="position: relative;">
+                        <label class="toggle-switch" {% if not user.is_local %}title="Remote users use RSS feed"{% endif %}>
+                            <input type="checkbox" name="include_watchlist_{{ user.title }}" value="on"
+                                   {% if not user.skip_watchlist %}checked{% endif %}
+                                   {% if user.is_admin %}disabled checked{% endif %}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                        {% if not user.is_local %}<span class="text-muted" style="font-size: 0.65rem; position: absolute; right: -2px; top: 50%; transform: translateY(-50%);">RSS</span>{% endif %}
+                    </span>
                 </span>
-                <span class="toggle-col" style="position: relative;">
-                    <label class="toggle-switch" {% if not user.is_local %}title="Remote users use RSS feed"{% endif %}>
-                        <input type="checkbox" name="include_watchlist_{{ user.title }}" value="on"
-                               {% if not user.skip_watchlist %}checked{% endif %}
-                               {% if user.is_admin %}disabled checked{% endif %}>
-                        <span class="toggle-slider"></span>
-                    </label>
-                    {% if not user.is_local %}<span class="text-muted" style="font-size: 0.65rem; position: absolute; right: -2px; top: 50%; transform: translateY(-50%);">RSS</span>{% endif %}
-                </span>
-                <span class="monitor-col">
-                    <input type="number" name="ondeck_days_{{ user.title }}"
-                           value="{{ user.days_to_monitor if user.days_to_monitor is defined and user.days_to_monitor is not none else '' }}"
-                           placeholder="{{ settings.days_to_monitor|default(183) }}"
-                           min="1" max="9999" class="monitor-input"
-                           title="OnDeck days to monitor (blank = {{ settings.days_to_monitor|default(183) }}d global default)">
-                </span>
-                <span class="monitor-col">
-                    <input type="number" name="watchlist_days_{{ user.title }}"
-                           value="{{ user.watchlist_retention_days if user.watchlist_retention_days is defined and user.watchlist_retention_days is not none else '' }}"
-                           placeholder="{{ settings.watchlist_retention_days|default(0) or 'off' }}"
-                           min="0" max="9999" class="monitor-input"
-                           title="Watchlist retention days (blank = {{ settings.watchlist_retention_days|default(0) or 'off' }} global default)">
+                <span class="user-col-group">
+                    <span class="monitor-col">
+                        <input type="number" name="ondeck_days_{{ user.title }}"
+                               value="{{ user.days_to_monitor if user.days_to_monitor is defined and user.days_to_monitor is not none else '' }}"
+                               placeholder="{{ settings.days_to_monitor|default(183) }}"
+                               min="1" max="9999" class="monitor-input"
+                               title="OnDeck days to monitor (blank = {{ settings.days_to_monitor|default(183) }}d global default)">
+                    </span>
+                    <span class="monitor-col">
+                        <input type="number" name="watchlist_days_{{ user.title }}"
+                               value="{{ user.watchlist_retention_days if user.watchlist_retention_days is defined and user.watchlist_retention_days is not none else '' }}"
+                               placeholder="{{ settings.watchlist_retention_days|default(0) or 'off' }}"
+                               min="0" max="9999" class="monitor-input"
+                               title="Watchlist retention days (blank = {{ settings.watchlist_retention_days|default(0) or 'off' }} global default)">
+                    </span>
                 </span>
                 <span class="token-status-col" {% if not user.is_admin %}onclick="toggleTokenPanel({{ loop.index }})"{% endif %}>
                     {% if user.is_admin %}

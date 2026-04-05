@@ -1304,6 +1304,38 @@ textarea {
     color: var(--plex-text);
 }
 
+.user-col-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.user-col-group__label {
+    font-size: 0.65rem;
+    color: var(--plex-text-muted);
+    opacity: 0.7;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.25rem;
+}
+
+.user-col-group__cols {
+    display: flex;
+    align-items: center;
+}
+
+.user-col-group + .user-col-group {
+    margin-left: 0.5rem;
+    padding-left: 0.75rem;
+    border-left: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* In data rows, groups are horizontal only (no label) */
+.user-row .user-col-group {
+    flex-direction: row;
+}
+
 .toggle-col {
     width: 80px;
     text-align: center;
