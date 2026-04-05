@@ -204,31 +204,45 @@ class OperationRunner:
             if not self._log_file.exists():
                 return result
 
-            # Read last 200KB of log file (enough for a full run)
+            # Find the run header by reading backwards in chunks.
+            # Verbose logs can be 600KB+; reading everything every 3s is wasteful.
             file_size = self._log_file.stat().st_size
-            read_start = max(0, file_size - 200 * 1024)
+            chunk_size = 256 * 1024  # 256KB chunks
+            header_offset = None
 
+            with open(self._log_file, 'rb') as f:
+                pos = file_size
+                while pos > 0:
+                    read_from = max(0, pos - chunk_size)
+                    f.seek(read_from)
+                    chunk = f.read(pos - read_from)
+                    # Search for last occurrence of header in this chunk
+                    idx = chunk.rfind(b'=== PlexCache')
+                    if idx != -1:
+                        header_offset = read_from + idx
+                        break
+                    # Overlap by 50 bytes to catch headers split across chunks
+                    pos = read_from + 50
+
+            if header_offset is None:
+                return result
+
+            # Read from the header to end of file
             with open(self._log_file, 'r', encoding='utf-8', errors='replace') as f:
-                if read_start > 0:
-                    f.seek(read_start)
-                    f.readline()  # Skip partial line
-                lines = f.readlines()
+                f.seek(header_offset)
+                # Back up to start of line
+                if header_offset > 0:
+                    f.seek(header_offset - min(header_offset, 200))
+                    partial = f.read(min(header_offset, 200))
+                    newline_pos = partial.rfind('\n')
+                    if newline_pos != -1:
+                        f.seek(header_offset - min(header_offset, 200) + newline_pos + 1)
+                    else:
+                        f.seek(header_offset)
+                run_lines = f.readlines()
 
-            if not lines:
+            if not run_lines:
                 return result
-
-            # Find the last run header
-            run_start_idx = None
-            for i in range(len(lines) - 1, -1, -1):
-                if '=== PlexCache' in lines[i]:
-                    run_start_idx = i
-                    break
-
-            if run_start_idx is None:
-                return result
-
-            # Parse lines from the run header onwards
-            run_lines = lines[run_start_idx:]
             all_logs = []
             current_operation = None
             # Track [Copying] → [Cached]/[Restored] to derive active files
