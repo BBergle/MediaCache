@@ -1310,6 +1310,40 @@ textarea {
     flex-shrink: 0;
 }
 
+.monitor-col {
+    width: 80px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.monitor-input {
+    width: 58px;
+    padding: 0.2rem 0.3rem;
+    font-size: 0.75rem;
+    text-align: center;
+    background: var(--plex-bg-input, rgba(0, 0, 0, 0.3));
+    border: 1px solid var(--plex-border);
+    border-radius: var(--plex-radius-sm);
+    color: var(--plex-text);
+    -moz-appearance: textfield;
+}
+
+.monitor-input::-webkit-outer-spin-button,
+.monitor-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.monitor-input::placeholder {
+    color: var(--plex-text-muted);
+    opacity: 0.6;
+}
+
+.monitor-input:focus {
+    outline: none;
+    border-color: var(--plex-accent);
+}
+
 /* Token status column in user rows */
 .token-status-col {
     width: 70px;

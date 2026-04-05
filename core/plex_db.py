@@ -23,7 +23,8 @@ def fetch_on_deck_from_db(
     valid_sections: List[int],
     days_to_monitor: int,
     number_episodes: int,
-    user_id_map: Dict[str, int]
+    user_id_map: Dict[str, int],
+    per_user_days: Optional[Dict[str, int]] = None
 ) -> List[OnDeckItem]:
     """Fetch OnDeck items for shared users by querying the Plex SQLite database.
 
@@ -71,9 +72,10 @@ def fetch_on_deck_from_db(
         # Resolve usernames to account IDs
         resolved_ids = _resolve_account_ids(conn, usernames, user_id_map)
 
-        cutoff = datetime.now() - timedelta(days=days_to_monitor)
-
         for username in usernames:
+            user_days = (per_user_days or {}).get(username, days_to_monitor)
+            cutoff = datetime.now() - timedelta(days=user_days)
+
             account_id = resolved_ids.get(username)
             if account_id is None:
                 logging.warning(f"[DB FALLBACK] Could not resolve account ID for {username} — skipping")

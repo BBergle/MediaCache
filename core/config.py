@@ -110,6 +110,8 @@ class PlexConfig:
     skip_watchlist: Optional[List[str]] = None
     users: Optional[List[dict]] = None  # User list from settings file
     plex_db_path: str = ""  # Path to Plex SQLite DB (fallback for tokenless shared users)
+    per_user_ondeck_days: Optional[Dict[str, int]] = None  # Per-user OnDeck days_to_monitor overrides
+    per_user_watchlist_days: Optional[Dict[str, float]] = None  # Per-user watchlist retention overrides
 
     def __post_init__(self):
         if self.valid_sections is None:
@@ -387,9 +389,11 @@ class ConfigManager:
         # Auto-migrate legacy top-level skip lists to per-user booleans
         self._migrate_skip_lists_to_per_user()
 
-        # Build skip lists from per-user booleans (single source of truth)
+        # Build skip lists and per-user overrides from per-user settings (single source of truth)
         self.plex.skip_ondeck = []
         self.plex.skip_watchlist = []
+        per_user_ondeck_days = {}
+        per_user_watchlist_days = {}
         for u in self.plex.users:
             if u.get('skip_ondeck'):
                 if u.get('title'):
@@ -401,6 +405,15 @@ class ConfigManager:
                     self.plex.skip_watchlist.append(u['title'])
                 if u.get('token'):
                     self.plex.skip_watchlist.append(u['token'])
+            # Per-user monitoring duration overrides
+            title = u.get('title')
+            if title:
+                if u.get('days_to_monitor') is not None:
+                    per_user_ondeck_days[title] = int(u['days_to_monitor'])
+                if u.get('watchlist_retention_days') is not None:
+                    per_user_watchlist_days[title] = float(u['watchlist_retention_days'])
+        self.plex.per_user_ondeck_days = per_user_ondeck_days or None
+        self.plex.per_user_watchlist_days = per_user_watchlist_days or None
     
     def _load_cache_config(self) -> None:
         """Load cache-related configuration."""
