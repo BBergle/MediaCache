@@ -987,7 +987,8 @@ class PlexCacheApp:
             self.config_manager.plex.days_to_monitor,
             self.config_manager.plex.number_episodes,
             self.config_manager.plex.users_toggle,
-            self.config_manager.plex.skip_ondeck or []
+            self.config_manager.plex.skip_ondeck or [],
+            per_user_days=self.config_manager.plex.per_user_ondeck_days
         )
 
         # Extract just the file paths for path modification
@@ -1035,10 +1036,11 @@ class PlexCacheApp:
         # Check OnDeck retention — expired items are no longer protected
         ondeck_retention_days = self.config_manager.cache.ondeck_retention_days
         if ondeck_retention_days > 0:
+            per_user_od_days = self.config_manager.plex.per_user_ondeck_days or {}
             expired = set()
             for item in ondeck_items_list:
                 real_path = plex_to_real.get(item.file_path, item.file_path)
-                if self.ondeck_tracker.is_expired(real_path, ondeck_retention_days):
+                if self.ondeck_tracker.is_expired(real_path, ondeck_retention_days, per_user_days=per_user_od_days):
                     expired.add(real_path)
             if expired:
                 modified_ondeck = [p for p in modified_ondeck if p not in expired]
@@ -1177,6 +1179,7 @@ class PlexCacheApp:
         result_set = set()
         plex_path_to_info = {}  # Maps plex paths to episode_info for media_info_map
         retention_days = self.config_manager.cache.watchlist_retention_days
+        per_user_wl_days = self.config_manager.plex.per_user_watchlist_days or {}
         expired_count = 0
 
         try:
@@ -1207,9 +1210,10 @@ class PlexCacheApp:
                 # Update watchlist tracker with timestamp and rating_key
                 self.watchlist_tracker.update_entry(file_path, username, watchlisted_at, rating_key=rating_key)
 
-                # Check watchlist retention (skip expired items)
-                if retention_days > 0:
-                    if self.watchlist_tracker.is_expired(file_path, retention_days):
+                # Check watchlist retention (skip expired items, with per-user override)
+                user_retention = per_user_wl_days.get(username, retention_days)
+                if user_retention > 0:
+                    if self.watchlist_tracker.is_expired(file_path, user_retention, username=username):
                         expired_count += 1
                         continue
 
@@ -1245,9 +1249,10 @@ class PlexCacheApp:
                         # Update tracker (RSS items use pubDate from feed)
                         self.watchlist_tracker.update_entry(file_path, username, watchlisted_at, rating_key=rating_key)
 
-                        # Check watchlist retention (skip expired items)
-                        if retention_days > 0:
-                            if self.watchlist_tracker.is_expired(file_path, retention_days):
+                        # Check watchlist retention (skip expired items, with per-user override)
+                        rss_user_retention = per_user_wl_days.get(username, retention_days)
+                        if rss_user_retention > 0:
+                            if self.watchlist_tracker.is_expired(file_path, rss_user_retention, username=username):
                                 rss_expired_count += 1
                                 continue
 

@@ -927,7 +927,9 @@ class SettingsService:
             "remote_watchlist_toggle": raw.get("remote_watchlist_toggle", False),
             "remote_watchlist_rss_url": raw.get("remote_watchlist_rss_url", ""),
             "auth_link_enabled": raw.get("auth_link_enabled", False),
-            "plex_db_path": raw.get("plex_db_path", "")
+            "plex_db_path": raw.get("plex_db_path", ""),
+            "days_to_monitor": raw.get("days_to_monitor", 183),
+            "watchlist_retention_days": raw.get("watchlist_retention_days", 0)
         }
 
     def sync_users_from_plex(self) -> Dict[str, Any]:
@@ -961,7 +963,7 @@ class SettingsService:
             # Add main account (admin)
             admin_name = account.title or account.username
             admin_existing = existing_users.get(admin_name, {})
-            new_users.append({
+            admin_entry = {
                 "title": admin_name,
                 "id": getattr(account, "id", None),
                 "uuid": getattr(account, "uuid", None),
@@ -970,7 +972,13 @@ class SettingsService:
                 "is_admin": True,
                 "skip_ondeck": admin_existing.get("skip_ondeck", False),
                 "skip_watchlist": admin_existing.get("skip_watchlist", False)
-            })
+            }
+            # Preserve per-user monitoring overrides across sync
+            if "days_to_monitor" in admin_existing:
+                admin_entry["days_to_monitor"] = admin_existing["days_to_monitor"]
+            if "watchlist_retention_days" in admin_existing:
+                admin_entry["watchlist_retention_days"] = admin_existing["watchlist_retention_days"]
+            new_users.append(admin_entry)
             if admin_name not in existing_users:
                 added_count += 1
 
@@ -1009,7 +1017,7 @@ class SettingsService:
                 if name not in existing_users:
                     added_count += 1
 
-                new_users.append({
+                user_entry = {
                     "title": name,
                     "id": user_id,
                     "uuid": user_uuid,
@@ -1018,7 +1026,13 @@ class SettingsService:
                     "is_admin": False,
                     "skip_ondeck": skip_ondeck,
                     "skip_watchlist": skip_watchlist
-                })
+                }
+                # Preserve per-user monitoring overrides across sync
+                if "days_to_monitor" in existing:
+                    user_entry["days_to_monitor"] = existing["days_to_monitor"]
+                if "watchlist_retention_days" in existing:
+                    user_entry["watchlist_retention_days"] = existing["watchlist_retention_days"]
+                new_users.append(user_entry)
 
             # Detect removed users
             current_names = {u["title"] for u in new_users}

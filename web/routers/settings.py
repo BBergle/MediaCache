@@ -331,6 +331,25 @@ def save_user_settings(request: Request, form_data: ImmutableMultiDict = Depends
         if form_token:
             user["token"] = form_token
 
+        # Per-user monitoring duration overrides (blank = use global default)
+        ondeck_days_str = form_data.get(f"ondeck_days_{title}", "").strip()
+        if ondeck_days_str:
+            try:
+                user["days_to_monitor"] = int(ondeck_days_str)
+            except ValueError:
+                user.pop("days_to_monitor", None)
+        else:
+            user.pop("days_to_monitor", None)
+
+        watchlist_days_str = form_data.get(f"watchlist_days_{title}", "").strip()
+        if watchlist_days_str:
+            try:
+                user["watchlist_retention_days"] = int(watchlist_days_str)
+            except ValueError:
+                user.pop("watchlist_retention_days", None)
+        else:
+            user.pop("watchlist_retention_days", None)
+
     # Get toggle settings
     users_toggle = form_data.get("users_toggle") == "on"
     remote_watchlist_toggle = form_data.get("remote_watchlist_toggle") == "on"

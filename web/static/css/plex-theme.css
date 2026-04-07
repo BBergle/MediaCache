@@ -1246,6 +1246,10 @@ textarea {
     overflow-y: auto;
 }
 
+.user-list-scrollable .user-list-header {
+    padding-right: calc(1rem + 15px); /* account for scrollbar width */
+}
+
 #user-list-container {
     position: relative;
 }
@@ -1261,7 +1265,7 @@ textarea {
 
 .user-list-header {
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     padding: 0.625rem 1rem;
     background: rgba(0, 0, 0, 0.2);
     border-bottom: 1px solid var(--plex-border);
@@ -1304,10 +1308,76 @@ textarea {
     color: var(--plex-text);
 }
 
+.user-col-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.user-col-group__label {
+    font-size: 0.65rem;
+    color: var(--plex-text-muted);
+    opacity: 0.7;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.25rem;
+}
+
+.user-col-group__cols {
+    display: flex;
+    align-items: center;
+}
+
+.user-col-group + .user-col-group {
+    margin-left: 0.5rem;
+    padding-left: 0.75rem;
+    border-left: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* In data rows, groups are horizontal only (no label) */
+.user-row .user-col-group {
+    flex-direction: row;
+}
+
 .toggle-col {
     width: 80px;
     text-align: center;
     flex-shrink: 0;
+}
+
+.monitor-col {
+    width: 90px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.monitor-input {
+    width: 58px;
+    padding: 0.2rem 0.3rem;
+    font-size: 0.75rem;
+    text-align: center;
+    background: var(--plex-bg-input, rgba(0, 0, 0, 0.3));
+    border: 1px solid var(--plex-border);
+    border-radius: var(--plex-radius-sm);
+    color: var(--plex-text);
+    -moz-appearance: textfield;
+}
+
+.monitor-input::-webkit-outer-spin-button,
+.monitor-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.monitor-input::placeholder {
+    color: var(--plex-text-muted);
+    opacity: 0.6;
+}
+
+.monitor-input:focus {
+    outline: none;
+    border-color: var(--plex-accent);
 }
 
 /* Token status column in user rows */

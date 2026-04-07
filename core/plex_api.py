@@ -646,7 +646,8 @@ class PlexManager:
         return self.plex.sessions()
     
     def get_on_deck_media(self, valid_sections: List[int], days_to_monitor: int,
-                        number_episodes: int, users_toggle: bool, skip_ondeck: List[str]) -> List[OnDeckItem]:
+                        number_episodes: int, users_toggle: bool, skip_ondeck: List[str],
+                        per_user_days: Optional[Dict[str, int]] = None) -> List[OnDeckItem]:
         """Get OnDeck media files using cached tokens (no plex.tv API calls).
 
         Returns:
@@ -685,13 +686,14 @@ class PlexManager:
 
         # Fetch concurrently
         with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = {
-                executor.submit(
+            futures = {}
+            for user in users_to_fetch:
+                username = user.title if user else "main"
+                user_days = (per_user_days or {}).get(username, days_to_monitor)
+                futures[executor.submit(
                     self._fetch_user_on_deck_media,
-                    valid_sections, days_to_monitor, number_episodes, user
-                )
-                for user in users_to_fetch
-            }
+                    valid_sections, user_days, number_episodes, user
+                )] = username
 
             for future in as_completed(futures):
                 try:
@@ -721,7 +723,8 @@ class PlexManager:
                         valid_sections=valid_sections,
                         days_to_monitor=days_to_monitor,
                         number_episodes=number_episodes,
-                        user_id_map=self._user_account_ids
+                        user_id_map=self._user_account_ids,
+                        per_user_days=per_user_days
                     )
                     on_deck_files.extend(db_items)
                 except Exception as e:
