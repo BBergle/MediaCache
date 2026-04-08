@@ -141,7 +141,7 @@ docker run -d \
 ### Unraid Installation
 
 1. Go to **Docker** → **Add Container**
-2. Set **Repository**: `ghcr.io/studionirin/plexcache-d`
+2. Set **Repository**: `ghcr.io/studionirin/plexcache-d:latest`
 3. Add required volume mappings:
    - `/config` → `/mnt/user/appdata/plexcache`
    - `/mnt/cache` → `/mnt/cache` (read-write)
