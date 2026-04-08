@@ -42,6 +42,8 @@ import sys
 import time
 from collections import Counter
 
+SCRIPT_VERSION = "2"
+
 # Resolve the PlexCache-R project root. The script may be run from:
 #   - tools/ inside a checkout  -> parent dir
 #   - /tmp (after curl) in the Docker container -> /app
@@ -145,6 +147,7 @@ def main():
     print("=" * 72)
     print("PlexCache-R audit diagnostic")
     print("=" * 72)
+    print(f"Script ver:   {SCRIPT_VERSION}")
     print(f"Project root: {PROJECT_ROOT}")
     print(f"Python:       {sys.version.split()[0]}")
     print(f"Started:      {time.strftime('%Y-%m-%d %H:%M:%S')}")
