@@ -148,7 +148,8 @@ docker run -d \
    - `/mnt/user0` → `/mnt/user0` (read-write)
    - `/mnt/user` → `/mnt/user` (read-write)
 4. Set **WebUI**: `http://[IP]:[PORT:5757]`
-5. Click **Apply**
+5. Set a port mapping: `5757:5757`
+6. Click **Apply**
 
 > **Important:** All media paths (`/mnt/cache`, `/mnt/user0`, `/mnt/user`) must be **read-write** for PlexCache-D to move files between cache and array.
 
