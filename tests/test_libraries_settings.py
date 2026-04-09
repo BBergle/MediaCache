@@ -360,3 +360,67 @@ class TestDetectPathMappingHealthIssues:
             ],
         })
         assert settings_service.detect_path_mapping_health_issues() == []
+
+
+class TestWarnCachePath:
+    """Tests for SettingsService.warn_cache_path() (issue #136).
+
+    warn_cache_path is advisory only — it returns a human-readable warning
+    string for risky values but never blocks. Callers log the warning and
+    continue. Some valid configs (dedicated cache drive with flat layout,
+    containers without /mnt/cache mounted) legitimately use these values.
+    """
+
+    def test_valid_cache_subdir_returns_none(self, settings_service):
+        assert settings_service.warn_cache_path("/mnt/cache/Media/Movies/") is None
+
+    def test_valid_cache_subdir_no_trailing_slash(self, settings_service):
+        assert settings_service.warn_cache_path("/mnt/cache/Movies") is None
+
+    def test_empty_returns_none(self, settings_service):
+        assert settings_service.warn_cache_path("") is None
+        assert settings_service.warn_cache_path(None) is None
+
+    def test_warns_bare_cache_root(self, settings_service):
+        warning = settings_service.warn_cache_path("/mnt/cache/")
+        assert warning is not None
+        assert "bare cache drive root" in warning
+        # Warning should explain the risk AND note the legitimate use case
+        assert "can be ignored" in warning or "If you really" in warning or "that's not what you want" in warning
+
+    def test_warns_bare_cache_root_no_slash(self, settings_service):
+        warning = settings_service.warn_cache_path("/mnt/cache")
+        assert warning is not None
+        assert "bare cache drive root" in warning
+
+    def test_warns_fuse_path_with_suggestion(self, settings_service):
+        warning = settings_service.warn_cache_path("/mnt/user/Media/Movies/")
+        assert warning is not None
+        assert "FUSE" in warning
+        assert "/mnt/cache/Media/Movies/" in warning  # suggestion
+
+    def test_allows_mnt_user0(self, settings_service):
+        """/mnt/user0/ is array-direct, not FUSE — no warning."""
+        assert settings_service.warn_cache_path("/mnt/user0/Media/Movies/") is None
+
+    def test_allows_non_mnt_paths(self, settings_service):
+        """Custom mount points (e.g. non-Unraid) aren't our concern."""
+        assert settings_service.warn_cache_path("/custom/mount/media/") is None
+
+
+class TestAutoFillMappingCachePath:
+    """Tests for the auto_fill_mapping cache_path tightening (issue #136)."""
+
+    def test_auto_fill_ignores_fuse_cache_dir(self, settings_service):
+        """If settings.cache_dir is a FUSE path, fall back to /mnt/cache."""
+        library = {"id": 1, "title": "Movies", "type": "movie", "locations": ["/data/Movies"]}
+        settings = {"cache_dir": "/mnt/user/Media"}
+        result = settings_service.auto_fill_mapping(library, "/data/Movies/", settings)
+        assert result["cache_path"] == "/mnt/cache/Movies/"
+        assert not result["cache_path"].startswith("/mnt/user/")
+
+    def test_auto_fill_ignores_mnt_user_cache_dir(self, settings_service):
+        library = {"id": 1, "title": "Movies", "type": "movie", "locations": ["/data/Movies"]}
+        settings = {"cache_dir": "/mnt/user"}
+        result = settings_service.auto_fill_mapping(library, "/data/Movies/", settings)
+        assert result["cache_path"].startswith("/mnt/cache/")
