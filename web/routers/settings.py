@@ -431,6 +431,13 @@ def add_path_mapping(
     """Add a new path mapping"""
     settings_service = get_settings_service()
 
+    # Non-blocking: log a warning if the cache_path looks risky (issue #136).
+    # The dashboard health banner will also surface it until the user fixes
+    # it or decides to keep it.
+    cache_path_warning = settings_service.warn_cache_path(cache_path)
+    if cache_path_warning:
+        logger.warning("add_path_mapping: %s — %s", name, cache_path_warning)
+
     # Default host_cache_path to cache_path if not provided
     effective_host_cache_path = host_cache_path if host_cache_path else cache_path
 
@@ -476,6 +483,11 @@ def update_path_mapping(
 ):
     """Update an existing path mapping"""
     settings_service = get_settings_service()
+
+    # Non-blocking: log a warning if the cache_path looks risky (issue #136).
+    cache_path_warning = settings_service.warn_cache_path(cache_path)
+    if cache_path_warning:
+        logger.warning("update_path_mapping[%d]: %s — %s", index, name, cache_path_warning)
 
     # Default host_cache_path to cache_path if not provided
     effective_host_cache_path = host_cache_path if host_cache_path else cache_path

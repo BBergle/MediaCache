@@ -269,6 +269,119 @@ class SettingsService:
                 section_ids.add(int(sid))
         raw["valid_sections"] = sorted(section_ids)
 
+    @staticmethod
+    def warn_cache_path(cache_path: Optional[str]) -> Optional[str]:
+        """Return a warning string if a cache_path looks risky, else None.
+
+        Non-blocking — this helper only produces human-readable warnings.
+        Callers log them or surface them in the UI. Some configurations
+        (e.g. a dedicated cache drive with media at the drive root, or a
+        container where /mnt/cache isn't mounted and /mnt/user is the only
+        available path) legitimately use these values, so we never reject.
+
+        The two patterns that *usually* indicate misconfiguration from
+        issue #136:
+        - cache_path set to the bare cache drive root. Makes audits walk
+          the entire SSD including appdata, docker, and other shares.
+        - cache_path pointing at the Unraid FUSE merged view
+          ('/mnt/user/...', but not /mnt/user0/). Audits go through shfs
+          and the cache-vs-array logic can't distinguish the two layers.
+        """
+        if not cache_path:
+            return None
+
+        normalized = cache_path.rstrip("/\\")
+        if not normalized:
+            return None
+
+        if normalized == "/mnt/cache":
+            return (
+                "cache_path is set to the bare cache drive root. On most "
+                "Unraid setups this makes audits walk your entire cache "
+                "drive (appdata, docker, every share). If that's not what "
+                "you want, point it at a specific media subfolder like "
+                "/mnt/cache/Media/Movies/."
+            )
+
+        if normalized.startswith("/mnt/user/") and not normalized.startswith("/mnt/user0/"):
+            suggestion = normalized.replace("/mnt/user/", "/mnt/cache/", 1)
+            return (
+                f"cache_path points at the Unraid FUSE merged view "
+                f"('{cache_path}'). This is slower than a cache-direct "
+                f"path and can confuse cache-vs-array detection during "
+                f"audits. If /mnt/cache/ is available in your container, "
+                f"consider using '{suggestion}/' instead."
+            )
+
+        return None
+
+    def detect_path_mapping_health_issues(self) -> List[Dict[str, str]]:
+        """Scan path_mappings for known-bad configurations and return warnings.
+
+        Issue #136 taught us two failure modes that crater audit performance
+        on Unraid:
+
+        1. A legacy-migrated "Default (migrated)" mapping whose cache_path
+           is the bare cache drive root ("/mnt/cache/" or "/mnt/cache").
+           This makes MaintenanceService.run_full_audit() walk the entire
+           SSD — appdata, docker, every other share.
+
+        2. A mapping whose cache_path points at the Unraid FUSE merged view
+           ("/mnt/user/...") instead of the cache drive directly
+           ("/mnt/cache/..."). FUSE reads are 3-5x slower than cache-direct
+           and the audit's cache-vs-array logic can't distinguish the two.
+
+        Returns a list of dicts with keys: mapping_name, issue_type, message.
+        Empty list means no issues detected. This is a read-only check —
+        fixes must be performed by the user via Settings -> Libraries.
+        """
+        raw = self._load_raw()
+        mappings = raw.get("path_mappings", [])
+        issues: List[Dict[str, str]] = []
+
+        for m in mappings:
+            if not m.get("enabled", True):
+                continue
+
+            name = m.get("name", "(unnamed)")
+            cache_path = (m.get("cache_path") or "").rstrip("/\\")
+
+            if not cache_path:
+                continue
+
+            # Issue 1: bare cache drive root
+            if cache_path in ("/mnt/cache", "/mnt/cache/"):
+                issues.append({
+                    "mapping_name": name,
+                    "issue_type": "cache_root",
+                    "message": (
+                        f"Mapping '{name}' has cache_path set to the cache drive "
+                        f"root ('{m.get('cache_path')}'). On most Unraid setups "
+                        f"this makes audits walk your entire cache drive "
+                        f"(appdata, docker, every share). If you meant to target "
+                        f"a specific media subfolder, edit it in Settings → "
+                        f"Libraries. If you really do store media at the drive "
+                        f"root, this warning can be ignored."
+                    ),
+                })
+                continue
+
+            # Issue 2: FUSE path instead of cache-direct
+            if cache_path.startswith("/mnt/user/") and not cache_path.startswith("/mnt/user0/"):
+                issues.append({
+                    "mapping_name": name,
+                    "issue_type": "fuse_cache_path",
+                    "message": (
+                        f"Mapping '{name}' has cache_path set to a FUSE merged "
+                        f"path ('{m.get('cache_path')}'). This is slower than "
+                        f"cache-direct and can confuse audit logic. If /mnt/cache "
+                        f"is mounted in your container, consider switching to "
+                        f"'/mnt/cache/...' in Settings → Libraries → {name}."
+                    ),
+                })
+
+        return issues
+
     def migrate_link_path_mappings_to_libraries(self) -> bool:
         """One-time migration: match existing path_mappings to Plex libraries by plex_path.
 
@@ -325,7 +438,16 @@ class SettingsService:
         Returns:
             Dict suitable for adding to path_mappings
         """
-        cache_dir = settings.get("cache_dir", "/mnt/cache").rstrip("/")
+        # cache_dir is used as the cache-drive root for derivation. We never
+        # allow it to be a /mnt/user/ (FUSE) path — that's the bug condition
+        # in issue #136 where a misconfigured legacy setting produced
+        # cache_path='/mnt/user/Media/Movies/' instead of '/mnt/cache/...'.
+        raw_cache_dir = settings.get("cache_dir", "/mnt/cache").rstrip("/")
+        if raw_cache_dir.startswith("/mnt/user/") or raw_cache_dir in ("/mnt/user", "/mnt/user0"):
+            cache_dir = "/mnt/cache"
+        else:
+            cache_dir = raw_cache_dir or "/mnt/cache"
+
         plex_path = plex_location if plex_location.endswith("/") else plex_location + "/"
 
         # Derive display name — use folder name suffix when library has multiple locations

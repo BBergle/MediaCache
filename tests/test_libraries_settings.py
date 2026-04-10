@@ -253,3 +253,174 @@ class TestToggleLibrary:
         assert len(raw["path_mappings"]) == 1  # Not deleted
         assert raw["path_mappings"][0]["enabled"] is False
         assert raw["valid_sections"] == []  # Removed from valid_sections
+
+
+class TestDetectPathMappingHealthIssues:
+    """Tests for detect_path_mapping_health_issues() (issue #136 regression)."""
+
+    def test_healthy_config_returns_empty(self, settings_service):
+        _write_settings(settings_service, {
+            "path_mappings": [
+                {"name": "Movies", "plex_path": "/data/Movies/",
+                 "real_path": "/mnt/user/Media/Movies/",
+                 "cache_path": "/mnt/cache/Media/Movies/",
+                 "cacheable": True, "enabled": True, "section_id": 1},
+            ],
+        })
+        assert settings_service.detect_path_mapping_health_issues() == []
+
+    def test_detects_bare_cache_root(self, settings_service):
+        """The 'Default (migrated)' case from issue #136."""
+        _write_settings(settings_service, {
+            "path_mappings": [
+                {"name": "Default (migrated)", "plex_path": "/data/",
+                 "real_path": "/mnt/user/Media/",
+                 "cache_path": "/mnt/cache/",
+                 "cacheable": True, "enabled": True, "section_id": None},
+            ],
+        })
+        issues = settings_service.detect_path_mapping_health_issues()
+        assert len(issues) == 1
+        assert issues[0]["issue_type"] == "cache_root"
+        assert issues[0]["mapping_name"] == "Default (migrated)"
+        assert "/mnt/cache/" in issues[0]["message"]
+
+    def test_detects_fuse_cache_path(self, settings_service):
+        """The 'Movies → /mnt/user/...' case from issue #136."""
+        _write_settings(settings_service, {
+            "path_mappings": [
+                {"name": "Movies", "plex_path": "/data/Movies/",
+                 "real_path": "/mnt/user/Media/Movies/",
+                 "cache_path": "/mnt/user/Media/Movies/",
+                 "cacheable": True, "enabled": True, "section_id": 4},
+            ],
+        })
+        issues = settings_service.detect_path_mapping_health_issues()
+        assert len(issues) == 1
+        assert issues[0]["issue_type"] == "fuse_cache_path"
+        assert issues[0]["mapping_name"] == "Movies"
+
+    def test_mnt_user0_not_flagged_as_fuse(self, settings_service):
+        """`/mnt/user0/` is the array-direct path, not FUSE — don't flag it."""
+        _write_settings(settings_service, {
+            "path_mappings": [
+                {"name": "Edge", "plex_path": "/data/X/",
+                 "real_path": "/mnt/user0/X/",
+                 "cache_path": "/mnt/user0/X/",
+                 "cacheable": True, "enabled": True, "section_id": 99},
+            ],
+        })
+        assert settings_service.detect_path_mapping_health_issues() == []
+
+    def test_disabled_mappings_skipped(self, settings_service):
+        _write_settings(settings_service, {
+            "path_mappings": [
+                {"name": "Default (migrated)", "plex_path": "/data/",
+                 "real_path": "/mnt/user/Media/",
+                 "cache_path": "/mnt/cache/",
+                 "cacheable": True, "enabled": False, "section_id": None},
+            ],
+        })
+        assert settings_service.detect_path_mapping_health_issues() == []
+
+    def test_multiple_issues_reported(self, settings_service):
+        """Exact replica of the issue #136 reporter's config."""
+        _write_settings(settings_service, {
+            "path_mappings": [
+                {"name": "Default (migrated)", "plex_path": "/data/",
+                 "real_path": "/mnt/user/Media/",
+                 "cache_path": "/mnt/cache/",
+                 "cacheable": True, "enabled": True, "section_id": None},
+                {"name": "Novelas", "plex_path": "/data/Novelas/",
+                 "real_path": "/mnt/user/Media/Novelas/",
+                 "cache_path": "/mnt/cache/Media/Novelas/",
+                 "cacheable": True, "enabled": True, "section_id": 13},
+                {"name": "TV Shows", "plex_path": "/data/TV Shows/",
+                 "real_path": "/mnt/user/Media/TV Shows/",
+                 "cache_path": "/mnt/cache/Media/TV Shows/",
+                 "cacheable": True, "enabled": True, "section_id": 3},
+                {"name": "Movies", "plex_path": "/data/Movies/",
+                 "real_path": "/mnt/user/Media/Movies/",
+                 "cache_path": "/mnt/user/Media/Movies/",
+                 "cacheable": True, "enabled": True, "section_id": 4},
+            ],
+        })
+        issues = settings_service.detect_path_mapping_health_issues()
+        assert len(issues) == 2
+        issue_types = {i["issue_type"] for i in issues}
+        assert issue_types == {"cache_root", "fuse_cache_path"}
+
+    def test_empty_cache_path_ignored(self, settings_service):
+        _write_settings(settings_service, {
+            "path_mappings": [
+                {"name": "Passthrough", "plex_path": "/data/X/",
+                 "real_path": "/mnt/user/X/",
+                 "cache_path": "",
+                 "cacheable": True, "enabled": True, "section_id": 1},
+            ],
+        })
+        assert settings_service.detect_path_mapping_health_issues() == []
+
+
+class TestWarnCachePath:
+    """Tests for SettingsService.warn_cache_path() (issue #136).
+
+    warn_cache_path is advisory only — it returns a human-readable warning
+    string for risky values but never blocks. Callers log the warning and
+    continue. Some valid configs (dedicated cache drive with flat layout,
+    containers without /mnt/cache mounted) legitimately use these values.
+    """
+
+    def test_valid_cache_subdir_returns_none(self, settings_service):
+        assert settings_service.warn_cache_path("/mnt/cache/Media/Movies/") is None
+
+    def test_valid_cache_subdir_no_trailing_slash(self, settings_service):
+        assert settings_service.warn_cache_path("/mnt/cache/Movies") is None
+
+    def test_empty_returns_none(self, settings_service):
+        assert settings_service.warn_cache_path("") is None
+        assert settings_service.warn_cache_path(None) is None
+
+    def test_warns_bare_cache_root(self, settings_service):
+        warning = settings_service.warn_cache_path("/mnt/cache/")
+        assert warning is not None
+        assert "bare cache drive root" in warning
+        # Warning should explain the risk AND note the legitimate use case
+        assert "can be ignored" in warning or "If you really" in warning or "that's not what you want" in warning
+
+    def test_warns_bare_cache_root_no_slash(self, settings_service):
+        warning = settings_service.warn_cache_path("/mnt/cache")
+        assert warning is not None
+        assert "bare cache drive root" in warning
+
+    def test_warns_fuse_path_with_suggestion(self, settings_service):
+        warning = settings_service.warn_cache_path("/mnt/user/Media/Movies/")
+        assert warning is not None
+        assert "FUSE" in warning
+        assert "/mnt/cache/Media/Movies/" in warning  # suggestion
+
+    def test_allows_mnt_user0(self, settings_service):
+        """/mnt/user0/ is array-direct, not FUSE — no warning."""
+        assert settings_service.warn_cache_path("/mnt/user0/Media/Movies/") is None
+
+    def test_allows_non_mnt_paths(self, settings_service):
+        """Custom mount points (e.g. non-Unraid) aren't our concern."""
+        assert settings_service.warn_cache_path("/custom/mount/media/") is None
+
+
+class TestAutoFillMappingCachePath:
+    """Tests for the auto_fill_mapping cache_path tightening (issue #136)."""
+
+    def test_auto_fill_ignores_fuse_cache_dir(self, settings_service):
+        """If settings.cache_dir is a FUSE path, fall back to /mnt/cache."""
+        library = {"id": 1, "title": "Movies", "type": "movie", "locations": ["/data/Movies"]}
+        settings = {"cache_dir": "/mnt/user/Media"}
+        result = settings_service.auto_fill_mapping(library, "/data/Movies/", settings)
+        assert result["cache_path"] == "/mnt/cache/Movies/"
+        assert not result["cache_path"].startswith("/mnt/user/")
+
+    def test_auto_fill_ignores_mnt_user_cache_dir(self, settings_service):
+        library = {"id": 1, "title": "Movies", "type": "movie", "locations": ["/data/Movies"]}
+        settings = {"cache_dir": "/mnt/user"}
+        result = settings_service.auto_fill_mapping(library, "/data/Movies/", settings)
+        assert result["cache_path"].startswith("/mnt/cache/")
