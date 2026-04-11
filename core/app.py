@@ -2642,6 +2642,10 @@ class PlexCacheApp:
     def _get_fifo_eviction_candidates(self, cached_files: List[str], target_bytes: int) -> List[str]:
         """Get files to evict using FIFO (oldest first) strategy.
 
+        Pinned files are excluded explicitly — the priority-manager protection
+        only applies to smart eviction, so FIFO needs its own set-membership
+        check here or pinned items would be silently evicted by age.
+
         Args:
             cached_files: List of cache file paths.
             target_bytes: Amount of space needed to free.
@@ -2651,6 +2655,11 @@ class PlexCacheApp:
         """
         if target_bytes <= 0:
             return []
+
+        # Filter out pinned files before sorting by age. Pinned files are never
+        # FIFO eviction candidates regardless of how long they have been cached.
+        if self.pinned_paths_cache:
+            cached_files = [f for f in cached_files if f not in self.pinned_paths_cache]
 
         # Get files with their cache timestamps, sorted by oldest first
         files_with_age = []
@@ -2778,10 +2787,15 @@ class PlexCacheApp:
             # Use the freshly fetched watchlist items (already filtered for retention in _process_watchlist)
             current_watchlist_items = getattr(self, 'watchlist_items', set())
 
-            # Get files that should be moved back to array (tracked by exclude file)
-            # Pass files_to_skip to prevent removing active session files from exclude list
+            # Get files that should be moved back to array (tracked by exclude file).
+            # Pass files_to_skip to prevent removing active session files from exclude list.
+            # Pass pinned_paths_cache so pinned items (videos + sidecars) are never
+            # moved back regardless of OnDeck/Watchlist state.
             files_to_move_back, stale_entries, move_back_exclude_paths = self.file_filter.get_files_to_move_back_to_array(
-                current_ondeck_items, current_watchlist_items, set(self.files_to_skip)
+                current_ondeck_items,
+                current_watchlist_items,
+                set(self.files_to_skip),
+                current_pinned_cache_paths=self.pinned_paths_cache,
             )
 
             if files_to_move_back:

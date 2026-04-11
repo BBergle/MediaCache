@@ -3542,12 +3542,15 @@ class FileFilter:
 
     def get_files_to_move_back_to_array(self, current_ondeck_items: Set[str],
                                        current_watchlist_items: Set[str],
-                                       files_to_skip: Optional[Set[str]] = None) -> Tuple[List[str], List[str], List[str]]:
+                                       files_to_skip: Optional[Set[str]] = None,
+                                       current_pinned_cache_paths: Optional[Set[str]] = None) -> Tuple[List[str], List[str], List[str]]:
         """Get files in cache that should be moved back to array because they're no longer needed.
 
         For TV shows: Episodes before the OnDeck episode are considered watched and will be moved back.
                       Episodes >= OnDeck episode are kept (they're upcoming/current).
         For movies: Moved back when no longer on OnDeck or watchlist.
+        For pinned items: Never moved back regardless of OnDeck/watchlist state (takes
+                          precedence over every other keep/move decision in this method).
 
         Retention period applies uniformly to all cached files to protect against
         accidental unwatching or watchlist removal.
@@ -3557,6 +3560,10 @@ class FileFilter:
             current_watchlist_items: Set of file paths currently on watchlist.
             files_to_skip: Optional set of file paths to skip (e.g., active sessions).
                           These files will NOT be marked for removal from exclude list.
+            current_pinned_cache_paths: Optional set of cache-form paths for files
+                          protected by user-pinned media. Pinned files (videos AND
+                          their sidecars) are always kept in cache even if they are
+                          not on any user's OnDeck or watchlist.
 
         Returns:
             Tuple of (files_to_move_back, stale_entries, move_back_exclude_paths):
@@ -3585,6 +3592,8 @@ class FileFilter:
                 current_ondeck_items, current_watchlist_items
             )
 
+            pinned_set = current_pinned_cache_paths or set()
+
             # Check each cached file
             for cache_file in cache_files:
                 # In Docker, exclude file has host paths but we need container paths to check existence
@@ -3592,6 +3601,16 @@ class FileFilter:
                 if not os.path.exists(check_path):
                     logging.debug(f"Cache file no longer exists: {cache_file}")
                     stale_entries.append(cache_file)
+                    continue
+
+                # Pinned files (videos + sidecars) are always kept — short-circuit
+                # before any OnDeck/Watchlist/retention check. This is the second
+                # mandatory integration point for pinned-media protection (the first
+                # is the priority manager). Without this, pinned files that are NOT
+                # on any user's OnDeck/Watchlist would be silently moved back to the
+                # array on the next run even though smart/FIFO eviction protects them.
+                if check_path in pinned_set:
+                    logging.debug(f"Keeping pinned file in cache: {os.path.basename(cache_file)}")
                     continue
 
                 # Try stored metadata first for classification (check_path matches timestamp tracker keys)
