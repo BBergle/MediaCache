@@ -1,12 +1,17 @@
 {#
-  Pin picker search results.
-  Phase 4 will polish markup/layout; this stub is the minimal shape
-  consumed by tests.
+  Pin picker search results. Rendered into #pinned-search-results via
+  HTMX innerHTML swap on keyup of the search input.
 #}
-<div class="pinned-search-results" id="pinned-search-results">
+<div class="pinned-search-results">
     {% if not results %}
-        <p class="text-muted" style="font-size: 0.85rem; margin: 0.5rem 0;">
-            {% if query %}No results for "{{ query }}"{% else %}Type to search{% endif %}
+        <p style="color: var(--plex-text-muted); font-size: 0.85rem; margin: 0.5rem 0; padding: 0.5rem 0.25rem;">
+            {% if query %}
+                <i data-lucide="search-x" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 0.25rem;"></i>
+                No results for "{{ query }}"
+            {% else %}
+                <i data-lucide="search" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 0.25rem;"></i>
+                Type to search Plex for movies and shows to pin.
+            {% endif %}
         </p>
     {% else %}
         <ul class="pinned-result-list" style="list-style: none; padding: 0; margin: 0;">
@@ -16,3 +21,6 @@
         </ul>
     {% endif %}
 </div>
+<script>
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+</script>

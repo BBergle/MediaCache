@@ -2,41 +2,79 @@
   Currently pinned media — chip list + budget summary.
   ``pins`` is from PinnedService.list_pins_with_metadata().
   ``budget`` is from PinnedService.budget_check().
+
+  This partial is loaded by the #pinned-chip-list-container on page load
+  and on the "pinned-updated" event emitted by the toggle route. The chip
+  × button posts with hx-swap="none"; the HX-Trigger header refreshes this
+  partial via the event listener on the outer container.
 #}
 <div class="pinned-chip-list" id="pinned-chip-list">
     {% if pins %}
-    <div class="pinned-budget-summary text-muted" style="font-size: 0.85rem; margin-bottom: 0.5rem;">
-        {{ pins | length }} pin{% if pins | length != 1 %}s{% endif %},
+    <div class="pinned-budget-summary"
+         style="display: flex; align-items: center; gap: 0.5rem; color: var(--plex-text-muted); font-size: 0.85rem; margin-bottom: 0.75rem;">
+        <i data-lucide="pin" style="width: 14px; height: 14px;"></i>
+        <span>
+            <strong style="color: var(--plex-text);">{{ pins | length }}</strong>
+            pin{% if pins | length != 1 %}s{% endif %}
+        </span>
         {% if budget.effective_budget_bytes %}
-            using {{ (budget.total_pinned_bytes / budget.effective_budget_bytes * 100) | round(1) }}%
-            of pinned budget
+            <span>•</span>
+            <span>
+                using
+                <strong style="color: var(--plex-text);">{{ (budget.total_pinned_bytes / budget.effective_budget_bytes * 100) | round(1) }}%</strong>
+                of pinned budget
+            </span>
         {% else %}
-            no budget limit set
+            <span>•</span>
+            <span>no cache budget set</span>
+        {% endif %}
+        {% if budget.over_budget %}
+            <span class="badge" style="background: var(--plex-error); color: white; padding: 0.1rem 0.5rem; border-radius: var(--plex-radius-sm); font-size: 0.7rem;">
+                OVER BUDGET
+            </span>
         {% endif %}
     </div>
     <ul class="pinned-chips" style="list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 0.5rem;">
         {% for pin in pins %}
         <li class="pinned-chip" data-rating-key="{{ pin.rating_key }}" data-type="{{ pin.type }}"
-            style="display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.6rem; background: var(--plex-bg-darker); border-radius: var(--plex-radius-sm); font-size: 0.85rem;">
-            <span class="pinned-chip-type badge badge-secondary" style="font-size: 0.7rem;">{{ pin.type }}</span>
-            <span class="pinned-chip-title">{{ pin.title }}</span>
-            <span class="pinned-chip-size text-muted">{{ pin.size_display }}</span>
+            style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.45rem 0.65rem; background: var(--plex-bg-darker); border: 1px solid rgba(255,255,255,0.08); border-radius: var(--plex-radius-sm); font-size: 0.85rem;">
+            <span class="pinned-chip-type-icon" title="{{ pin.type | capitalize }}"
+                  style="display: inline-flex; width: 18px; height: 18px; align-items: center; justify-content: center; color: var(--plex-text-muted);">
+                {% if pin.type == "show" %}
+                    <i data-lucide="tv" style="width: 14px; height: 14px;"></i>
+                {% elif pin.type == "season" %}
+                    <i data-lucide="layers" style="width: 14px; height: 14px;"></i>
+                {% elif pin.type == "episode" %}
+                    <i data-lucide="play" style="width: 14px; height: 14px;"></i>
+                {% else %}
+                    <i data-lucide="film" style="width: 14px; height: 14px;"></i>
+                {% endif %}
+            </span>
+            <span class="pinned-chip-title" style="color: var(--plex-text);">{{ pin.title }}</span>
+            {% if pin.size_bytes %}
+                <span class="pinned-chip-size" style="color: var(--plex-text-muted); font-variant-numeric: tabular-nums;">{{ pin.size_display }}</span>
+            {% endif %}
             <form hx-post="/api/pinned/toggle"
-                  hx-target="#pinned-chip-list"
-                  hx-swap="outerHTML"
+                  hx-swap="none"
                   style="margin: 0;">
                 <input type="hidden" name="rating_key" value="{{ pin.rating_key }}">
                 <input type="hidden" name="pin_type" value="{{ pin.type }}">
                 <input type="hidden" name="title" value="{{ pin.title }}">
-                <button type="submit" class="btn-icon" title="Unpin" aria-label="Unpin"
-                        style="background: none; border: 0; cursor: pointer; color: inherit;">
-                    &times;
+                <button type="submit" class="btn-icon" title="Unpin" aria-label="Unpin {{ pin.title }}"
+                        style="background: none; border: 0; cursor: pointer; color: var(--plex-text-muted); padding: 0.1rem 0.2rem; display: inline-flex; align-items: center;">
+                    <i data-lucide="x" style="width: 14px; height: 14px;"></i>
                 </button>
             </form>
         </li>
         {% endfor %}
     </ul>
     {% else %}
-    <p class="text-muted" style="font-size: 0.85rem; margin: 0;">No pinned media yet.</p>
+    <p style="color: var(--plex-text-muted); font-size: 0.85rem; margin: 0; padding: 0.5rem 0.25rem;">
+        <i data-lucide="pin-off" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 0.25rem;"></i>
+        No pinned media yet. Search above and pin a movie, show, season, or episode to keep it always cached.
+    </p>
     {% endif %}
 </div>
+<script>
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+</script>

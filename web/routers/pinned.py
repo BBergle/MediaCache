@@ -56,7 +56,13 @@ def pinned_toggle(
     pin_type: str = Form(...),
     title: str = Form(""),
 ):
-    """Toggle a pin. Returns a button partial + inline error on budget overrun."""
+    """Toggle a pin. Returns a button partial + inline error on budget overrun.
+
+    On a successful pin/unpin (no error), the response sets an ``HX-Trigger:
+    pinned-updated`` header so the Currently Pinned chip list in the Settings
+    UI auto-refreshes. The chip list's ``×`` button uses ``hx-swap="none"``
+    and relies on this trigger to stay in sync.
+    """
     service = get_pinned_service()
     result = service.toggle_pin(rating_key, pin_type, title)
 
@@ -64,7 +70,7 @@ def pinned_toggle(
     if result.get("error"):
         status = 400
 
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request,
         "settings/partials/pinned_toggle_response.html",
         {
@@ -77,6 +83,9 @@ def pinned_toggle(
         },
         status_code=status,
     )
+    if not result.get("error"):
+        response.headers["HX-Trigger"] = "pinned-updated"
+    return response
 
 
 @router.get("/list", response_class=HTMLResponse)
