@@ -1733,6 +1733,10 @@ class CachePriorityManager:
         self.eviction_min_priority = eviction_min_priority
         self.number_episodes = number_episodes
         self.active_ondeck_paths: Optional[Set[str]] = None  # Set by app when retention is enabled
+        # Cache-form paths currently pinned. None = no pins configured; empty set = pins
+        # configured but none resolve here. Files in this set always score 100 and are
+        # excluded from eviction candidates regardless of budget pressure.
+        self.active_pinned_paths: Optional[Set[str]] = None
 
     def calculate_priority(self, cache_path: str) -> int:
         """Calculate 0-100 priority score for a cached file.
@@ -1749,6 +1753,13 @@ class CachePriorityManager:
         Returns:
             Priority score between 0 and 100.
         """
+        # Pinned items are always maximum priority — skip all factor scoring.
+        # Checked before sibling delegation so pinned siblings also score 100
+        # (sibling will delegate to the pinned parent below otherwise, but this
+        # short-circuit is faster and keeps the semantics explicit).
+        if self.active_pinned_paths and cache_path in self.active_pinned_paths:
+            return 100
+
         # Associated file delegation: use parent's priority so they're evicted together
         if not is_video_file(cache_path):
             parent = self.timestamp_tracker.find_parent_video(cache_path)
@@ -1910,7 +1921,19 @@ class CachePriorityManager:
         candidates = []
         bytes_accumulated = 0
 
+        pinned_set = self.active_pinned_paths or set()
+
         for cache_path, score in priorities:
+            # Pinned files are never evicted, regardless of score. This is
+            # defense-in-depth: calculate_priority() already returns 100 for
+            # pinned items (which is above eviction_min_priority in every
+            # sensible config), but an explicit set-membership check keeps
+            # the intent grep-able and survives a hypothetical bug where a
+            # future change lowers the pinned score.
+            if cache_path in pinned_set:
+                logging.debug(f"Skipping eviction candidate (pinned): {os.path.basename(cache_path)}")
+                continue
+
             # Only evict files below minimum priority threshold
             if score >= self.eviction_min_priority:
                 logging.debug(f"Skipping eviction candidate (score {score} >= {self.eviction_min_priority}): {os.path.basename(cache_path)}")

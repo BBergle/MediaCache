@@ -1306,13 +1306,21 @@ class PlexCacheApp:
         self.pinned_items = pinned_video_paths | pinned_sibling_paths
 
         # Compute cache-form paths for EVERY pinned real path (videos + sidecars).
-        # The priority manager and FIFO eviction will consult this set in
-        # subsequent commits; populating it now means those commits only need
-        # to add the consumer side.
+        # The priority manager and FIFO eviction consult this set; both must
+        # protect sidecars as well as the primary video, or a subtitle could
+        # be evicted out from under a pinned episode.
         for real_path in self.pinned_items:
             cache_path, _ = self.file_path_modifier.convert_real_to_cache(real_path)
             if cache_path:
                 self.pinned_paths_cache.add(cache_path)
+
+        # Share the pinned cache-path set with the priority manager so that
+        # calculate_priority() returns 100 for pinned items and eviction
+        # candidate selection explicitly skips them. Defense-in-depth: even
+        # if the scoring short-circuit were removed, the candidate filter
+        # would still protect pinned files.
+        if self.priority_manager is not None:
+            self.priority_manager.active_pinned_paths = self.pinned_paths_cache
 
         # Surface count of resolved files + siblings in the standard fetch log
         logging.info(
@@ -2200,6 +2208,12 @@ class PlexCacheApp:
         Returns:
             Estimated priority score (0-100).
         """
+        # Pinned items always score maximum — mirrors CachePriorityManager.calculate_priority
+        # early-return so pinned items always pass the pre-cache priority filter, regardless
+        # of any base-score factor that might otherwise pull them below the floor.
+        if source == "pinned":
+            return 100
+
         score = 50  # Base score
 
         # Factor 1: Source Type (+15 for ondeck)
@@ -2322,7 +2336,7 @@ class PlexCacheApp:
         eviction_min_priority = self.config_manager.cache.eviction_min_priority
         filtered_files = []
         skipped_count = 0
-        skipped_by_source = {"ondeck": 0, "watchlist": 0, "unknown": 0}
+        skipped_by_source = {"ondeck": 0, "watchlist": 0, "pinned": 0, "unknown": 0}
 
         for file_path in media_files:
             source = source_map.get(file_path, "unknown")
