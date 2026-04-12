@@ -23,4 +23,23 @@
 </div>
 <script>
     if (typeof lucide !== 'undefined') lucide.createIcons();
+
+    var togglePinnedChildren = function(btn, ratingKey, level) {
+        var parent = btn.closest(level === 'show' ? '.pinned-result-row' : '.pinned-child-row');
+        var existing = parent.nextElementSibling;
+        if (existing && existing.classList.contains('pinned-children-block') &&
+            existing.getAttribute('data-parent') === ratingKey) {
+            existing.remove();
+            btn.querySelector('[data-lucide]').style.transform = '';
+            btn.classList.remove('active');
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+            return;
+        }
+        btn.querySelector('[data-lucide]').style.transform = 'rotate(180deg)';
+        btn.classList.add('active');
+        htmx.ajax('GET', '/api/pinned/expand?rating_key=' + ratingKey + '&level=' + level, {
+            target: parent,
+            swap: 'afterend'
+        });
+    };
 </script>

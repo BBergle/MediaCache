@@ -26,12 +26,10 @@
         {% endif %}
     </span>
     {% if item.type == "show" %}
-        <button type="button" class="btn btn-sm btn-secondary"
-                hx-get="/api/pinned/expand?rating_key={{ item.rating_key }}&level=show"
-                hx-target="closest .pinned-result-row"
-                hx-swap="afterend"
+        <button type="button" class="btn btn-sm btn-secondary pinned-expand-btn"
+                onclick="togglePinnedChildren(this, '{{ item.rating_key }}', 'show')"
                 title="Show seasons">
-            <i data-lucide="chevron-down" style="width: 14px; height: 14px; vertical-align: middle;"></i>
+            <i data-lucide="chevron-down" style="width: 14px; height: 14px; vertical-align: middle; transition: transform 0.2s;"></i>
             Expand
         </button>
     {% endif %}

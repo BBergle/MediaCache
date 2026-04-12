@@ -101,9 +101,7 @@ class PinnedService:
                             "title": getattr(item, "title", ""),
                             "type": result_type,
                             "year": getattr(item, "year", None),
-                            "library": getattr(
-                                getattr(item, "librarySectionTitle", None), "title", None
-                            ) or getattr(item, "librarySectionTitle", ""),
+                            "library": getattr(item, "librarySectionTitle", ""),
                             "already_pinned": self._tracker.is_pinned(
                                 str(getattr(item, "ratingKey", ""))
                             ),

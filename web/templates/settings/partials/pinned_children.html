@@ -33,12 +33,10 @@
                     {% endif %}
                 </span>
                 {% if child.type == "season" %}
-                    <button type="button" class="btn btn-sm btn-secondary"
-                            hx-get="/api/pinned/expand?rating_key={{ child.rating_key }}&level=season"
-                            hx-target="closest .pinned-child-row"
-                            hx-swap="afterend"
+                    <button type="button" class="btn btn-sm btn-secondary pinned-expand-btn"
+                            onclick="togglePinnedChildren(this, '{{ child.rating_key }}', 'season')"
                             title="Show episodes">
-                        <i data-lucide="chevron-down" style="width: 14px; height: 14px; vertical-align: middle;"></i>
+                        <i data-lucide="chevron-down" style="width: 14px; height: 14px; vertical-align: middle; transition: transform 0.2s;"></i>
                         Episodes
                     </button>
                 {% endif %}
@@ -59,3 +57,4 @@
         {% endfor %}
     </ul>
 </li>
+<script>if (typeof lucide !== 'undefined') lucide.createIcons();</script>
