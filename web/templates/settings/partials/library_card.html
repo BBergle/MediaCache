@@ -112,7 +112,8 @@
                                     <input type="text" name="real_path_{{ loop.index0 }}" value="{{ mapping.real_path }}"
                                            class="path-browse-input" required>
                                     <div class="form-hint">
-                                        The path inside this container that corresponds to Plex's <code>{{ mapping.plex_path }}</code>.
+                                        {% if is_docker %}Path as seen from <strong>inside</strong> the container. Must match a bind-mounted volume.
+                                        {% else %}The path inside this container that corresponds to Plex's <code>{{ mapping.plex_path }}</code>.{% endif %}
                                     </div>
                                 </div>
                                 <div class="form-group mb-1">
@@ -120,7 +121,8 @@
                                     <input type="text" name="cache_path_{{ loop.index0 }}" value="{{ mapping.cache_path or '' }}"
                                            class="path-browse-input">
                                     <div class="form-hint">
-                                        {% if is_unraid %}Fast drive path where cached copies are stored (e.g., <code>/mnt/cache/{{ mapping.plex_path.rstrip('/').rsplit('/', 1)[-1] }}/</code>).
+                                        {% if is_docker %}Path as seen from <strong>inside</strong> the container, not the host. If your template maps <code>/mnt/cache_nvme</code> &rarr; <code>/mnt/cache</code>, use <code>/mnt/cache/...</code> here.
+                                        {% elif is_unraid %}Fast drive path where cached copies are stored (e.g., <code>/mnt/cache/{{ mapping.plex_path.rstrip('/').rsplit('/', 1)[-1] }}/</code>).
                                         {% else %}Fast drive path where cached copies are stored.{% endif %}
                                     </div>
                                 </div>
