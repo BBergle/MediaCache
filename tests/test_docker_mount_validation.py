@@ -325,6 +325,7 @@ class TestCheckPathsGraceful:
         app.file_utils = MagicMock()
         app.config_manager = MagicMock()
         app.config_manager.cache.create_plexcached_backups = False
+        app._ensure_cache_path_exists = MagicMock()
 
         if mappings is not None:
             app.config_manager.paths.path_mappings = mappings
@@ -368,7 +369,6 @@ class TestCheckPathsGraceful:
         app = self._make_app(is_docker=True, mappings=[mapping])
         app.system_detector.is_path_bind_mounted.return_value = (True, '/mnt/cache')
         app.file_utils.check_path_exists.return_value = None
-        app._ensure_cache_path_exists = MagicMock()
 
         app._check_paths()
 
