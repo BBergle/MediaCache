@@ -2932,6 +2932,16 @@ def main():
         _run_show_mappings(config_file)
         return
 
+    # Handle pinned media CLI commands
+    list_pins = "--list-pins" in sys.argv
+    pin_key = "--pin" in sys.argv
+    unpin_key = "--unpin" in sys.argv
+    pin_by_title = "--pin-by-title" in sys.argv
+
+    if list_pins or pin_key or unpin_key or pin_by_title:
+        _run_pinned_command(config_file, verbose)
+        return
+
     app = PlexCacheApp(config_file, dry_run, quiet, verbose)
     app.run()
 
@@ -3133,6 +3143,44 @@ def _run_show_mappings(config_file: str) -> None:
     print(f"  Enabled:            {enabled_count}")
     print(f"  Cacheable:          {cacheable_count}")
     print(f"  Non-cacheable:      {non_cacheable_count} (files tracked but not cached)")
+
+
+def _run_pinned_command(config_file: str, verbose: bool = False) -> None:
+    """Handle --list-pins, --pin, --unpin, --pin-by-title CLI commands."""
+    import logging
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+
+    config_manager = ConfigManager(config_file)
+    config_manager.load_config()
+
+    from core.pinned_cli import (
+        handle_list_pins, handle_pin, handle_unpin, handle_pin_by_title,
+        extract_flag_value,
+    )
+
+    if "--list-pins" in sys.argv:
+        handle_list_pins(config_manager)
+    elif "--pin-by-title" in sys.argv:
+        query = extract_flag_value("--pin-by-title")
+        if not query:
+            print("Error: --pin-by-title requires a search query. Example: --pin-by-title \"Breaking Bad\"")
+            return
+        handle_pin_by_title(config_manager, query)
+    elif "--pin" in sys.argv:
+        rating_key = extract_flag_value("--pin")
+        if not rating_key:
+            print("Error: --pin requires a rating_key. Example: --pin 12345")
+            return
+        handle_pin(config_manager, rating_key)
+    elif "--unpin" in sys.argv:
+        rating_key = extract_flag_value("--unpin")
+        if not rating_key:
+            print("Error: --unpin requires a rating_key. Example: --unpin 12345")
+            return
+        handle_unpin(config_manager, rating_key)
 
 
 if __name__ == "__main__":
