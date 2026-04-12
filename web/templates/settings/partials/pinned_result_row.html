@@ -30,7 +30,7 @@
                 onclick="togglePinnedChildren(this, '{{ item.rating_key }}', 'show')"
                 title="Show seasons">
             <i data-lucide="chevron-down" style="width: 14px; height: 14px; vertical-align: middle; transition: transform 0.2s;"></i>
-            Expand
+            <span class="expand-label">Expand</span>
         </button>
     {% endif %}
     <form hx-post="/api/pinned/toggle"

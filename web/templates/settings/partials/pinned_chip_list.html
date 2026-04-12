@@ -68,6 +68,19 @@
         </li>
         {% endfor %}
     </ul>
+    <div style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid rgba(255,255,255,0.06);">
+        <button type="button" class="btn btn-sm btn-primary"
+                hx-post="/operations/run"
+                hx-swap="none"
+                title="Start a run to cache pinned media"
+                style="display: inline-flex; align-items: center; gap: 0.4rem;">
+            <i data-lucide="play" style="width: 14px; height: 14px;"></i>
+            Run Now to sync pinned media
+        </button>
+        <span style="color: var(--plex-text-muted); font-size: 0.8rem; margin-left: 0.5rem;">
+            Pinned items are cached during the next run.
+        </span>
+    </div>
     {% else %}
     <p style="color: var(--plex-text-muted); font-size: 0.85rem; margin: 0; padding: 0.5rem 0.25rem;">
         <i data-lucide="pin-off" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 0.25rem;"></i>
