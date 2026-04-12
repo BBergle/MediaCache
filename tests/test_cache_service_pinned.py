@@ -34,8 +34,14 @@ MOCK_SETTINGS = {
 }
 
 
-def _make_service(tmp_path, pinned_paths=None):
-    """Build a CacheService with its _get_pinned_cache_paths hook replaced."""
+def _make_service(tmp_path, pinned_paths=None, pinned_map=None):
+    """Build a CacheService with its pinned-resolution hooks replaced.
+
+    ``pinned_paths`` is a convenience for tests that only care about the
+    set membership (is_pinned true/false). ``pinned_map`` is the richer
+    form — a dict of ``cache_path → (rating_key, pin_type)`` — used by
+    tests that need the row's rating_key / pin_type to be populated.
+    """
     settings_file = tmp_path / "plexcache_settings.json"
     settings_file.write_text(json.dumps(MOCK_SETTINGS), encoding="utf-8")
 
@@ -59,7 +65,14 @@ def _make_service(tmp_path, pinned_paths=None):
     svc.ondeck_file = ondeck_file
     svc.watchlist_file = watchlist_file
 
-    svc._get_pinned_cache_paths = lambda: set(pinned_paths or ())
+    # Prefer the explicit map when given; otherwise synthesize an empty-
+    # metadata map from the set so both helpers agree on membership.
+    if pinned_map is not None:
+        fixed_map = dict(pinned_map)
+    else:
+        fixed_map = {p: (None, None) for p in (pinned_paths or ())}
+    svc._get_pinned_cache_path_map = lambda: fixed_map
+    svc._get_pinned_cache_paths = lambda: set(fixed_map.keys())
     return svc
 
 
@@ -193,3 +206,173 @@ class TestEvictFileRefusesPinned:
         # contract we test is specific: the p1 error mentions "pinned".
         errors_joined = " ".join(result["errors"])
         assert "pinned" in errors_joined.lower()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: CachedFile.rating_key + pin_type population for pin-in-row button
+# ---------------------------------------------------------------------------
+
+
+def _write_ondeck(svc, entries):
+    with open(svc.ondeck_file, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2)
+
+
+def _write_watchlist(svc, entries):
+    with open(svc.watchlist_file, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2)
+
+
+class TestCachedFileRatingKeyPopulation:
+    """Phase 5: ``CachedFile.rating_key`` + ``pin_type`` drive the
+    pin/unpin button in the Cached Files row. They must be populated
+    from OnDeck/Watchlist tracker entries (for un-pinned files) and
+    from the pinned path map (for pinned files)."""
+
+    def test_ondeck_episode_propagates_rating_key_and_episode_pin_type(self, tmp_path):
+        cache_dir = tmp_path / "cache" / "tv" / "Show"
+        episode_path = str(cache_dir / "Show - S01E05.mkv")
+        _create_video(episode_path)
+
+        svc = _make_service(tmp_path)
+        _write_exclude(svc, [episode_path])
+        _write_timestamps(svc, {
+            episode_path: {"cached_at": "2026-04-01T12:00:00", "source": "ondeck"},
+        })
+        _write_ondeck(svc, {
+            "/data/tv/Show/Show - S01E05.mkv": {
+                "users": ["Brandon"],
+                "rating_key": "12345",
+                "episode_info": {"show": "Show", "season": 1, "episode": 5},
+            },
+        })
+
+        files = svc.get_all_cached_files()
+        by_path = {f.path: f for f in files}
+        row = by_path[episode_path]
+
+        assert row.is_pinned is False
+        assert row.rating_key == "12345"
+        assert row.pin_type == "episode"
+
+    def test_ondeck_movie_without_episode_info_gets_movie_pin_type(self, tmp_path):
+        cache_dir = tmp_path / "cache" / "movies"
+        movie_path = str(cache_dir / "Movie.mkv")
+        _create_video(movie_path)
+
+        svc = _make_service(tmp_path)
+        _write_exclude(svc, [movie_path])
+        _write_timestamps(svc, {
+            movie_path: {"cached_at": "2026-04-01T12:00:00", "source": "ondeck"},
+        })
+        _write_ondeck(svc, {
+            "/data/movies/Movie.mkv": {
+                "users": ["Brandon"],
+                "rating_key": "99999",
+            },
+        })
+
+        files = svc.get_all_cached_files()
+        by_path = {f.path: f for f in files}
+        row = by_path[movie_path]
+
+        assert row.rating_key == "99999"
+        assert row.pin_type == "movie"
+
+    def test_watchlist_entry_populates_rating_key(self, tmp_path):
+        cache_dir = tmp_path / "cache" / "movies"
+        movie_path = str(cache_dir / "Watched.mkv")
+        _create_video(movie_path)
+
+        svc = _make_service(tmp_path)
+        _write_exclude(svc, [movie_path])
+        _write_timestamps(svc, {
+            movie_path: {"cached_at": "2026-04-01T12:00:00", "source": "watchlist"},
+        })
+        _write_watchlist(svc, {
+            "/data/movies/Watched.mkv": {
+                "users": ["Brandon"],
+                "rating_key": "77777",
+            },
+        })
+
+        files = svc.get_all_cached_files()
+        by_path = {f.path: f for f in files}
+        row = by_path[movie_path]
+
+        assert row.rating_key == "77777"
+        assert row.pin_type == "movie"
+        assert row.is_watchlist is True
+
+    def test_untracked_file_has_none_rating_key(self, tmp_path):
+        cache_dir = tmp_path / "cache" / "other"
+        orphan_path = str(cache_dir / "Orphan.mkv")
+        _create_video(orphan_path)
+
+        svc = _make_service(tmp_path)
+        _write_exclude(svc, [orphan_path])
+        _write_timestamps(svc, {
+            orphan_path: {"cached_at": "2026-04-01T12:00:00", "source": "unknown"},
+        })
+
+        files = svc.get_all_cached_files()
+        by_path = {f.path: f for f in files}
+        row = by_path[orphan_path]
+
+        # No OnDeck/Watchlist entry, no pin map → row can't offer a pin button
+        assert row.rating_key is None
+        assert row.pin_type is None
+
+    def test_pinned_map_overrides_tracker_rating_key(self, tmp_path):
+        """When a file is pinned, the pinned map is authoritative for the
+        unpin button — use its rating_key/pin_type, not the tracker's."""
+        cache_dir = tmp_path / "cache" / "tv" / "Show"
+        episode_path = str(cache_dir / "Show - S01E05.mkv")
+        _create_video(episode_path)
+
+        svc = _make_service(
+            tmp_path,
+            pinned_map={episode_path: ("55555", "episode")},
+        )
+        _write_exclude(svc, [episode_path])
+        _write_timestamps(svc, {
+            episode_path: {"cached_at": "2026-04-01T12:00:00", "source": "ondeck"},
+        })
+        # Tracker says rating_key=12345 but pinned map says 55555 — the
+        # pinned map wins so the unpin button targets the right item.
+        _write_ondeck(svc, {
+            "/data/tv/Show/Show - S01E05.mkv": {
+                "users": ["Brandon"],
+                "rating_key": "12345",
+                "episode_info": {"show": "Show", "season": 1, "episode": 5},
+            },
+        })
+
+        files = svc.get_all_cached_files()
+        by_path = {f.path: f for f in files}
+        row = by_path[episode_path]
+
+        assert row.is_pinned is True
+        assert row.rating_key == "55555"
+        assert row.pin_type == "episode"
+
+    def test_pinned_file_with_only_set_form_has_none_metadata(self, tmp_path):
+        """Back-compat: callers using the set-only ``pinned_paths`` shortcut
+        still get is_pinned=True, with rating_key/pin_type=None (no pin
+        button rendered — the row shows only the pinned badge)."""
+        cache_dir = tmp_path / "cache" / "movies"
+        movie_path = str(cache_dir / "Pinned.mkv")
+        _create_video(movie_path)
+
+        svc = _make_service(tmp_path, pinned_paths={movie_path})
+        _write_exclude(svc, [movie_path])
+        _write_timestamps(svc, {
+            movie_path: {"cached_at": "2026-04-01T12:00:00", "source": "pinned"},
+        })
+
+        files = svc.get_all_cached_files()
+        row = {f.path: f for f in files}[movie_path]
+
+        assert row.is_pinned is True
+        assert row.rating_key is None
+        assert row.pin_type is None

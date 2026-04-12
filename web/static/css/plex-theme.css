@@ -811,6 +811,11 @@ body {
     color: var(--plex-text-muted);
 }
 
+.badge-pinned {
+    background: rgba(229, 160, 13, 0.18);
+    color: var(--plex-orange);
+}
+
 /* Source badges column - show multiple badges inline */
 .source-badges {
     display: flex;

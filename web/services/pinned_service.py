@@ -18,7 +18,7 @@ does the grouping), so this service only exposes video cache paths.
 
 import logging
 import threading
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.pinned_media import (
     PinnedMediaTracker,
@@ -444,39 +444,50 @@ class PinnedService:
     def resolve_all_to_cache_paths(self) -> Set[str]:
         """Return the set of cache-form paths currently protected by pins.
 
-        Does NOT include sidecars — the CacheService groups sidecars under
-        their parent video, so checking the video path is sufficient.
+        Thin wrapper around ``resolve_all_to_cache_path_map`` that keeps the
+        original set-returning shape for call sites that only need the
+        membership check (simulate_eviction, evict_file, maintenance guards).
+        """
+        return set(self.resolve_all_to_cache_path_map().keys())
 
-        Hits Plex once to resolve pins, then translates plex → cache paths
-        via the configured ``path_mappings``. Returns an empty set on any
-        failure (no connection, no pins, resolver error) — callers should
-        treat "unknown" as "not pinned" rather than failing the whole page.
+    def resolve_all_to_cache_path_map(self) -> Dict[str, Tuple[str, str]]:
+        """Return ``{cache_path: (rating_key, pin_type)}`` for every pin.
+
+        Same resolve path as ``resolve_all_to_cache_paths`` but preserves the
+        rating_key and pin_type from the resolver tuples so the Cached Files
+        row UI can render a matching unpin button without re-querying Plex.
+
+        Does NOT include sidecars — the CacheService groups sidecars under
+        their parent video. Returns an empty dict on any failure (no
+        connection, no pins, resolver error).
         """
         if not self._tracker.list_pins():
-            return set()
+            return {}
 
         plex = self._get_plex_server()
         if plex is None:
-            return set()
+            return {}
 
         try:
             resolved, _orphaned = resolve_pins_to_paths(
                 plex, self._tracker, self._get_preference()
             )
         except Exception as e:
-            logger.warning(f"PinnedService.resolve_all_to_cache_paths failed: {e}")
-            return set()
+            logger.warning(
+                f"PinnedService.resolve_all_to_cache_path_map failed: {e}"
+            )
+            return {}
 
         from web.services import get_settings_service
         settings = get_settings_service().get_all()
         path_mappings = settings.get("path_mappings", [])
 
-        cache_paths: Set[str] = set()
-        for plex_path, _rk, _pin_type in resolved:
+        path_map: Dict[str, Tuple[str, str]] = {}
+        for plex_path, rk, pin_type in resolved:
             cache_path = self._plex_to_cache(plex_path, path_mappings)
-            if cache_path:
-                cache_paths.add(cache_path)
-        return cache_paths
+            if cache_path and cache_path not in path_map:
+                path_map[cache_path] = (rk, pin_type)
+        return path_map
 
     @staticmethod
     def _plex_to_cache(plex_path: str, path_mappings: List[Dict]) -> Optional[str]:

@@ -36,6 +36,8 @@ class CachedFile:
     sidecar_paths: Optional[List[str]] = None  # Paths to sidecar files
     associated_files: Optional[List[Dict[str, str]]] = None  # [{filename, size}] for template rendering
     is_pinned: bool = False  # Set when this path (or its parent scope) is in PinnedMediaTracker
+    rating_key: Optional[str] = None  # Plex rating key, when resolvable from trackers or pinned map
+    pin_type: Optional[str] = None  # "episode" or "movie" — scope to pass to /api/pinned/toggle
 
 
 class CacheService:
@@ -506,10 +508,11 @@ class CacheService:
         settings = self._load_settings()
 
         # Resolve pinned cache paths once per request. Failure returns an
-        # empty set (no pin protection surfaced in UI) rather than erroring
+        # empty dict (no pin protection surfaced in UI) rather than erroring
         # the whole cache list — matches the soft-fail pattern used for
         # Plex connectivity throughout the web layer.
-        pinned_cache_paths = self._get_pinned_cache_paths()
+        pinned_cache_path_map = self._get_pinned_cache_path_map()
+        pinned_cache_paths = set(pinned_cache_path_map.keys())
 
         now = datetime.now()
 
@@ -622,6 +625,8 @@ class CacheService:
             is_watchlist = False
             users = set()
             episode_info = None
+            tracker_rating_key: Optional[str] = None
+            tracker_pin_type: Optional[str] = None
             cache_basename = os.path.basename(cache_path)
 
             for plex_path, info in ondeck.items():
@@ -631,6 +636,9 @@ class CacheService:
                     if "users" in info:
                         users.update(info["users"])
                     episode_info = info.get("episode_info")
+                    if info.get("rating_key"):
+                        tracker_rating_key = info["rating_key"]
+                        tracker_pin_type = "episode" if episode_info else "movie"
                     break
 
             for plex_path, info in watchlist.items():
@@ -640,6 +648,11 @@ class CacheService:
                         source = "watchlist"
                     if "users" in info:
                         users.update(info["users"])
+                    if tracker_rating_key is None and info.get("rating_key"):
+                        tracker_rating_key = info["rating_key"]
+                        # Watchlist entries don't store media_type directly;
+                        # fall back to "movie" when we have no episode hint.
+                        tracker_pin_type = "episode" if episode_info else "movie"
                     break
 
             # Apply source filter
@@ -658,6 +671,19 @@ class CacheService:
                 priority = self.calculate_priority(
                     cache_path, timestamps, ondeck, watchlist, settings
                 )
+
+            # For pinned rows, prefer the pinned-map's rating_key/pin_type —
+            # it's the authoritative source for the unpin button. For
+            # unpinned rows, fall back to whatever the ondeck/watchlist
+            # trackers told us so the row can offer a pin-in-place button.
+            if is_pinned:
+                pinned_meta = pinned_cache_path_map.get(cache_path)
+                if pinned_meta:
+                    row_rating_key, row_pin_type = pinned_meta
+                else:
+                    row_rating_key, row_pin_type = tracker_rating_key, tracker_pin_type
+            else:
+                row_rating_key, row_pin_type = tracker_rating_key, tracker_pin_type
 
             # Get associated subtitles and sidecars
             subs = video_subtitles.get(cache_path, [])
@@ -697,6 +723,8 @@ class CacheService:
                 sidecar_paths=sidecars if sidecars else None,
                 associated_files=assoc_list,
                 is_pinned=is_pinned,
+                rating_key=row_rating_key,
+                pin_type=row_pin_type,
             ))
 
         # Sort by specified column
@@ -1989,12 +2017,22 @@ class CacheService:
         Thin wrapper so route handlers / tests can monkeypatch a fixed set
         without standing up a real PinnedService. Failure → empty set.
         """
+        return set(self._get_pinned_cache_path_map().keys())
+
+    def _get_pinned_cache_path_map(self) -> Dict[str, tuple]:
+        """Return ``{cache_path: (rating_key, pin_type)}`` for every pin.
+
+        Used by ``get_all_cached_files`` to populate ``CachedFile.rating_key``
+        / ``pin_type`` so the Cached Files row pin button knows what to
+        toggle. Soft-fail: any error returns an empty dict so a flaky Plex
+        connection doesn't break the cache list.
+        """
         try:
             from web.services import get_pinned_service
-            return get_pinned_service().resolve_all_to_cache_paths()
+            return get_pinned_service().resolve_all_to_cache_path_map()
         except Exception as e:
-            logging.debug(f"CacheService: could not resolve pinned paths: {e}")
-            return set()
+            logging.debug(f"CacheService: could not resolve pinned path map: {e}")
+            return {}
 
 
 # Singleton instance
