@@ -110,6 +110,11 @@ class AuditResults:
     stale_exclude_entries: List[str] = field(default_factory=list)
     stale_timestamp_entries: List[str] = field(default_factory=list)
     duplicates: List[DuplicateFile] = field(default_factory=list)
+    # Pinned cache files missing from the exclude list — would be eaten by the
+    # Unraid mover on its next run. User declared these always-cached, so an
+    # unprotected pinned file is a user-visible contract violation, not just
+    # "untracked". Next run restores protection automatically.
+    pinned_missing_from_exclude: List[str] = field(default_factory=list)
 
     # Health status
     health_status: str = "healthy"  # "healthy", "warnings", "critical"
@@ -126,7 +131,9 @@ class AuditResults:
         if truly_orphaned:
             self.health_status = "critical"
         # Warnings: stale entries need cleanup, superseded/redundant backups can be cleaned
-        elif self.stale_exclude_entries or self.stale_timestamp_entries or self.orphaned_plexcached or self.extensionless_files:
+        elif (self.stale_exclude_entries or self.stale_timestamp_entries
+              or self.orphaned_plexcached or self.extensionless_files
+              or self.pinned_missing_from_exclude):
             self.health_status = "warnings"
         else:
             self.health_status = "healthy"
@@ -137,7 +144,8 @@ class AuditResults:
         return (len(self.orphaned_plexcached) +
                 len(self.extensionless_files) +
                 len(self.stale_exclude_entries) +
-                len(self.stale_timestamp_entries))
+                len(self.stale_timestamp_entries) +
+                len(self.pinned_missing_from_exclude))
 
 
 @dataclass
@@ -690,6 +698,15 @@ class MaintenanceService:
 
         # Find stale timestamp entries (in timestamps but not on cache)
         results.stale_timestamp_entries = sorted(list(timestamp_files - cache_files))
+
+        # Flag pinned files that are on cache but missing from the exclude
+        # list — the Unraid mover would move them back on the next run,
+        # silently violating the "pinned = always cached" contract.
+        pinned_cache_paths = self._get_pinned_cache_paths()
+        if pinned_cache_paths:
+            results.pinned_missing_from_exclude = sorted(
+                list((pinned_cache_paths & cache_files) - exclude_files)
+            )
 
         results.duplicates.sort(key=lambda f: f.size, reverse=True)
 

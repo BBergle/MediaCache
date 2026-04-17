@@ -34,6 +34,7 @@
                         hx-target="#cache-table-body"
                         hx-include=".cache-filter">
                     <option value="all" {% if source_filter == 'all' %}selected{% endif %}>All Sources</option>
+                    <option value="pinned" {% if source_filter == 'pinned' %}selected{% endif %}>Pinned Only</option>
                     <option value="ondeck" {% if source_filter == 'ondeck' %}selected{% endif %}>OnDeck Only</option>
                     <option value="watchlist" {% if source_filter == 'watchlist' %}selected{% endif %}>Watchlist Only</option>
                     <option value="other" {% if source_filter == 'other' %}selected{% endif %}>Other Only</option>

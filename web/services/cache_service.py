@@ -493,7 +493,7 @@ class CacheService:
         shown as separate entries. The video file inherits subtitle count.
 
         Args:
-            source_filter: "all", "ondeck", "watchlist", or "other"
+            source_filter: "all", "pinned", "ondeck", "watchlist", or "other"
             search: Search string to filter filenames
             sort_by: Column to sort by ("filename", "size", "priority", "age", "users")
             sort_dir: Sort direction ("asc" or "desc")
@@ -655,16 +655,19 @@ class CacheService:
                         tracker_pin_type = "episode" if episode_info else "movie"
                     break
 
+            # Pinned files always score 100 (mirrors core priority manager)
+            is_pinned = cache_path in pinned_cache_paths
+
             # Apply source filter
+            if source_filter == "pinned" and not is_pinned:
+                continue
             if source_filter == "ondeck" and not is_ondeck:
                 continue
             if source_filter == "watchlist" and not is_watchlist:
                 continue
-            if source_filter == "other" and (is_ondeck or is_watchlist):
+            if source_filter == "other" and (is_ondeck or is_watchlist or is_pinned):
                 continue
 
-            # Pinned files always score 100 (mirrors core priority manager)
-            is_pinned = cache_path in pinned_cache_paths
             if is_pinned:
                 priority = 100
             else:
