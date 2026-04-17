@@ -104,8 +104,35 @@ def pinned_toggle(
                 # immediately (skipping its 8s poll). base.html also scrolls
                 # the page to the top so the banner is visible.
                 triggers["pinned-eviction-started"] = {}
+        # If this was a pin-add, log a "Cached" activity entry for each
+        # freshly-pinned file that's already on cache. Files not yet on cache
+        # will get their own "Cached" entry via FileMover on the next run.
+        pinned_paths = result.get("pinned_paths") or []
+        if pinned_paths and result.get("is_pinned"):
+            _record_pin_activity(pinned_paths)
         response.headers["HX-Trigger"] = json.dumps(triggers)
     return response
+
+
+def _record_pin_activity(cache_paths: list) -> None:
+    """Record a Cached activity entry for each pinned path that exists on cache."""
+    import os
+    try:
+        from core.activity import record_file_activity
+        for path in cache_paths:
+            try:
+                if not os.path.exists(path):
+                    continue
+                size_bytes = os.path.getsize(path)
+            except OSError:
+                continue
+            record_file_activity(
+                action="Cached",
+                filename=os.path.basename(path),
+                size_bytes=size_bytes,
+            )
+    except Exception as e:
+        logger.warning("Pin activity could not be recorded: %s", e)
 
 
 def _start_unpin_eviction(cache_paths: list) -> bool:

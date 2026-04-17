@@ -341,13 +341,16 @@ class PinnedService:
 
         Returns:
             ``{is_pinned: bool, error: Optional[str], budget: dict,
-               evict_paths: List[str]}``.
+               evict_paths: List[str], pinned_paths: List[str]}``.
             ``error`` is set when a pin-add is blocked by budget; the tracker
             is left untouched in that case. ``evict_paths`` (populated only on
             unpin) lists cache paths that were uniquely protected by the
             removed pin — callers may hand these to the maintenance runner to
             move them back to the array immediately instead of waiting for
-            retention to expire.
+            retention to expire. ``pinned_paths`` (populated only on pin add)
+            lists cache paths newly protected by the added pin — callers may
+            use this to log activity entries for files that were already on
+            cache at pin time.
         """
         rating_key = str(rating_key)
 
@@ -365,6 +368,7 @@ class PinnedService:
                 "error": None,
                 "budget": self.budget_check(),
                 "evict_paths": freshly_unpinned,
+                "pinned_paths": [],
             }
 
         if pin_type not in VALID_PIN_TYPES:
@@ -393,12 +397,19 @@ class PinnedService:
                 "budget": budget,
             }
 
+        # Capture resolved paths BEFORE adding the pin so we can diff after.
+        # This tells us which cache paths are NEWLY protected by the new pin
+        # (versus already-protected by another existing pin).
+        before_paths = self.resolve_all_to_cache_paths()
         self._tracker.add_pin(rating_key, pin_type, title, added_by="web")
+        after_paths = self.resolve_all_to_cache_paths()
+        freshly_pinned = sorted(after_paths - before_paths)
         return {
             "is_pinned": True,
             "error": None,
             "budget": self.budget_check(),
             "evict_paths": [],
+            "pinned_paths": freshly_pinned,
         }
 
     # ------------------------------------------------------------------
