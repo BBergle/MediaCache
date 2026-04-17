@@ -631,7 +631,7 @@ class MaintenanceRunner:
         "fix-with-backup": "Fixed",
         "restore-plexcached": "Restored Backup",
         "delete-plexcached": "Deleted Backup",
-        "evict-files": "Moved to Array",
+        "evict-files": "Restored",
         "cache-pinned": "Cached",
     }
 
