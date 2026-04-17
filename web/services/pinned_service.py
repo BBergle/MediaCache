@@ -340,18 +340,31 @@ class PinnedService:
         """Toggle a pin. Adds if missing, removes if present.
 
         Returns:
-            ``{is_pinned: bool, error: Optional[str], budget: dict}``.
+            ``{is_pinned: bool, error: Optional[str], budget: dict,
+               evict_paths: List[str]}``.
             ``error`` is set when a pin-add is blocked by budget; the tracker
-            is left untouched in that case.
+            is left untouched in that case. ``evict_paths`` (populated only on
+            unpin) lists cache paths that were uniquely protected by the
+            removed pin — callers may hand these to the maintenance runner to
+            move them back to the array immediately instead of waiting for
+            retention to expire.
         """
         rating_key = str(rating_key)
 
         if self._tracker.is_pinned(rating_key):
+            # Resolve before + after to compute which cache paths were uniquely
+            # protected by THIS pin (i.e., aren't also held by another pin).
+            # Soft-fail: if Plex is offline the diff returns empty and the
+            # caller simply skips immediate eviction.
+            before_paths = self.resolve_all_to_cache_paths()
             self._tracker.remove_pin(rating_key)
+            after_paths = self.resolve_all_to_cache_paths()
+            freshly_unpinned = sorted(before_paths - after_paths)
             return {
                 "is_pinned": False,
                 "error": None,
                 "budget": self.budget_check(),
+                "evict_paths": freshly_unpinned,
             }
 
         if pin_type not in VALID_PIN_TYPES:
@@ -385,6 +398,7 @@ class PinnedService:
             "is_pinned": True,
             "error": None,
             "budget": self.budget_check(),
+            "evict_paths": [],
         }
 
     # ------------------------------------------------------------------
