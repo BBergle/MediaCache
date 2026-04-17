@@ -1900,6 +1900,224 @@ class MaintenanceService:
             affected_paths=affected_paths
         )
 
+    def cache_pinned(self, dry_run: bool = False,
+                     stop_check: Optional[Callable[[], bool]] = None,
+                     progress_callback: Optional[Callable] = None,
+                     bytes_progress_callback: Optional[Callable] = None,
+                     max_workers: int = 1,
+                     active_callback: Optional[Callable] = None) -> ActionResult:
+        """Copy currently-pinned media from array to cache (missing files only).
+
+        Resolves the pinned set via PinnedService, skips any files already on
+        cache, and copies the rest from the array. When the source is a real
+        array file, it's renamed to ``.plexcached`` as a backup (mirroring the
+        normal caching flow). Copied files are added to the exclude list and
+        timestamps so the Unraid mover leaves them in place.
+
+        ``affected_paths`` on the result are the cache paths that were newly
+        cached — the runner uses this to write "Cached" activity entries.
+        """
+        pinned_cache_paths = self._get_pinned_cache_paths()
+        if not pinned_cache_paths:
+            return ActionResult(
+                success=True,
+                message="No pinned media to cache",
+                affected_count=0,
+            )
+
+        # Filter to paths not already on cache
+        missing: List[str] = []
+        for cache_path in sorted(pinned_cache_paths):
+            try:
+                if os.path.exists(cache_path):
+                    continue
+            except OSError:
+                continue
+            missing.append(cache_path)
+
+        if not missing:
+            return ActionResult(
+                success=True,
+                message="All pinned media already on cache",
+                affected_count=0,
+            )
+
+        if dry_run:
+            return ActionResult(
+                success=True,
+                message=f"Would cache {len(missing)} pinned file(s)",
+                affected_count=len(missing),
+            )
+
+        # Pre-resolve sources (prefer real file, fall back to .plexcached) and total bytes
+        sources: Dict[str, str] = {}
+        total_bytes = 0
+        for cache_path in missing:
+            array_path = self._cache_to_array_path(cache_path)
+            if not array_path:
+                continue
+            candidate = None
+            if os.path.exists(array_path):
+                candidate = array_path
+            elif os.path.exists(array_path + ".plexcached"):
+                candidate = array_path + ".plexcached"
+            if candidate:
+                sources[cache_path] = candidate
+                try:
+                    total_bytes += os.path.getsize(candidate)
+                except OSError:
+                    pass
+
+        if bytes_progress_callback and total_bytes > 0:
+            bytes_progress_callback(0, total_bytes)
+
+        # --- Parallel path ---
+        if max_workers > 1:
+            aggregator = _ByteProgressAggregator(total_bytes, bytes_progress_callback) if total_bytes > 0 else None
+
+            def _cache_worker(cache_path: str) -> Tuple[str, bool, Optional[str]]:
+                try:
+                    array_path = self._cache_to_array_path(cache_path)
+                    if not array_path:
+                        return (cache_path, False, f"{os.path.basename(cache_path)}: Unknown path mapping")
+
+                    source = sources.get(cache_path)
+                    if not source:
+                        if os.path.exists(array_path):
+                            source = array_path
+                        elif os.path.exists(array_path + ".plexcached"):
+                            source = array_path + ".plexcached"
+                        else:
+                            return (cache_path, False, f"{os.path.basename(cache_path)}: Not found on array")
+
+                    cache_dir = os.path.dirname(cache_path)
+                    os.makedirs(cache_dir, exist_ok=True)
+
+                    src_size = os.path.getsize(source)
+                    worker_cb = aggregator.make_worker_callback() if aggregator else None
+                    self._copy_with_progress(source, cache_path, worker_cb)
+
+                    if not os.path.exists(cache_path):
+                        return (cache_path, False, f"{os.path.basename(cache_path)}: Copy failed")
+                    dst_size = os.path.getsize(cache_path)
+                    if dst_size != src_size:
+                        try:
+                            os.remove(cache_path)
+                        except OSError:
+                            pass
+                        return (cache_path, False, f"{os.path.basename(cache_path)}: Size mismatch ({src_size} vs {dst_size})")
+
+                    # If source was the real array file, rename to .plexcached as backup
+                    if source == array_path:
+                        plexcached_path = array_path + ".plexcached"
+                        try:
+                            os.rename(array_path, plexcached_path)
+                        except OSError as e:
+                            logging.warning(f"Could not create .plexcached backup for {os.path.basename(cache_path)}: {e}")
+
+                    return (cache_path, True, None)
+                except (IOError, OSError) as e:
+                    logging.exception(f"Error caching pinned {os.path.basename(cache_path)}: {e}")
+                    return (cache_path, False, f"{os.path.basename(cache_path)}: {str(e)}")
+
+            results = self._run_parallel(missing, _cache_worker, max_workers, stop_check, progress_callback, active_callback)
+            successful_paths = [path for path, success, _ in results if success]
+            errors = [err for _, success, err in results if not success and err]
+
+            if successful_paths:
+                self._batch_add_to_exclude(successful_paths)
+                self._batch_add_to_timestamps(successful_paths)
+
+            logging.info(f"cache_pinned complete: Cached {len(successful_paths)} file(s), {len(errors)} errors")
+            return ActionResult(
+                success=len(errors) == 0,
+                message=f"Cached {len(successful_paths)} pinned file(s)",
+                affected_count=len(successful_paths),
+                errors=errors,
+                affected_paths=successful_paths,
+            )
+
+        # --- Sequential path ---
+        affected_paths: List[str] = []
+        errors: List[str] = []
+        bytes_copied_so_far = 0
+
+        for i, cache_path in enumerate(missing):
+            if stop_check and stop_check():
+                break
+            if progress_callback:
+                progress_callback(i + 1, len(missing), os.path.basename(cache_path))
+
+            array_path = self._cache_to_array_path(cache_path)
+            if not array_path:
+                errors.append(f"{os.path.basename(cache_path)}: Unknown path mapping")
+                continue
+
+            source = sources.get(cache_path)
+            if not source:
+                if os.path.exists(array_path):
+                    source = array_path
+                elif os.path.exists(array_path + ".plexcached"):
+                    source = array_path + ".plexcached"
+                else:
+                    errors.append(f"{os.path.basename(cache_path)}: Not found on array")
+                    continue
+
+            try:
+                cache_dir = os.path.dirname(cache_path)
+                os.makedirs(cache_dir, exist_ok=True)
+
+                src_size = os.path.getsize(source)
+                logging.info(f"Caching pinned {os.path.basename(cache_path)} ({src_size / (1024**3):.2f} GB)...")
+
+                if total_bytes > 0 and bytes_progress_callback:
+                    base = bytes_copied_so_far
+                    total = total_bytes
+                    def _per_file_cb(copied: int, fsize: int, base=base, total=total):
+                        bytes_progress_callback(base + copied, total)
+                    self._copy_with_progress(source, cache_path, _per_file_cb)
+                else:
+                    self._copy_with_progress(source, cache_path, bytes_progress_callback)
+                bytes_copied_so_far += src_size
+
+                if not os.path.exists(cache_path):
+                    errors.append(f"{os.path.basename(cache_path)}: Copy failed")
+                    continue
+                dst_size = os.path.getsize(cache_path)
+                if dst_size != src_size:
+                    try:
+                        os.remove(cache_path)
+                    except OSError:
+                        pass
+                    errors.append(f"{os.path.basename(cache_path)}: Size mismatch ({src_size} vs {dst_size})")
+                    continue
+
+                if source == array_path:
+                    plexcached_path = array_path + ".plexcached"
+                    try:
+                        os.rename(array_path, plexcached_path)
+                    except OSError as e:
+                        logging.warning(f"Could not create .plexcached backup for {os.path.basename(cache_path)}: {e}")
+
+                affected_paths.append(cache_path)
+                logging.info(f"Cached pinned: {os.path.basename(cache_path)}")
+            except (IOError, OSError) as e:
+                logging.exception(f"Error caching pinned {os.path.basename(cache_path)}: {e}")
+                errors.append(f"{os.path.basename(cache_path)}: {str(e)}")
+
+        if affected_paths:
+            self._batch_add_to_exclude(affected_paths)
+            self._batch_add_to_timestamps(affected_paths)
+
+        logging.info(f"cache_pinned complete: Cached {len(affected_paths)} file(s), {len(errors)} errors")
+        return ActionResult(
+            success=len(errors) == 0,
+            message=f"Cached {len(affected_paths)} pinned file(s)",
+            affected_count=len(affected_paths),
+            errors=errors,
+            affected_paths=affected_paths,
+        )
+
     def _add_to_timestamps(self, cache_path: str):
         """Add a file to timestamps.json with current time"""
         import json

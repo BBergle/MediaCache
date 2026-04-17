@@ -649,6 +649,28 @@ def evict_files(request: Request, form_data: ImmutableMultiDict = Depends(parse_
     return HTMLResponse(response)
 
 
+@router.post("/cache-pinned", response_class=HTMLResponse)
+def cache_pinned(request: Request):
+    """Copy currently-pinned media from array to cache (missing files only).
+
+    Runs in background via maintenance runner. No form fields — the service
+    resolves the pinned set internally, skips files already on cache, and
+    copies the rest. Used by the Settings → Pinned Media "Run Now" button as
+    a targeted alternative to the full PlexCache run.
+    """
+    service = get_maintenance_service()
+    max_workers = _get_max_workers()
+    response = _start_async_action(
+        "cache-pinned",
+        service.cache_pinned,
+        method_args=(),
+        method_kwargs={"dry_run": False},
+        file_count=0,
+        max_workers=max_workers,
+    )
+    return HTMLResponse(response)
+
+
 @router.post("/protect-with-backup", response_class=HTMLResponse)
 def protect_with_backup(
     request: Request,

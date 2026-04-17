@@ -71,15 +71,16 @@
     </ul>
     <div style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid rgba(255,255,255,0.06);">
         <button type="button" class="btn btn-sm btn-primary"
-                hx-post="/operations/run"
-                hx-swap="none"
-                title="Start a run to cache pinned media"
+                hx-post="/maintenance/cache-pinned"
+                hx-target="#settings-alert-container"
+                hx-swap="innerHTML"
+                title="Copy any pinned files not already on cache"
                 style="display: inline-flex; align-items: center; gap: 0.4rem;">
-            <i data-lucide="play" style="width: 14px; height: 14px;"></i>
-            Run Now to sync pinned media
+            <i data-lucide="download" style="width: 14px; height: 14px;"></i>
+            Cache Pinned Now
         </button>
         <span style="color: var(--plex-text-muted); font-size: 0.8rem; margin-left: 0.5rem;">
-            Pinned items are cached during the next run.
+            Copies any missing pinned files to cache in the background.
         </span>
     </div>
     {% else %}

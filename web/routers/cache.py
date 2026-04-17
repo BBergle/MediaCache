@@ -49,6 +49,7 @@ def cache_list(
             "users": f.users,
             "is_ondeck": f.is_ondeck,
             "is_watchlist": f.is_watchlist,
+            "is_pinned": f.is_pinned,
             "subtitle_count": f.subtitle_count,
             "sidecar_count": f.sidecar_count,
             "associated_files": f.associated_files
@@ -61,7 +62,8 @@ def cache_list(
         "total_files": len(files_data),
         "ondeck_count": sum(1 for f in files_data if f["is_ondeck"]),
         "watchlist_count": sum(1 for f in files_data if f["is_watchlist"]),
-        "other_count": sum(1 for f in files_data if not f["is_ondeck"] and not f["is_watchlist"]),
+        "pinned_count": sum(1 for f in files_data if f["is_pinned"]),
+        "other_count": sum(1 for f in files_data if not f["is_ondeck"] and not f["is_watchlist"] and not f["is_pinned"]),
         "total_size": sum(f["size"] for f in files_data)
     }
     # Format total size
