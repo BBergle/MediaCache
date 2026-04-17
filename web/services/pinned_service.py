@@ -174,14 +174,22 @@ class PinnedService:
         children: List[Dict[str, Any]] = []
         try:
             if level == "show":
+                show_title = getattr(item, "title", "") or ""
+                show_year = getattr(item, "year", None)
+                show_label = f"{show_title} ({show_year})" if show_title and show_year else show_title
                 seasons = list(item.seasons())
                 for season in seasons:
+                    season_title = getattr(season, "title", "") or ""
+                    display_title = (
+                        f"{show_label} — {season_title}"
+                        if show_label and season_title else (season_title or show_label)
+                    )
                     size_bytes = self._estimate_item_size(
                         season, "season", preference
                     )
                     children.append({
                         "rating_key": str(getattr(season, "ratingKey", "")),
-                        "title": getattr(season, "title", ""),
+                        "title": display_title,
                         "type": "season",
                         "parent_rating_key": str(rating_key),
                         "episode_count": getattr(season, "leafCount", None),
@@ -192,18 +200,34 @@ class PinnedService:
                         ),
                     })
             else:  # season
+                show_title = (
+                    getattr(item, "parentTitle", "")
+                    or getattr(item, "grandparentTitle", "")
+                    or ""
+                )
+                show_year = getattr(item, "parentYear", None)
+                show_label = f"{show_title} ({show_year})" if show_title and show_year else show_title
                 episodes = list(item.episodes())
                 for ep in episodes:
+                    season_num = getattr(ep, "parentIndex", None)
+                    ep_num = getattr(ep, "index", None)
+                    ep_title = getattr(ep, "title", "") or ""
+                    ep_show_label = show_label or getattr(ep, "grandparentTitle", "") or ""
+                    se_code = ""
+                    if isinstance(season_num, int) and isinstance(ep_num, int):
+                        se_code = f"S{season_num:02d}E{ep_num:02d}"
+                    parts = [p for p in (ep_show_label, se_code, ep_title) if p]
+                    display_title = " — ".join(parts) if parts else ep_title
                     size_bytes = self._estimate_item_size(
                         ep, "episode", preference
                     )
                     children.append({
                         "rating_key": str(getattr(ep, "ratingKey", "")),
-                        "title": getattr(ep, "title", ""),
+                        "title": display_title,
                         "type": "episode",
                         "parent_rating_key": str(rating_key),
-                        "index": getattr(ep, "index", None),
-                        "season_number": getattr(ep, "parentIndex", None),
+                        "index": ep_num,
+                        "season_number": season_num,
                         "size_bytes": size_bytes,
                         "size_display": format_bytes(size_bytes) if size_bytes else "",
                         "already_pinned": self._tracker.is_pinned(
@@ -416,6 +440,46 @@ class PinnedService:
     # Currently-pinned chip list
     # ------------------------------------------------------------------
 
+    def _decorate_title(self, plex, pin_type: str, rating_key: str, fallback: str) -> str:
+        """Return a rich display title for a pin, falling back to ``fallback``.
+
+        Movies/shows keep their stored title. Seasons gain ``{show} — {season}``
+        and episodes gain ``{show} — SxxExx — {title}``. This covers legacy pins
+        that were saved with a bare "Season 2" or plain episode title.
+        """
+        if pin_type not in ("season", "episode") or plex is None:
+            return fallback
+        try:
+            item = plex.fetchItem(int(rating_key))
+        except Exception:
+            return fallback
+
+        try:
+            if pin_type == "season":
+                show_title = getattr(item, "parentTitle", "") or getattr(item, "grandparentTitle", "") or ""
+                show_year = getattr(item, "parentYear", None)
+                show_label = f"{show_title} ({show_year})" if show_title and show_year else show_title
+                season_title = getattr(item, "title", "") or fallback
+                if show_label and season_title:
+                    return f"{show_label} — {season_title}"
+                return season_title or fallback
+
+            # pin_type == "episode"
+            show_title = getattr(item, "grandparentTitle", "") or ""
+            # Episodes don't expose a grandparentYear on all plexapi versions
+            show_year = getattr(item, "grandparentYear", None)
+            show_label = f"{show_title} ({show_year})" if show_title and show_year else show_title
+            season_num = getattr(item, "parentIndex", None)
+            ep_num = getattr(item, "index", None)
+            ep_title = getattr(item, "title", "") or fallback
+            se_code = ""
+            if isinstance(season_num, int) and isinstance(ep_num, int):
+                se_code = f"S{season_num:02d}E{ep_num:02d}"
+            parts = [p for p in (show_label, se_code, ep_title) if p]
+            return " — ".join(parts) if parts else fallback
+        except Exception:
+            return fallback
+
     def list_pins_with_metadata(self) -> List[Dict[str, Any]]:
         """Return pin entries decorated with resolved size + budget share.
 
@@ -431,6 +495,7 @@ class PinnedService:
         # (plex_path, rating_key, pin_type) tuples.
         preference = self._get_preference()
         resolved_paths: List[tuple] = []
+        plex = None
         try:
             plex = self._get_plex_server()
             if plex is not None:
@@ -466,10 +531,13 @@ class PinnedService:
         for pin in pins:
             rk = pin["rating_key"]
             size = bytes_by_rk.get(rk, 0)
+            display_title = self._decorate_title(
+                plex, pin["type"], rk, pin["title"]
+            )
             out.append({
                 "rating_key": rk,
                 "type": pin["type"],
-                "title": pin["title"],
+                "title": display_title,
                 "added_at": pin.get("added_at", ""),
                 "added_by": pin.get("added_by", "web"),
                 "resolved_file_count": files_by_rk.get(rk, 0),

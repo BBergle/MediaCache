@@ -51,7 +51,7 @@
                     <i data-lucide="film" style="width: 14px; height: 14px;"></i>
                 {% endif %}
             </span>
-            <span class="pinned-chip-title" style="color: var(--plex-text);">{{ pin.title }}</span>
+            <span class="pinned-chip-title" style="color: var(--plex-text); max-width: 32rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ pin.title }}">{{ pin.title }}</span>
             {% if pin.size_bytes %}
                 <span class="pinned-chip-size" style="color: var(--plex-text-muted); font-variant-numeric: tabular-nums;">{{ pin.size_display }}</span>
             {% endif %}
