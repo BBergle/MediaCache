@@ -628,6 +628,7 @@ class MaintenanceRunner:
         "fix-with-backup": "Fixed",
         "restore-plexcached": "Restored Backup",
         "delete-plexcached": "Deleted Backup",
+        "evict-files": "Moved to Array",
     }
 
     def _record_maintenance_activity(self, action_name: str, action_result: ActionResult):
