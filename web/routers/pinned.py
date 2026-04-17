@@ -1,5 +1,6 @@
 """Pinned media routes — HTMX-driven pin picker + chip list."""
 
+import json
 import logging
 
 from fastapi import APIRouter, Request, Form, Query
@@ -90,19 +91,28 @@ def pinned_toggle(
         status_code=status,
     )
     if not result.get("error"):
-        response.headers["HX-Trigger"] = "pinned-updated"
+        triggers = {"pinned-updated": {}}
         # If this was an unpin, kick off a background eviction for any paths
         # uniquely held by the removed pin. Queued if the runner is busy;
         # silently skipped on queue overflow (the next run still moves the
         # file back once retention expires).
         evict_paths = result.get("evict_paths") or []
         if evict_paths and not result.get("is_pinned"):
-            _start_unpin_eviction(evict_paths)
+            started = _start_unpin_eviction(evict_paths)
+            if started:
+                # Banner hx-trigger listens for this event to refetch
+                # immediately (skipping its 8s poll). base.html also scrolls
+                # the page to the top so the banner is visible.
+                triggers["pinned-eviction-started"] = {}
+        response.headers["HX-Trigger"] = json.dumps(triggers)
     return response
 
 
-def _start_unpin_eviction(cache_paths: list) -> None:
-    """Start a background eviction for cache paths freshly released by an unpin."""
+def _start_unpin_eviction(cache_paths: list) -> bool:
+    """Start a background eviction for cache paths freshly released by an unpin.
+
+    Returns True if the action was started or queued, False if skipped.
+    """
     try:
         from web.services.maintenance_runner import get_maintenance_runner
         from web.services.maintenance_service import get_maintenance_service
@@ -119,25 +129,28 @@ def _start_unpin_eviction(cache_paths: list) -> None:
             on_complete=_invalidate_caches,
             max_workers=_get_max_workers(),
         )
-        if not started:
-            # Runner is busy; queue if there's room, otherwise give up quietly.
-            if runner.queue_count < runner._max_queue_size:
-                runner.enqueue_action(
-                    action_name="evict-files",
-                    service_method=service.evict_files,
-                    method_args=(cache_paths,),
-                    method_kwargs={"dry_run": False},
-                    file_count=len(cache_paths),
-                    on_complete=_invalidate_caches,
-                    max_workers=_get_max_workers(),
-                )
-            else:
-                logger.warning(
-                    "Unpin eviction skipped: runner busy and queue full (%d paths)",
-                    len(cache_paths),
-                )
+        if started:
+            return True
+        # Runner is busy; queue if there's room, otherwise give up quietly.
+        if runner.queue_count < runner._max_queue_size:
+            item_id = runner.enqueue_action(
+                action_name="evict-files",
+                service_method=service.evict_files,
+                method_args=(cache_paths,),
+                method_kwargs={"dry_run": False},
+                file_count=len(cache_paths),
+                on_complete=_invalidate_caches,
+                max_workers=_get_max_workers(),
+            )
+            return bool(item_id)
+        logger.warning(
+            "Unpin eviction skipped: runner busy and queue full (%d paths)",
+            len(cache_paths),
+        )
+        return False
     except Exception as e:
         logger.warning("Unpin eviction could not start: %s", e)
+        return False
 
 
 @router.get("/list", response_class=HTMLResponse)
