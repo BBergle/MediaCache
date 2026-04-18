@@ -87,10 +87,11 @@ class TestPinButtonMacroShape:
             assert attr in response_html, f"toggle response missing {attr}"
 
 
-class TestFileTableRendersPinButton:
-    """file_table.html should only render the pin button when
-    rating_key + pin_type are present. Rows without tracker metadata
-    show only the Evict button — prevents buttons that would 400."""
+class TestFileTableRowMarkup:
+    """file_table.html never renders the pin toggle form — pinning is a
+    Settings-only action. Rows show the Evict button in Actions and a
+    Pinned badge in the Source column whenever ``file.is_pinned`` is
+    truthy."""
 
     def _render_file_table(self, files, eviction_enabled=True):
         env = Environment(
@@ -108,6 +109,7 @@ class TestFileTableRendersPinButton:
                 "total_size_display": "0 B",
                 "ondeck_count": 0,
                 "watchlist_count": 0,
+                "pinned_count": 0,
                 "other_count": 0,
             },
         )
@@ -127,30 +129,22 @@ class TestFileTableRendersPinButton:
             "sidecar_count": 0,
             "associated_files": None,
             "is_pinned": False,
-            "rating_key": None,
-            "pin_type": None,
         }
         base.update(overrides)
         return type("F", (), base)()
 
-    def test_row_with_rating_key_renders_pin_button(self):
-        f = self._make_file(rating_key="12345", pin_type="episode")
-        html = self._render_file_table([f])
-        assert 'hx-post="/api/pinned/toggle"' in html
-        assert 'name="rating_key" value="12345"' in html
-        assert 'name="pin_type" value="episode"' in html
-
-    def test_row_without_rating_key_hides_pin_button(self):
-        f = self._make_file(rating_key=None, pin_type=None)
+    def test_row_never_renders_pin_toggle_form(self):
+        """Pinning lives on Settings → Pinned Media. The cached-files row
+        must not render the toggle form — otherwise the Actions column
+        grows a button that only works for rows with tracker metadata."""
+        f = self._make_file()
         html = self._render_file_table([f])
         assert 'hx-post="/api/pinned/toggle"' not in html
-        # Evict button still present
+        # Evict button is always present
         assert 'showEvictConfirm' in html
 
     def test_pinned_row_shows_pinned_badge(self):
-        f = self._make_file(
-            is_pinned=True, rating_key="55555", pin_type="movie", priority_score=100
-        )
+        f = self._make_file(is_pinned=True, priority_score=100)
         html = self._render_file_table([f])
         assert 'badge-pinned' in html
-        assert 'Unpin this item' in html
+        assert '>\n                Pinned\n' in html
