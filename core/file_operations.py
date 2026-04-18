@@ -1116,7 +1116,7 @@ class WatchlistTracker(JSONTracker):
         super().__init__(tracker_file, "watchlist")
 
     def update_entry(self, file_path: str, username: str, watchlisted_at: Optional[datetime],
-                     rating_key: Optional[str] = None) -> None:
+                     rating_key: Optional[str] = None, media_type: Optional[str] = None) -> None:
         """Update or create an entry for a watchlist item.
 
         If the item already exists and the new watchlisted_at is more recent,
@@ -1127,6 +1127,10 @@ class WatchlistTracker(JSONTracker):
             username: The user who has this on their watchlist.
             watchlisted_at: When the user added it to their watchlist (from Plex API).
             rating_key: Plex rating key for upgrade tracking (None to leave unchanged).
+            media_type: "episode" or "movie" — used by the web UI to derive the correct
+                pin_type for watchlisted TV episodes. None leaves any existing value
+                unchanged so legacy entries keep their current behavior until the next
+                Plex fetch repopulates them.
         """
         with self._lock:
             now_iso = datetime.now().isoformat()
@@ -1160,6 +1164,10 @@ class WatchlistTracker(JSONTracker):
                 if rating_key is not None:
                     entry['rating_key'] = rating_key
 
+                # Store media_type if provided (never overwrite with None)
+                if media_type is not None:
+                    entry['media_type'] = media_type
+
                 # Always update last_seen
                 entry['last_seen'] = now_iso
             else:
@@ -1176,6 +1184,8 @@ class WatchlistTracker(JSONTracker):
                 }
                 if rating_key is not None:
                     new_entry['rating_key'] = rating_key
+                if media_type is not None:
+                    new_entry['media_type'] = media_type
                 self._data[file_path] = new_entry
                 logging.debug(f"[USER:{username}] Added new watchlist entry: {file_path}")
 

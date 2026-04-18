@@ -293,6 +293,7 @@ class TestCachedFileRatingKeyPopulation:
             "/data/movies/Watched.mkv": {
                 "users": ["Brandon"],
                 "rating_key": "77777",
+                "media_type": "movie",
             },
         })
 
@@ -301,6 +302,71 @@ class TestCachedFileRatingKeyPopulation:
         row = by_path[movie_path]
 
         assert row.rating_key == "77777"
+        assert row.pin_type == "movie"
+        assert row.is_watchlist is True
+
+    def test_watchlist_episode_gets_episode_pin_type(self, tmp_path):
+        """Watchlisted TV episode derives pin_type='episode' from tracker media_type.
+
+        Without the stored media_type, the cache_service fallback would treat
+        every watchlist-only row as a movie (episode_info only lives on OnDeck
+        entries). Storing media_type at watchlist-gather time fixes the
+        cosmetic bug where pinned watchlisted episodes rendered as movies.
+        """
+        cache_dir = tmp_path / "cache" / "tv"
+        episode_path = str(cache_dir / "Show.S01E03.mkv")
+        _create_video(episode_path)
+
+        svc = _make_service(tmp_path)
+        _write_exclude(svc, [episode_path])
+        _write_timestamps(svc, {
+            episode_path: {"cached_at": "2026-04-01T12:00:00", "source": "watchlist"},
+        })
+        _write_watchlist(svc, {
+            "/data/tv/Show.S01E03.mkv": {
+                "users": ["Brandon"],
+                "rating_key": "88888",
+                "media_type": "episode",
+            },
+        })
+
+        files = svc.get_all_cached_files()
+        by_path = {f.path: f for f in files}
+        row = by_path[episode_path]
+
+        assert row.rating_key == "88888"
+        assert row.pin_type == "episode"
+        assert row.is_watchlist is True
+
+    def test_legacy_watchlist_entry_falls_back_to_movie(self, tmp_path):
+        """Legacy watchlist entries (pre-media_type) keep the old 'movie' fallback.
+
+        Entries written before #12 landed have no ``media_type`` field. The
+        cache_service must not crash and must preserve the historical
+        behavior until the next Plex fetch repopulates the tracker.
+        """
+        cache_dir = tmp_path / "cache" / "movies"
+        legacy_path = str(cache_dir / "Legacy.mkv")
+        _create_video(legacy_path)
+
+        svc = _make_service(tmp_path)
+        _write_exclude(svc, [legacy_path])
+        _write_timestamps(svc, {
+            legacy_path: {"cached_at": "2026-04-01T12:00:00", "source": "watchlist"},
+        })
+        _write_watchlist(svc, {
+            "/data/movies/Legacy.mkv": {
+                "users": ["Brandon"],
+                "rating_key": "99999",
+                # no media_type — pre-migration entry
+            },
+        })
+
+        files = svc.get_all_cached_files()
+        by_path = {f.path: f for f in files}
+        row = by_path[legacy_path]
+
+        assert row.rating_key == "99999"
         assert row.pin_type == "movie"
         assert row.is_watchlist is True
 

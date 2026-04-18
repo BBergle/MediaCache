@@ -650,9 +650,15 @@ class CacheService:
                         users.update(info["users"])
                     if tracker_rating_key is None and info.get("rating_key"):
                         tracker_rating_key = info["rating_key"]
-                        # Watchlist entries don't store media_type directly;
-                        # fall back to "movie" when we have no episode hint.
-                        tracker_pin_type = "episode" if episode_info else "movie"
+                        # Prefer the watchlist tracker's stored media_type (populated
+                        # at gathering time). Fall back to episode_info, then "movie"
+                        # so legacy entries written before media_type existed still
+                        # behave the way they always did.
+                        wl_media_type = info.get("media_type")
+                        if wl_media_type in ("episode", "movie"):
+                            tracker_pin_type = wl_media_type
+                        else:
+                            tracker_pin_type = "episode" if episode_info else "movie"
                     break
 
             # Pinned files always score 100 (mirrors core priority manager)

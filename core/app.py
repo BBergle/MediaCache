@@ -1364,10 +1364,13 @@ class PlexCacheApp:
                 if self.should_stop:
                     logging.info("Operation stopped during watchlist processing")
                     return result_set
-                file_path, username, watchlisted_at, episode_info, rating_key = item
+                file_path, username, watchlisted_at, episode_info, rating_key, media_type = item
 
                 # Update watchlist tracker with timestamp and rating_key
-                self.watchlist_tracker.update_entry(file_path, username, watchlisted_at, rating_key=rating_key)
+                self.watchlist_tracker.update_entry(
+                    file_path, username, watchlisted_at,
+                    rating_key=rating_key, media_type=media_type,
+                )
 
                 # Check watchlist retention (skip expired items, with per-user override)
                 user_retention = per_user_wl_days.get(username, retention_days)
@@ -1404,9 +1407,12 @@ class PlexCacheApp:
                         if self.should_stop:
                             logging.info("Operation stopped during watchlist processing")
                             return result_set
-                        file_path, username, watchlisted_at, episode_info, rating_key = item
+                        file_path, username, watchlisted_at, episode_info, rating_key, media_type = item
                         # Update tracker (RSS items use pubDate from feed)
-                        self.watchlist_tracker.update_entry(file_path, username, watchlisted_at, rating_key=rating_key)
+                        self.watchlist_tracker.update_entry(
+                            file_path, username, watchlisted_at,
+                            rating_key=rating_key, media_type=media_type,
+                        )
 
                         # Check watchlist retention (skip expired items, with per-user override)
                         rss_user_retention = per_user_wl_days.get(username, retention_days)
@@ -1604,6 +1610,7 @@ class PlexCacheApp:
             if old_wl_entry:
                 users = old_wl_entry.get('users', [])
                 watchlisted_at_str = old_wl_entry.get('watchlisted_at')
+                old_media_type = old_wl_entry.get('media_type')
                 self.watchlist_tracker.remove_entry(old_path)
                 # Re-create with new path, preserving original data
                 watchlisted_at = None
@@ -1614,7 +1621,8 @@ class PlexCacheApp:
                         pass
                 for user in users:
                     self.watchlist_tracker.update_entry(
-                        new_path, user, watchlisted_at, rating_key=rating_key
+                        new_path, user, watchlisted_at,
+                        rating_key=rating_key, media_type=old_media_type,
                     )
                 logging.info(f"[UPGRADE] Transferred watchlist entry with {len(users)} user(s) (rating_key={rating_key})")
 
