@@ -32,6 +32,31 @@ from core.pinned_media import (
 logger = logging.getLogger(__name__)
 
 
+def _resolve_size_setting(value: Any, disk_total_bytes: int) -> int:
+    """Resolve a settings size value to bytes.
+
+    Accepts either a byte-quantity string ("10GB", "500MB") parsed via
+    ``parse_size_bytes`` or a percentage string ("50%") resolved against
+    ``disk_total_bytes``. Returns 0 on any parse failure, empty input,
+    or percent-without-disk-size.
+    """
+    from core.system_utils import parse_size_bytes
+    if value is None:
+        return 0
+    s = str(value).strip()
+    if not s or s in ("0", "N/A", "none", "None"):
+        return 0
+    if s.endswith("%"):
+        try:
+            percent = float(s.rstrip("%"))
+        except ValueError:
+            return 0
+        if disk_total_bytes <= 0 or percent <= 0:
+            return 0
+        return int(disk_total_bytes * percent / 100)
+    return parse_size_bytes(s) or 0
+
+
 class PinnedService:
     """Business logic for pinned media (web layer)."""
 
@@ -250,23 +275,24 @@ class PinnedService:
     def _load_parsed_settings(self) -> Dict[str, int]:
         """Return the parsed cache budget (bytes) from settings.
 
-        Parses byte-quantity strings directly ("10GB", "500MB"). Does NOT
-        currently resolve percentage-based limits ("50%") — that would
-        require knowing the cache drive size, which we don't have here.
-        If percent values become a common configuration, extend to call
-        ``get_disk_usage()`` on the active cache mapping.
+        Handles both byte-quantity strings ("10GB", "500MB") and
+        percentage values ("50%"). Percent values are resolved against
+        the active cache drive's total size via ``get_disk_usage()`` on
+        the first enabled cache mapping. Falls back to 0 if the cache
+        drive cannot be probed — matches the soft-fail behavior used
+        elsewhere in this service.
         """
-        from core.system_utils import parse_size_bytes
         from web.services import get_settings_service
         try:
             settings = get_settings_service().get_all()
             cache_limit = settings.get("cache_limit", "")
             min_free_space = settings.get("min_free_space", "")
             quota = settings.get("plexcache_quota", "")
+            disk_total = self._get_active_cache_total_bytes(settings)
             return {
-                "cache_limit_bytes": parse_size_bytes(cache_limit) or 0,
-                "min_free_space_bytes": parse_size_bytes(min_free_space) or 0,
-                "plexcache_quota_bytes": parse_size_bytes(quota) or 0,
+                "cache_limit_bytes": _resolve_size_setting(cache_limit, disk_total),
+                "min_free_space_bytes": _resolve_size_setting(min_free_space, disk_total),
+                "plexcache_quota_bytes": _resolve_size_setting(quota, disk_total),
             }
         except Exception as e:
             logger.warning(f"PinnedService: could not parse cache limits: {e}")
@@ -275,6 +301,34 @@ class PinnedService:
                 "min_free_space_bytes": 0,
                 "plexcache_quota_bytes": 0,
             }
+
+    def _get_active_cache_total_bytes(self, settings: Dict[str, Any]) -> int:
+        """Return the total size in bytes of the first enabled cache mapping.
+
+        Only used to resolve percentage-based cache_limit / min_free_space
+        values. Returns 0 if no active cache mapping has a probeable size,
+        which degrades percent values to 0 (disabling the budget guard) —
+        matches the prior soft-fail behavior, just now for a narrower reason.
+        """
+        from core.system_utils import get_disk_usage
+        mappings = settings.get("path_mappings", [])
+        if not isinstance(mappings, list):
+            return 0
+        for m in mappings:
+            if not isinstance(m, dict):
+                continue
+            if m.get("enabled") is False:
+                continue
+            cache_path = m.get("cache_path")
+            if not cache_path:
+                continue
+            try:
+                disk = get_disk_usage(cache_path)
+                if disk and getattr(disk, "total", 0) > 0:
+                    return int(disk.total)
+            except Exception:
+                continue
+        return 0
 
     def _sum_pinned_bytes(self) -> int:
         """Return the total byte size of currently pinned cached video files.

@@ -125,6 +125,18 @@ class _FakePinnedService:
             })
         return groups
 
+    def unpin_many(self, rating_keys):
+        removed = 0
+        for rk in rating_keys:
+            if rk in self._pins:
+                del self._pins[rk]
+                removed += 1
+        return {
+            "removed": removed,
+            "evict_paths": [],
+            "budget": self.budget_check(),
+        }
+
     def budget_check(self, additional_rating_key=None, additional_pin_type=None):
         return {
             "total_pinned_bytes": 0,
@@ -267,3 +279,50 @@ class TestListRoute:
         assert r.status_code == 200
         assert "Matrix" in r.text
         assert "Breaking Bad" in r.text
+
+
+# ---------------------------------------------------------------------------
+# POST /api/pinned/unpin-group
+# ---------------------------------------------------------------------------
+
+
+class TestUnpinGroupRoute:
+    """Phase 7 bulk-unpin: one POST carrying N rating_keys → single diff,
+    one background eviction, one HX-Trigger event."""
+
+    def test_unpin_group_removes_all_keys(self, client, fake_service):
+        fake_service._pins = {
+            "1": {"type": "episode", "title": "S01E01"},
+            "2": {"type": "episode", "title": "S01E02"},
+            "3": {"type": "episode", "title": "S01E03"},
+        }
+        # httpx encodes dict-with-list as repeated form fields
+        r = client.post(
+            "/api/pinned/unpin-group",
+            data={"rating_keys": ["1", "2", "3"]},
+        )
+        assert r.status_code == 200
+        # Response is an inline info alert summarizing the removal count
+        assert "Unpinned 3" in r.text
+        # Fake service mirrors the unpin_many behaviour — all three gone
+        assert fake_service._pins == {}
+
+    def test_unpin_group_emits_hx_trigger(self, client, fake_service):
+        fake_service._pins = {
+            "1": {"type": "episode", "title": "S01E01"},
+            "2": {"type": "episode", "title": "S01E02"},
+        }
+        r = client.post(
+            "/api/pinned/unpin-group",
+            data={"rating_keys": ["1", "2"]},
+        )
+        # The HX-Trigger header is how the chip list knows to re-fetch.
+        # Event name is JSON-encoded, so just assert substring.
+        trigger = r.headers.get("HX-Trigger", "")
+        assert "pinned-updated" in trigger
+
+    def test_unpin_group_empty_payload_noops(self, client, fake_service):
+        # No rating_keys → route still succeeds, nothing removed
+        r = client.post("/api/pinned/unpin-group", data={})
+        assert r.status_code == 200
+        assert "Unpinned 0" in r.text

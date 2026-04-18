@@ -389,3 +389,282 @@ class TestExpand:
             next(gen)
         except StopIteration:
             pass
+
+
+# ---------------------------------------------------------------------------
+# _resolve_size_setting helper (module-level)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveSizeSetting:
+    """Covers Phase 7 percent-aware budget parsing — see CLAUDE.md note about
+    percent limits silently evaluating to 0 prior to this fix."""
+
+    def _resolve(self, *args, **kwargs):
+        from web.services.pinned_service import _resolve_size_setting
+        return _resolve_size_setting(*args, **kwargs)
+
+    def test_bytes_string_parses_directly(self):
+        assert self._resolve("10GB", disk_total_bytes=0) == 10 * 1024 ** 3
+
+    def test_percent_resolves_against_disk_total(self):
+        # 50% of a 1 TiB drive = 512 GiB
+        disk = 1024 ** 4
+        assert self._resolve("50%", disk_total_bytes=disk) == disk // 2
+
+    def test_percent_without_disk_total_returns_zero(self):
+        # Mirrors the old soft-fail behaviour — but now only when we actually
+        # can't find a drive, not for any percent value.
+        assert self._resolve("50%", disk_total_bytes=0) == 0
+
+    def test_empty_or_sentinel_returns_zero(self):
+        for sentinel in ("", "0", "none", "None", "N/A", None):
+            assert self._resolve(sentinel, disk_total_bytes=10 ** 12) == 0
+
+    def test_bad_percent_value_returns_zero(self):
+        assert self._resolve("fifty%", disk_total_bytes=10 ** 12) == 0
+
+    def test_fractional_percent_rounds_down(self):
+        # 0.5% of 1000 = 5 (int truncates)
+        assert self._resolve("0.5%", disk_total_bytes=1000) == 5
+
+
+# ---------------------------------------------------------------------------
+# _load_parsed_settings percent integration
+# ---------------------------------------------------------------------------
+
+
+class TestLoadParsedSettingsPercent:
+    """Regression: percent cache_limit / min_free_space must resolve against
+    the active cache mapping's disk total, not silently parse to 0."""
+
+    def test_percent_cache_limit_resolves_against_active_mapping(self, tmp_path, monkeypatch):
+        gen = _make_service(tmp_path, extra_settings={
+            "cache_limit": "50%",
+            "min_free_space": "10%",
+        })
+        svc = next(gen)
+
+        # Fake the active cache drive at 2 TiB total
+        class _Disk:
+            total = 2 * 1024 ** 4
+        monkeypatch.setattr(
+            "web.services.pinned_service.get_disk_usage",
+            lambda *a, **kw: _Disk(),
+            raising=False,
+        )
+        # get_disk_usage is imported inside _get_active_cache_total_bytes,
+        # so patch it on core.system_utils too.
+        monkeypatch.setattr("core.system_utils.get_disk_usage", lambda *a, **kw: _Disk())
+
+        parsed = svc._load_parsed_settings()
+        assert parsed["cache_limit_bytes"] == _Disk.total // 2
+        assert parsed["min_free_space_bytes"] == _Disk.total // 10
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+    def test_percent_with_no_active_mapping_soft_fails_to_zero(self, tmp_path, monkeypatch):
+        gen = _make_service(tmp_path, extra_settings={
+            "cache_limit": "50%",
+            "path_mappings": [],  # no cache mapping → no drive to probe
+        })
+        svc = next(gen)
+
+        # No drive → percent degrades to 0 (pre-fix behaviour preserved
+        # when there's genuinely no cache mapping).
+        parsed = svc._load_parsed_settings()
+        assert parsed["cache_limit_bytes"] == 0
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+    def test_bytes_path_unchanged(self, tmp_path):
+        gen = _make_service(tmp_path, extra_settings={"cache_limit": "500GB"})
+        svc = next(gen)
+        parsed = svc._load_parsed_settings()
+        assert parsed["cache_limit_bytes"] == 500 * 1024 ** 3
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# unpin_many
+# ---------------------------------------------------------------------------
+
+
+class TestUnpinMany:
+    def test_empty_input_returns_zero(self, service):
+        result = service.unpin_many([])
+        assert result["removed"] == 0
+        assert result["evict_paths"] == []
+
+    def test_removes_all_matching_pins(self, tmp_path):
+        # Need both pins to resolve in Plex; otherwise the resolver's
+        # orphan-cleanup path ("not found on Plex → remove_pin") runs before
+        # unpin_many counts the key, inflating the removal count externally.
+        matrix = FakeMovie(100, "Matrix", [FakeMedia("1080", ("/plex/movies/Matrix.mkv",))])
+        other = FakeMovie(999, "Other", [FakeMedia("1080", ("/plex/movies/Other.mkv",))])
+        server = FakePlexServer(items={100: matrix, 999: other})
+
+        gen = _make_service(tmp_path, plex_server=server)
+        svc = next(gen)
+        svc._tracker.add_pin("100", "movie", "Matrix")
+        svc._tracker.add_pin("999", "movie", "Other")
+
+        result = svc.unpin_many(["100", "999", "missing"])
+        # Only real keys count as removed; missing is silently skipped
+        assert result["removed"] == 2
+        assert svc._tracker.is_pinned("100") is False
+        assert svc._tracker.is_pinned("999") is False
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+    def test_unknown_key_does_not_error(self, service):
+        result = service.unpin_many(["does-not-exist"])
+        assert result["removed"] == 0
+
+    def test_evict_paths_are_diffed_across_batch(self, service_with_plex):
+        svc = service_with_plex
+        svc._tracker.add_pin("100", "movie", "Matrix")
+        before = svc.resolve_all_to_cache_paths()
+        assert "/mnt/cache/media/Movies/Matrix.mkv" in before
+        result = svc.unpin_many(["100"])
+        # Freshly-released cache path must appear in evict_paths
+        assert "/mnt/cache/media/Movies/Matrix.mkv" in result["evict_paths"]
+
+
+# ---------------------------------------------------------------------------
+# _decorate_title
+# ---------------------------------------------------------------------------
+
+
+class TestDecorateTitle:
+    def test_movie_returns_fallback(self, service):
+        # Movies and shows keep their stored title unchanged
+        assert service._decorate_title(None, "movie", "1", "Matrix") == "Matrix"
+
+    def test_show_returns_fallback(self, service):
+        assert service._decorate_title(None, "show", "1", "Breaking Bad") == "Breaking Bad"
+
+    def test_season_with_no_plex_returns_fallback(self, service):
+        # Legacy "Season 2" title survives when Plex is down
+        assert service._decorate_title(None, "season", "1", "Season 2") == "Season 2"
+
+    def test_season_with_plex_enriches_title(self, tmp_path):
+        # Construct a fake season item exposing parentTitle + parentYear
+        season = MagicMock()
+        season.parentTitle = "Invincible"
+        season.parentYear = 2021
+        season.title = "Season 2"
+        server = FakePlexServer(items={42: season})
+
+        gen = _make_service(tmp_path, plex_server=server)
+        svc = next(gen)
+        result = svc._decorate_title(server, "season", "42", "Season 2")
+        assert result == "Invincible (2021) — Season 2"
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+    def test_episode_with_plex_builds_se_code(self, tmp_path):
+        ep = MagicMock()
+        ep.grandparentTitle = "The Office"
+        ep.grandparentYear = 2005
+        ep.parentIndex = 3
+        ep.index = 12
+        ep.title = "Prison Mike"
+        server = FakePlexServer(items={77: ep})
+
+        gen = _make_service(tmp_path, plex_server=server)
+        svc = next(gen)
+        result = svc._decorate_title(server, "episode", "77", "Prison Mike")
+        assert result == "The Office (2005) — S03E12 — Prison Mike"
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+    def test_fetchItem_failure_falls_back(self, tmp_path):
+        class BustedServer:
+            def fetchItem(self, key):
+                raise RuntimeError("plex went away")
+        gen = _make_service(tmp_path, plex_server=BustedServer())
+        svc = next(gen)
+        result = svc._decorate_title(BustedServer(), "season", "42", "Season 2")
+        assert result == "Season 2"
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# list_pins_grouped
+# ---------------------------------------------------------------------------
+
+
+class TestListPinsGrouped:
+    def test_empty_returns_empty(self, service):
+        assert service.list_pins_grouped() == []
+
+    def test_movie_pin_renders_as_single_group(self, service_with_plex):
+        svc = service_with_plex
+        svc._tracker.add_pin("100", "movie", "Matrix")
+        groups = svc.list_pins_grouped()
+        assert len(groups) == 1
+        grp = groups[0]
+        assert grp["group_type"] == "movie"
+        assert grp["pin_count"] == 1
+        assert len(grp["pins"]) == 1
+        assert grp["pins"][0]["rating_key"] == "100"
+
+    def test_season_and_episode_pins_collapse_into_show_group(self, tmp_path):
+        # Build a fake season (tier 1) + episode (tier 2) sharing a show
+        season = MagicMock()
+        season.parentRatingKey = "999"
+        season.parentTitle = "Invincible"
+        season.parentYear = 2021
+        season.title = "Season 2"
+        season.leafCount = 8
+        season.index = 2
+
+        ep = MagicMock()
+        ep.grandparentRatingKey = "999"
+        ep.grandparentTitle = "Invincible"
+        ep.grandparentYear = 2021
+        ep.parentIndex = 1
+        ep.index = 3
+        ep.title = "Who You Calling Ugly?"
+
+        # list_pins_with_metadata needs a resolvable item too — give the
+        # episode real media parts so resolve_pins_to_paths doesn't barf.
+        ep.media = [FakeMedia("1080", ("/plex/tv/S01E03.mkv",))]
+        season.episodes = lambda: [ep]
+        # episodes under a season pin also need media
+        server = FakePlexServer(items={42: season, 77: ep})
+
+        gen = _make_service(tmp_path, plex_server=server)
+        svc = next(gen)
+        svc._tracker.add_pin("42", "season", "Season 2")
+        svc._tracker.add_pin("77", "episode", "Who You Calling Ugly?")
+
+        groups = svc.list_pins_grouped()
+        # Both pins share grandparent/parent rating_key="999" → one group
+        assert len(groups) == 1
+        assert groups[0]["group_rating_key"] == "999"
+        assert groups[0]["pin_count"] == 2
+        # Sort within group: seasons (tier 1) before episodes (tier 2)
+        types_in_order = [p["type"] for p in groups[0]["pins"]]
+        assert types_in_order == ["season", "episode"]
+        try:
+            next(gen)
+        except StopIteration:
+            pass
