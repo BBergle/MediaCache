@@ -475,19 +475,15 @@
         document.getElementById('unpin-group-modal').style.display = 'none';
         _pendingUnpinGroupForm = null;
     }
-    (function() {
-        var btn = document.getElementById('unpin-group-confirm');
-        if (!btn) return;
-        btn.addEventListener('click', function() {
-            var form = _pendingUnpinGroupForm;
-            closeUnpinGroupModal();
-            if (form && typeof form.requestSubmit === 'function') {
-                form.requestSubmit();
-            } else if (form) {
-                form.submit();
-            }
-        });
-    })();
+    function confirmUnpinGroupModal() {
+        var form = _pendingUnpinGroupForm;
+        closeUnpinGroupModal();
+        if (form && typeof form.requestSubmit === 'function') {
+            form.requestSubmit();
+        } else if (form) {
+            form.submit();
+        }
+    }
 </script>
 
 <div id="unpin-group-modal" class="modal" style="display: none;">
@@ -510,7 +506,7 @@
         </div>
         <div class="modal-footer">
             <button type="button" class="btn btn-secondary" onclick="closeUnpinGroupModal()">Cancel</button>
-            <button type="button" class="btn btn-danger" id="unpin-group-confirm">
+            <button type="button" class="btn btn-danger" id="unpin-group-confirm" onclick="confirmUnpinGroupModal()">
                 <i data-lucide="trash-2" style="width: 14px; height: 14px;"></i>
                 Unpin all
             </button>
