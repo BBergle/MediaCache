@@ -182,14 +182,20 @@ def _start_unpin_eviction(cache_paths: list) -> bool:
 
 @router.get("/list", response_class=HTMLResponse)
 def pinned_list(request: Request):
-    """HTMX partial: currently-pinned chip list + budget summary."""
+    """HTMX partial: currently-pinned grouped list + budget summary."""
     from core.system_utils import format_bytes
     service = get_pinned_service()
-    pins = service.list_pins_with_metadata()
+    groups = service.list_pins_grouped()
     budget = service.budget_check()
     total_pinned_display = format_bytes(budget["total_pinned_bytes"])
+    pin_count = sum(g.get("pin_count", 0) for g in groups)
     return templates.TemplateResponse(
         request,
         "settings/partials/pinned_chip_list.html",
-        {"pins": pins, "budget": budget, "total_pinned_display": total_pinned_display},
+        {
+            "groups": groups,
+            "pin_count": pin_count,
+            "budget": budget,
+            "total_pinned_display": total_pinned_display,
+        },
     )

@@ -550,6 +550,175 @@ class PinnedService:
             })
         return out
 
+    def _pin_group_and_scope(self, plex, pin_type: str, rating_key: str,
+                              stored_title: str) -> Dict[str, Any]:
+        """Return group metadata + scope text for a pin.
+
+        Output fields:
+          group_rating_key, group_title, group_type ("movie" or "show"),
+          scope_text (what's pinned within the group),
+          scope_icon (lucide icon name),
+          sort_key (tier, season_num, ep_num) for within-group ordering.
+
+        Falls back gracefully when Plex is unreachable — the pin keeps its
+        stored title as the scope text and is grouped as a standalone entry.
+        """
+        scope_icon_map = {
+            "show": "tv",
+            "season": "layers",
+            "episode": "play",
+            "movie": "film",
+        }
+        result = {
+            "group_rating_key": rating_key,
+            "group_title": stored_title,
+            "group_type": "show" if pin_type in ("show", "season", "episode") else "movie",
+            "scope_text": stored_title,
+            "scope_icon": scope_icon_map.get(pin_type, "file-video"),
+            "sort_key": (0, 0, 0),
+        }
+
+        if plex is None:
+            return result
+
+        try:
+            item = plex.fetchItem(int(rating_key))
+        except Exception:
+            return result
+
+        try:
+            if pin_type == "movie":
+                result["group_rating_key"] = rating_key
+                title = getattr(item, "title", "") or stored_title
+                year = getattr(item, "year", None)
+                result["group_title"] = f"{title} ({year})" if title and year else title
+                result["group_type"] = "movie"
+                result["scope_text"] = "Movie"
+                result["sort_key"] = (0, 0, 0)
+
+            elif pin_type == "show":
+                result["group_rating_key"] = rating_key
+                title = getattr(item, "title", "") or stored_title
+                year = getattr(item, "year", None)
+                result["group_title"] = f"{title} ({year})" if title and year else title
+                result["group_type"] = "show"
+                result["scope_text"] = "Entire Show"
+                result["sort_key"] = (0, 0, 0)
+
+            elif pin_type == "season":
+                show_rk = str(getattr(item, "parentRatingKey", "") or "")
+                show_title = getattr(item, "parentTitle", "") or getattr(item, "grandparentTitle", "")
+                show_year = getattr(item, "parentYear", None)
+                result["group_rating_key"] = show_rk or rating_key
+                result["group_title"] = (
+                    f"{show_title} ({show_year})" if show_title and show_year else (show_title or stored_title)
+                )
+                result["group_type"] = "show"
+                season_title = getattr(item, "title", "") or "Season"
+                ep_count = getattr(item, "leafCount", None)
+                if isinstance(ep_count, int) and ep_count > 0:
+                    result["scope_text"] = f"{season_title} ({ep_count} eps)"
+                else:
+                    result["scope_text"] = season_title
+                season_num = getattr(item, "index", 0)
+                result["sort_key"] = (1, season_num if isinstance(season_num, int) else 0, 0)
+
+            elif pin_type == "episode":
+                show_rk = str(getattr(item, "grandparentRatingKey", "") or "")
+                show_title = getattr(item, "grandparentTitle", "") or ""
+                show_year = getattr(item, "grandparentYear", None)
+                result["group_rating_key"] = show_rk or rating_key
+                result["group_title"] = (
+                    f"{show_title} ({show_year})" if show_title and show_year else (show_title or stored_title)
+                )
+                result["group_type"] = "show"
+                season_num = getattr(item, "parentIndex", None)
+                ep_num = getattr(item, "index", None)
+                ep_title = getattr(item, "title", "") or ""
+                se_code = ""
+                if isinstance(season_num, int) and isinstance(ep_num, int):
+                    se_code = f"S{season_num:02d}E{ep_num:02d}"
+                if se_code and ep_title:
+                    result["scope_text"] = f"{se_code} — {ep_title}"
+                elif se_code:
+                    result["scope_text"] = se_code
+                else:
+                    result["scope_text"] = ep_title or stored_title
+                result["sort_key"] = (
+                    2,
+                    season_num if isinstance(season_num, int) else 0,
+                    ep_num if isinstance(ep_num, int) else 0,
+                )
+        except Exception:
+            # Any unexpected plexapi issue — keep the safe defaults
+            pass
+
+        return result
+
+    def list_pins_grouped(self) -> List[Dict[str, Any]]:
+        """Return pins grouped by show/movie, sorted for stable display.
+
+        Shape::
+
+            [
+              {
+                "group_rating_key": str,
+                "group_title": "Show Name (Year)",
+                "group_type": "show" | "movie",
+                "pin_count": int,
+                "group_bytes": int,
+                "group_size_display": "X.YY GB",
+                "pins": [ { rating_key, type, scope_text, scope_icon,
+                            size_bytes, size_display, budget_percent,
+                            title, sort_key }, ... ]
+              },
+              ...
+            ]
+
+        Groups are sorted alphabetically by group_title. Within each group,
+        pins sort by (tier, season_num, ep_num): show-scope pin first, then
+        seasons ascending, then episodes by (season, episode).
+        """
+        flat = self.list_pins_with_metadata()
+        if not flat:
+            return []
+
+        plex = None
+        try:
+            plex = self._get_plex_server()
+        except Exception as e:
+            logger.debug(f"PinnedService.list_pins_grouped: plex unavailable: {e}")
+
+        from core.system_utils import format_bytes
+        groups: Dict[str, Dict[str, Any]] = {}
+        for pin in flat:
+            ctx = self._pin_group_and_scope(
+                plex, pin["type"], pin["rating_key"], pin["title"]
+            )
+            gk = ctx["group_rating_key"]
+            if gk not in groups:
+                groups[gk] = {
+                    "group_rating_key": gk,
+                    "group_title": ctx["group_title"],
+                    "group_type": ctx["group_type"],
+                    "pin_count": 0,
+                    "group_bytes": 0,
+                    "pins": [],
+                }
+            enriched = dict(pin)
+            enriched["scope_text"] = ctx["scope_text"]
+            enriched["scope_icon"] = ctx["scope_icon"]
+            enriched["sort_key"] = ctx["sort_key"]
+            groups[gk]["pins"].append(enriched)
+            groups[gk]["pin_count"] += 1
+            groups[gk]["group_bytes"] += pin.get("size_bytes", 0) or 0
+
+        for group in groups.values():
+            group["pins"].sort(key=lambda p: p.get("sort_key") or (9, 0, 0))
+            group["group_size_display"] = format_bytes(group["group_bytes"])
+
+        return sorted(groups.values(), key=lambda g: (g["group_title"] or "").lower())
+
     # ------------------------------------------------------------------
     # Full resolve: cache paths used by CacheService to flag is_pinned
     # ------------------------------------------------------------------

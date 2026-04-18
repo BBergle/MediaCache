@@ -100,6 +100,31 @@ class _FakePinnedService:
             for rk, p in self._pins.items()
         ]
 
+    def list_pins_grouped(self):
+        # Route-test stub: one group per pin, matches shape used by the template.
+        groups = []
+        for rk, p in self._pins.items():
+            groups.append({
+                "group_rating_key": rk,
+                "group_title": p["title"],
+                "group_type": "show" if p["type"] in ("show", "season", "episode") else "movie",
+                "pin_count": 1,
+                "group_bytes": 0,
+                "group_size_display": "0 B",
+                "pins": [{
+                    "rating_key": rk,
+                    "type": p["type"],
+                    "title": p["title"],
+                    "scope_text": p["title"],
+                    "scope_icon": "film",
+                    "size_bytes": 0,
+                    "size_display": "0 B",
+                    "budget_percent": 0,
+                    "sort_key": (0, 0, 0),
+                }],
+            })
+        return groups
+
     def budget_check(self, additional_rating_key=None, additional_pin_type=None):
         return {
             "total_pinned_bytes": 0,

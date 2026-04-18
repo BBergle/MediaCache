@@ -1,21 +1,22 @@
 {#
-  Currently pinned media — chip list + budget summary.
-  ``pins`` is from PinnedService.list_pins_with_metadata().
+  Currently pinned media — grouped list + budget summary.
+  ``groups`` is from PinnedService.list_pins_grouped(): a list of
+  {group_rating_key, group_title, group_type, pin_count, group_bytes,
+   group_size_display, pins: [...]} dicts, one per show/movie.
+  ``pin_count`` is the total across all groups.
   ``budget`` is from PinnedService.budget_check().
 
-  This partial is loaded by the #pinned-chip-list-container on page load
-  and on the "pinned-updated" event emitted by the toggle route. The chip
-  × button posts with hx-swap="none"; the HX-Trigger header refreshes this
-  partial via the event listener on the outer container.
+  Loaded by #pinned-chip-list-container on page load and on the
+  "pinned-updated" event emitted by the toggle route.
 #}
-<div class="pinned-chip-list" id="pinned-chip-list">
-    {% if pins %}
+<div class="pinned-list" id="pinned-chip-list">
+    {% if groups %}
     <div class="pinned-budget-summary"
          style="display: flex; align-items: center; gap: 0.5rem; color: var(--plex-text-muted); font-size: 0.85rem; margin-bottom: 0.75rem;">
         <i data-lucide="pin" style="width: 14px; height: 14px;"></i>
         <span>
-            <strong style="color: var(--plex-text);">{{ pins | length }}</strong>
-            pin{% if pins | length != 1 %}s{% endif %}
+            <strong style="color: var(--plex-text);">{{ pin_count }}</strong>
+            pin{% if pin_count != 1 %}s{% endif %}
         </span>
         <span>•</span>
         <span>
@@ -35,40 +36,57 @@
             </span>
         {% endif %}
     </div>
-    <ul class="pinned-chips" style="list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 0.5rem;">
-        {% for pin in pins %}
-        <li class="pinned-chip" data-rating-key="{{ pin.rating_key }}" data-type="{{ pin.type }}"
-            style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.45rem 0.65rem; background: var(--plex-bg-darker); border: 1px solid rgba(255,255,255,0.08); border-radius: var(--plex-radius-sm); font-size: 0.85rem;">
-            <span class="pinned-chip-type-icon" title="{{ pin.type | capitalize }}"
-                  style="display: inline-flex; width: 18px; height: 18px; align-items: center; justify-content: center; color: var(--plex-text-muted);">
-                {% if pin.type == "show" %}
-                    <i data-lucide="tv" style="width: 14px; height: 14px;"></i>
-                {% elif pin.type == "season" %}
-                    <i data-lucide="layers" style="width: 14px; height: 14px;"></i>
-                {% elif pin.type == "episode" %}
-                    <i data-lucide="play" style="width: 14px; height: 14px;"></i>
-                {% else %}
-                    <i data-lucide="film" style="width: 14px; height: 14px;"></i>
-                {% endif %}
-            </span>
-            <span class="pinned-chip-title" style="color: var(--plex-text); max-width: 32rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ pin.title }}">{{ pin.title }}</span>
-            {% if pin.size_bytes %}
-                <span class="pinned-chip-size" style="color: var(--plex-text-muted); font-variant-numeric: tabular-nums;">{{ pin.size_display }}</span>
-            {% endif %}
-            <form hx-post="/api/pinned/toggle"
-                  hx-swap="none"
-                  style="margin: 0;">
-                <input type="hidden" name="rating_key" value="{{ pin.rating_key }}">
-                <input type="hidden" name="pin_type" value="{{ pin.type }}">
-                <input type="hidden" name="title" value="{{ pin.title }}">
-                <button type="submit" class="btn-icon" title="Unpin" aria-label="Unpin {{ pin.title }}"
-                        style="background: none; border: 0; cursor: pointer; color: var(--plex-text-muted); padding: 0.1rem 0.2rem; display: inline-flex; align-items: center;">
-                    <i data-lucide="x" style="width: 14px; height: 14px;"></i>
-                </button>
-            </form>
-        </li>
-        {% endfor %}
-    </ul>
+
+    <div class="pinned-groups" style="display: flex; flex-direction: column; gap: 0.75rem;">
+    {% for group in groups %}
+        <div class="pinned-group"
+             style="background: var(--plex-bg-darker); border: 1px solid rgba(255,255,255,0.08); border-radius: var(--plex-radius-sm); overflow: hidden;">
+            <div class="pinned-group-header"
+                 style="display: flex; align-items: center; gap: 0.5rem; padding: 0.6rem 0.75rem; border-bottom: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.02);">
+                <span style="display: inline-flex; width: 18px; height: 18px; align-items: center; justify-content: center; color: var(--plex-text-muted);">
+                    {% if group.group_type == 'show' %}
+                        <i data-lucide="tv" style="width: 14px; height: 14px;"></i>
+                    {% else %}
+                        <i data-lucide="film" style="width: 14px; height: 14px;"></i>
+                    {% endif %}
+                </span>
+                <span style="color: var(--plex-text); font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                      title="{{ group.group_title }}">{{ group.group_title }}</span>
+                <span style="color: var(--plex-text-muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; white-space: nowrap;">
+                    {{ group.pin_count }} pin{% if group.pin_count != 1 %}s{% endif %} · {{ group.group_size_display }}
+                </span>
+            </div>
+            <ul style="list-style: none; padding: 0; margin: 0;">
+            {% for pin in group.pins %}
+                <li class="pinned-row" data-rating-key="{{ pin.rating_key }}" data-type="{{ pin.type }}"
+                    style="display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.75rem; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 0.85rem;">
+                    <span style="display: inline-flex; width: 18px; height: 18px; align-items: center; justify-content: center; color: var(--plex-text-muted); flex-shrink: 0;"
+                          title="{{ pin.type | capitalize }}">
+                        <i data-lucide="{{ pin.scope_icon }}" style="width: 14px; height: 14px;"></i>
+                    </span>
+                    <span style="color: var(--plex-text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                          title="{{ pin.scope_text }}">{{ pin.scope_text }}</span>
+                    {% if pin.size_bytes %}
+                        <span style="color: var(--plex-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0;">{{ pin.size_display }}</span>
+                    {% endif %}
+                    <form hx-post="/api/pinned/toggle"
+                          hx-swap="none"
+                          style="margin: 0; flex-shrink: 0;">
+                        <input type="hidden" name="rating_key" value="{{ pin.rating_key }}">
+                        <input type="hidden" name="pin_type" value="{{ pin.type }}">
+                        <input type="hidden" name="title" value="{{ pin.title }}">
+                        <button type="submit" class="btn-icon" title="Unpin" aria-label="Unpin {{ pin.scope_text }}"
+                                style="background: none; border: 0; cursor: pointer; color: var(--plex-text-muted); padding: 0.1rem 0.3rem; display: inline-flex; align-items: center; border-radius: var(--plex-radius-sm);">
+                            <i data-lucide="x" style="width: 14px; height: 14px;"></i>
+                        </button>
+                    </form>
+                </li>
+            {% endfor %}
+            </ul>
+        </div>
+    {% endfor %}
+    </div>
+
     <div style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid rgba(255,255,255,0.06);">
         <button type="button" class="btn btn-sm btn-primary"
                 hx-post="/maintenance/cache-pinned"
