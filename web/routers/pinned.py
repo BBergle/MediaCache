@@ -197,7 +197,7 @@ def pinned_unpin_group(
     result = service.unpin_many(rating_keys)
 
     response = HTMLResponse(
-        '<div class="alert alert-info" style="margin-bottom: 1rem;">'
+        '<div class="alert alert-info alert-auto-dismiss" style="margin-bottom: 1rem;">'
         '<i data-lucide="check-circle"></i>'
         f'<span>Unpinned {result["removed"]} item(s).</span>'
         '</div><script>lucide.createIcons();</script>',

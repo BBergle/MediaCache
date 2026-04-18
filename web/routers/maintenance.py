@@ -173,7 +173,7 @@ def _start_async_action(action_name: str, service_method, method_args=(), method
         if item_id:
             count = runner.queue_count
             return (
-                '<div class="alert alert-info maintenance-action-queued" style="margin-bottom: 1rem;">'
+                '<div class="alert alert-info alert-auto-dismiss maintenance-action-queued" style="margin-bottom: 1rem;">'
                 '<i data-lucide="list-plus"></i>'
                 f'<span>Action queued (#{count}). Starts automatically after current action completes.</span>'
                 '</div><script>lucide.createIcons();'
@@ -200,7 +200,7 @@ def _start_async_action(action_name: str, service_method, method_args=(), method
 
     if started:
         return (
-            '<div class="alert alert-info maintenance-async-started" style="margin-bottom: 1rem;">'
+            '<div class="alert alert-info alert-auto-dismiss maintenance-async-started" style="margin-bottom: 1rem;">'
             '<i data-lucide="loader"></i>'
             '<span>Action started in background. You can navigate away from this page.</span>'
             '</div><script>lucide.createIcons();</script>'
@@ -678,7 +678,7 @@ def cache_pinned(request: Request):
 
     if missing_count == 0:
         return HTMLResponse(
-            '<div class="alert alert-info" style="margin-bottom: 1rem;">'
+            '<div class="alert alert-info alert-auto-dismiss" style="margin-bottom: 1rem;">'
             '<i data-lucide="check-circle"></i>'
             '<span>All pinned media is already on cache.</span>'
             '</div><script>lucide.createIcons();</script>'

@@ -9,14 +9,4 @@
 <!-- Include the updated users table -->
 {% include "settings/partials/users_table.html" %}
 
-<script>
-lucide.createIcons();
-// Auto-dismiss success alert after 4 seconds
-document.querySelectorAll('.alert-auto-dismiss').forEach(function(alert) {
-    setTimeout(function() {
-        alert.style.transition = 'opacity 0.3s ease-out';
-        alert.style.opacity = '0';
-        setTimeout(function() { alert.remove(); }, 300);
-    }, 4000);
-});
-</script>
+<script>lucide.createIcons();</script>

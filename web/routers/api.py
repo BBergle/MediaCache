@@ -308,7 +308,7 @@ def save_schedule_settings(request: Request, form_data: ImmutableMultiDict = Dep
     if result["success"]:
         # Return alert with script to refresh status display
         return HTMLResponse(f'''
-            <div class="alert alert-success">
+            <div class="alert alert-success alert-auto-dismiss">
                 <i data-lucide="check-circle"></i>
                 <span>Schedule settings saved successfully</span>
             </div>
