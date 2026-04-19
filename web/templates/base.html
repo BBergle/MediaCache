@@ -134,9 +134,16 @@
                 <!-- Global Operation Status Banner -->
                 <div id="global-operation-banner"
                      hx-get="/api/operation-banner"
-                     hx-trigger="load"
+                     hx-trigger="load, pinned-eviction-started from:body"
                      hx-swap="innerHTML">
                 </div>
+                <script>
+                    // Scroll to top when an unpin kicks off a background eviction
+                    // so the user sees the banner spin up.
+                    document.body.addEventListener('pinned-eviction-started', function() {
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                    });
+                </script>
 
                 <!-- Alert container for toast notifications -->
                 <div id="alert-container"></div>

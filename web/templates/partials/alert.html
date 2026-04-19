@@ -21,13 +21,4 @@
     {{ message }}
 </div>
 {% endif %}
-<script>
-lucide.createIcons();
-// Auto-dismiss success/info alerts after 4 seconds
-document.querySelectorAll('.alert-auto-dismiss').forEach(function(alert) {
-    setTimeout(function() {
-        alert.classList.add('alert-fade-out');
-        setTimeout(function() { alert.remove(); }, 300);
-    }, 4000);
-});
-</script>
+<script>lucide.createIcons();</script>

@@ -39,6 +39,12 @@ Options:
   --show-mappings       Display path mapping configuration and status
   --restore-plexcached  Emergency restore of .plexcached backup files
 
+Pinned Media:
+  --list-pins           List all pinned media items
+  --pin KEY             Pin a media item by Plex rating key
+  --unpin KEY           Unpin a media item by Plex rating key
+  --pin-by-title TITLE  Search Plex by title and pin interactively
+
 Web UI Options (use with --web):
   --host HOST           Host to bind to (default: 127.0.0.1)
   --port PORT           Port to listen on (default: 5000)
@@ -51,6 +57,8 @@ Examples:
   {python_cmd} plexcache.py --web --port 8080   Start web UI on custom port
   {python_cmd} plexcache.py --dry-run --verbose Test run with full debug output
   {python_cmd} plexcache.py --show-priorities   See which files would be evicted first
+  {python_cmd} plexcache.py --list-pins         Show all pinned media
+  {python_cmd} plexcache.py --pin-by-title "Breaking Bad"  Search and pin
 
 Documentation: https://github.com/StudioNirin/PlexCache-D
 """

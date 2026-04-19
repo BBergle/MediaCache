@@ -1026,7 +1026,7 @@ class PlexManager:
         return []
 
     def _process_watchlist_show(self, file, watchlist_episodes: int, username: str,
-                                 watchlisted_at: Optional[datetime]) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str]], None, None]:
+                                 watchlisted_at: Optional[datetime]) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str], str], None, None]:
         """Process a show and yield episode file paths with metadata.
 
         Iterates all media versions and parts per episode (e.g., 4K + 1080p),
@@ -1059,7 +1059,7 @@ class PlexManager:
                                 'episode': ep_index
                             }
                         ep_rating_key = str(getattr(episode, 'ratingKey', '') or '')
-                        yield (file_path, username, watchlisted_at, episode_info, ep_rating_key or None)
+                        yield (file_path, username, watchlisted_at, episode_info, ep_rating_key or None, "episode")
                         yielded_count += 1
                     else:
                         skipped_watched += 1
@@ -1073,7 +1073,7 @@ class PlexManager:
             logging.warning(f"  {file.title}: {skipped_no_media} episodes skipped (no media files)")
 
     def _process_watchlist_movie(self, file, username: str,
-                                  watchlisted_at: Optional[datetime]) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str]], None, None]:
+                                  watchlisted_at: Optional[datetime]) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str], str], None, None]:
         """Process a movie and yield file paths with metadata.
 
         Iterates all media versions and parts (e.g., 4K + 1080p),
@@ -1084,11 +1084,11 @@ class PlexManager:
             for part in media.parts:
                 file_path = part.file
                 logging.debug(f"[USER:{username}] Watchlist found: {file_path}")
-                yield (file_path, username, watchlisted_at, None, movie_rating_key or None)
+                yield (file_path, username, watchlisted_at, None, movie_rating_key or None, "movie")
 
     def _fetch_user_watchlist(self, user, valid_sections: List[int], watchlist_episodes: int,
                                skip_watchlist: List[str], rss_url: Optional[str],
-                               filtered_sections: List[int]) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str]], None, None]:
+                               filtered_sections: List[int]) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str], str], None, None]:
         """Fetch watchlist media for a user, yielding file paths with metadata.
 
         Uses separate MyPlexAccount instances per user to avoid session state contamination.
@@ -1195,7 +1195,7 @@ class PlexManager:
 
     def _process_rss_watchlist(self, rss_url: str, current_username: str,
                                 filtered_sections: List[int], watchlist_episodes: int,
-                                skip_watchlist: List[str] = None) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str]], None, None]:
+                                skip_watchlist: List[str] = None) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str], str], None, None]:
         """Process RSS feed items and yield matching media files.
 
         Args:
@@ -1265,7 +1265,7 @@ class PlexManager:
 
     def get_watchlist_media(self, valid_sections: List[int], watchlist_episodes: int,
                             users_toggle: bool, skip_watchlist: List[str], rss_url: Optional[str] = None,
-                            home_users: Optional[List[str]] = None) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str]], None, None]:
+                            home_users: Optional[List[str]] = None) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str], str], None, None]:
         """Get watchlist media files, optionally via RSS, with proper user filtering.
 
         Args:
@@ -1277,11 +1277,13 @@ class PlexManager:
             home_users: List of usernames that are home/managed users (can access watchlist).
 
         Yields:
-            Tuples of (file_path, username, watchlisted_at, episode_info, rating_key) where
-            watchlisted_at is the datetime when the item was added to the user's watchlist
-            (None for RSS items), episode_info is a dict with 'show', 'season', 'episode'
-            keys for TV episodes (None for movies), and rating_key is the Plex rating key
-            for version grouping (None if unavailable).
+            Tuples of (file_path, username, watchlisted_at, episode_info, rating_key, media_type)
+            where watchlisted_at is the datetime when the item was added to the user's
+            watchlist (None for RSS items), episode_info is a dict with 'show', 'season',
+            'episode' keys for TV episodes (None for movies), rating_key is the Plex
+            rating key for version grouping (None if unavailable), and media_type is
+            "episode" or "movie" so downstream code can tell a watchlisted episode apart
+            from a watchlisted movie even when episode_info is missing.
         """
         if home_users is None:
             home_users = []

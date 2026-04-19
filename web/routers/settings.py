@@ -738,7 +738,7 @@ async def update_library_paths(request: Request, section_id: int):
     libraries = settings_service.get_plex_libraries()
     library = next((lib for lib in libraries if lib["id"] == section_id), None)
     if not library:
-        return HTMLResponse("<div class='alert alert-success'>Saved</div>")
+        return HTMLResponse("<div class='alert alert-success alert-auto-dismiss'>Saved</div>")
 
     lib_maps = []
     for i, m in enumerate(all_mappings):
@@ -813,7 +813,7 @@ def update_library_path(
     libraries = settings_service.get_plex_libraries()
     library = next((lib for lib in libraries if lib["id"] == section_id), None)
     if not library:
-        return HTMLResponse("<div class='alert alert-success'>Saved</div>")
+        return HTMLResponse("<div class='alert alert-success alert-auto-dismiss'>Saved</div>")
 
     lib_maps = []
     for i, m in enumerate(all_mappings):

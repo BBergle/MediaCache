@@ -28,6 +28,7 @@ from core.logging_config import LoggingManager, reset_warning_error_flag
 from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock, get_disk_usage, get_array_direct_path, detect_zfs, set_zfs_prefixes, format_bytes
 from core.plex_api import PlexManager, OnDeckItem
 from core.file_operations import MultiPathModifier, SiblingFileFinder, FileFilter, FileMover, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration, get_media_identity, find_matching_plexcached, is_directory_level_file
+from core.pinned_media import PinnedMediaTracker, resolve_pins_to_paths
 
 
 class PlexCacheApp:
@@ -68,7 +69,11 @@ class PlexCacheApp:
         self.media_to_array = []
         self.ondeck_items = set()
         self.watchlist_items = set()
-        self.source_map = {}  # Maps file paths to source ('ondeck' or 'watchlist')
+        # Pinned media state (rating_key-keyed, resolved to real paths in _process_media)
+        self.pinned_items: Set[str] = set()           # real-path file set for pinned media (videos + sidecars)
+        self.pinned_rating_keys: Set[str] = set()     # set of str rating_keys currently pinned
+        self.pinned_paths_cache: Set[str] = set()     # cache-form paths (consumed by Phase 2b/2c protection)
+        self.source_map = {}  # Maps file paths to source ('ondeck', 'watchlist', or 'pinned')
         self.media_info_map = {}  # Maps file paths to Plex media type info
         self.sibling_map: Dict[str, List[str]] = {}  # Maps video real paths to sibling file paths
         # Tracking for restore vs move operations (for summary)
@@ -535,6 +540,9 @@ class PlexCacheApp:
         ondeck_tracker_file = str(self.config_manager.get_ondeck_tracker_file())
         self.ondeck_tracker = OnDeckTracker(ondeck_tracker_file)
 
+        pinned_media_file = str(self.config_manager.get_pinned_media_file())
+        self.pinned_tracker = PinnedMediaTracker(pinned_media_file)
+
     def _init_file_operations(self, mover_exclude) -> None:
         """Initialize file filter and file mover."""
         self.file_filter = FileFilter(
@@ -990,6 +998,17 @@ class PlexCacheApp:
         pre_run_rk_index = {rk: set(paths) for rk, paths in getattr(self.ondeck_tracker, '_rating_key_index', {}).items()}
         self.ondeck_tracker.prepare_for_run()
 
+        # --- Pinned Media (always-cached items) ---
+        # Resolve pins BEFORE OnDeck so pinned wins over OnDeck in source_map when
+        # a pinned item is also currently on someone's OnDeck. The protection that
+        # consumes pinned_paths_cache lands in subsequent commits (priority manager
+        # in 2b, eviction/move-back in 2c) — this commit only sets up the gathering.
+        self._process_pinned_media(modified_paths_set)
+
+        if self.should_stop:
+            logging.info("Operation stopped during media processing")
+            return
+
         # Fetch OnDeck Media - returns List[OnDeckItem] with file path, username, and episode metadata
         logging.debug("Fetching OnDeck media...")
         ondeck_items_list = self.plex_manager.get_on_deck_media(
@@ -1073,9 +1092,10 @@ class PlexCacheApp:
                     ondeck_cache_paths.add(cache_path)
             self.priority_manager.active_ondeck_paths = ondeck_cache_paths
 
-        # Track source for OnDeck items
+        # Track source for OnDeck items — pinned items keep their "pinned" source
         for item in self.ondeck_items:
-            self.source_map[item] = "ondeck"
+            if item not in self.source_map:
+                self.source_map[item] = "ondeck"
 
         if self.should_stop:
             logging.info("Operation stopped during media processing")
@@ -1180,6 +1200,135 @@ class PlexCacheApp:
                 self.file_filter.set_media_info_map(self.media_info_map)
                 self._check_files_to_move_back_to_array()
 
+    def _process_pinned_media(self, modified_paths_set: set) -> None:
+        """Resolve pinned media to real-path file set and merge into the run.
+
+        This runs before OnDeck/Watchlist so pinned items "win" the source_map
+        slot — an item that is both pinned and on someone's OnDeck is tracked
+        as pinned. Subsequent commits hook up the actual protection layers
+        (priority manager handoff in 2b, move-back/FIFO guards in 2c).
+
+        Populates:
+            self.pinned_items        — real-path set (videos + sidecars)
+            self.pinned_rating_keys  — str rating_keys currently pinned
+            self.pinned_paths_cache  — cache-form paths
+            self.sibling_map         — sibling files for pinned episodes/movies
+            self.source_map          — path → "pinned" entries
+            modified_paths_set       — extended with pinned paths + siblings
+
+        Orphan pins (rating_keys no longer resolvable in Plex) are removed
+        from the tracker and logged.
+        """
+        # Reset state — guards against stale values on subsequent runs
+        self.pinned_items = set()
+        self.pinned_rating_keys = set()
+        self.pinned_paths_cache = set()
+
+        pin_entries = self.pinned_tracker.list_pins()
+        if not pin_entries:
+            logging.debug("No pinned media configured")
+            return
+
+        preference = self.config_manager.plex.pinned_preferred_resolution or "highest"
+        logging.debug(
+            f"Resolving {len(pin_entries)} pinned item(s) "
+            f"(preference={preference})..."
+        )
+
+        try:
+            resolved, orphaned = resolve_pins_to_paths(
+                self.plex_manager.plex,
+                self.pinned_tracker,
+                preference=preference,
+            )
+        except Exception as e:
+            logging.error(
+                f"Failed to resolve pinned media: {type(e).__name__}: {e}. "
+                f"Run will continue without pinned media protection."
+            )
+            return
+
+        if orphaned:
+            logging.info(
+                f"[PINNED] Removed {len(orphaned)} orphaned pin(s) "
+                f"(items no longer in Plex)"
+            )
+
+        if not resolved:
+            logging.info("[FETCH] Pinned: 0 files resolved")
+            return
+
+        # Track the set of rating_keys that successfully resolved
+        self.pinned_rating_keys = {rk for _, rk, _ in resolved}
+
+        # Extract just the plex-form file paths for path modification
+        pinned_plex_paths = [p for p, _, _ in resolved]
+
+        # Convert plex paths → real paths (same pattern as OnDeck handling)
+        modified_pinned = self.file_path_modifier.modify_file_paths(pinned_plex_paths)
+
+        pinned_video_paths = set(modified_pinned)
+        modified_paths_set.update(pinned_video_paths)
+
+        # Mark every pinned video real path in the source_map FIRST — so OnDeck
+        # and Watchlist's "if not already tracked" guards don't overwrite us.
+        for real_path in pinned_video_paths:
+            self.source_map[real_path] = "pinned"
+
+        # Fetch sibling files (subtitles, NFOs, artwork) so pinned episodes and
+        # movies get the same sidecar treatment as OnDeck items.
+        assoc_mode = self.config_manager.cache.cache_associated_files
+        if assoc_mode == "all":
+            pinned_sibling_map = self.sibling_finder.get_media_siblings_grouped(
+                list(pinned_video_paths),
+                files_to_skip=set(self.files_to_skip),
+            )
+        elif assoc_mode == "subtitles":
+            pinned_sibling_map = self.sibling_finder.get_media_subtitles_grouped(
+                list(pinned_video_paths),
+                files_to_skip=set(self.files_to_skip),
+            )
+        else:
+            pinned_sibling_map = {}
+
+        self.sibling_map.update(pinned_sibling_map)
+
+        pinned_sibling_paths: Set[str] = set()
+        for siblings in pinned_sibling_map.values():
+            for sibling in siblings:
+                modified_paths_set.add(sibling)
+                self.source_map[sibling] = "pinned"
+                pinned_sibling_paths.add(sibling)
+
+        # self.pinned_items holds every real path protected by pins (videos +
+        # sidecars). Phase 2c uses this as the "always keep" set in the
+        # move-back-to-array protection check.
+        self.pinned_items = pinned_video_paths | pinned_sibling_paths
+
+        # Compute cache-form paths for EVERY pinned real path (videos + sidecars).
+        # The priority manager and FIFO eviction consult this set; both must
+        # protect sidecars as well as the primary video, or a subtitle could
+        # be evicted out from under a pinned episode.
+        for real_path in self.pinned_items:
+            cache_path, _ = self.file_path_modifier.convert_real_to_cache(real_path)
+            if cache_path:
+                self.pinned_paths_cache.add(cache_path)
+
+        # Share the pinned cache-path set with the priority manager so that
+        # calculate_priority() returns 100 for pinned items and eviction
+        # candidate selection explicitly skips them. Defense-in-depth: even
+        # if the scoring short-circuit were removed, the candidate filter
+        # would still protect pinned files.
+        if self.priority_manager is not None:
+            self.priority_manager.active_pinned_paths = self.pinned_paths_cache
+
+        # Surface count of resolved files + siblings in the standard fetch log
+        logging.info(
+            f"[FETCH] Pinned: {len(pinned_video_paths)} file(s) "
+            f"from {len(self.pinned_rating_keys)} pin(s) "
+            f"(+{len(pinned_sibling_paths)} sibling files)"
+        )
+
     def _process_watchlist(self) -> set:
         """Process watchlist media (local API + remote RSS) and return a set of modified file paths and subtitles.
 
@@ -1215,10 +1364,13 @@ class PlexCacheApp:
                 if self.should_stop:
                     logging.info("Operation stopped during watchlist processing")
                     return result_set
-                file_path, username, watchlisted_at, episode_info, rating_key = item
+                file_path, username, watchlisted_at, episode_info, rating_key, media_type = item
 
                 # Update watchlist tracker with timestamp and rating_key
-                self.watchlist_tracker.update_entry(file_path, username, watchlisted_at, rating_key=rating_key)
+                self.watchlist_tracker.update_entry(
+                    file_path, username, watchlisted_at,
+                    rating_key=rating_key, media_type=media_type,
+                )
 
                 # Check watchlist retention (skip expired items, with per-user override)
                 user_retention = per_user_wl_days.get(username, retention_days)
@@ -1255,9 +1407,12 @@ class PlexCacheApp:
                         if self.should_stop:
                             logging.info("Operation stopped during watchlist processing")
                             return result_set
-                        file_path, username, watchlisted_at, episode_info, rating_key = item
+                        file_path, username, watchlisted_at, episode_info, rating_key, media_type = item
                         # Update tracker (RSS items use pubDate from feed)
-                        self.watchlist_tracker.update_entry(file_path, username, watchlisted_at, rating_key=rating_key)
+                        self.watchlist_tracker.update_entry(
+                            file_path, username, watchlisted_at,
+                            rating_key=rating_key, media_type=media_type,
+                        )
 
                         # Check watchlist retention (skip expired items, with per-user override)
                         rss_user_retention = per_user_wl_days.get(username, retention_days)
@@ -1455,6 +1610,7 @@ class PlexCacheApp:
             if old_wl_entry:
                 users = old_wl_entry.get('users', [])
                 watchlisted_at_str = old_wl_entry.get('watchlisted_at')
+                old_media_type = old_wl_entry.get('media_type')
                 self.watchlist_tracker.remove_entry(old_path)
                 # Re-create with new path, preserving original data
                 watchlisted_at = None
@@ -1465,7 +1621,8 @@ class PlexCacheApp:
                         pass
                 for user in users:
                     self.watchlist_tracker.update_entry(
-                        new_path, user, watchlisted_at, rating_key=rating_key
+                        new_path, user, watchlisted_at,
+                        rating_key=rating_key, media_type=old_media_type,
                     )
                 logging.info(f"[UPGRADE] Transferred watchlist entry with {len(users)} user(s) (rating_key={rating_key})")
 
@@ -2059,6 +2216,12 @@ class PlexCacheApp:
         Returns:
             Estimated priority score (0-100).
         """
+        # Pinned items always score maximum — mirrors CachePriorityManager.calculate_priority
+        # early-return so pinned items always pass the pre-cache priority filter, regardless
+        # of any base-score factor that might otherwise pull them below the floor.
+        if source == "pinned":
+            return 100
+
         score = 50  # Base score
 
         # Factor 1: Source Type (+15 for ondeck)
@@ -2181,7 +2344,7 @@ class PlexCacheApp:
         eviction_min_priority = self.config_manager.cache.eviction_min_priority
         filtered_files = []
         skipped_count = 0
-        skipped_by_source = {"ondeck": 0, "watchlist": 0, "unknown": 0}
+        skipped_by_source = {"ondeck": 0, "watchlist": 0, "pinned": 0, "unknown": 0}
 
         for file_path in media_files:
             source = source_map.get(file_path, "unknown")
@@ -2487,6 +2650,10 @@ class PlexCacheApp:
     def _get_fifo_eviction_candidates(self, cached_files: List[str], target_bytes: int) -> List[str]:
         """Get files to evict using FIFO (oldest first) strategy.
 
+        Pinned files are excluded explicitly — the priority-manager protection
+        only applies to smart eviction, so FIFO needs its own set-membership
+        check here or pinned items would be silently evicted by age.
+
         Args:
             cached_files: List of cache file paths.
             target_bytes: Amount of space needed to free.
@@ -2496,6 +2663,11 @@ class PlexCacheApp:
         """
         if target_bytes <= 0:
             return []
+
+        # Filter out pinned files before sorting by age. Pinned files are never
+        # FIFO eviction candidates regardless of how long they have been cached.
+        if self.pinned_paths_cache:
+            cached_files = [f for f in cached_files if f not in self.pinned_paths_cache]
 
         # Get files with their cache timestamps, sorted by oldest first
         files_with_age = []
@@ -2623,10 +2795,15 @@ class PlexCacheApp:
             # Use the freshly fetched watchlist items (already filtered for retention in _process_watchlist)
             current_watchlist_items = getattr(self, 'watchlist_items', set())
 
-            # Get files that should be moved back to array (tracked by exclude file)
-            # Pass files_to_skip to prevent removing active session files from exclude list
+            # Get files that should be moved back to array (tracked by exclude file).
+            # Pass files_to_skip to prevent removing active session files from exclude list.
+            # Pass pinned_paths_cache so pinned items (videos + sidecars) are never
+            # moved back regardless of OnDeck/Watchlist state.
             files_to_move_back, stale_entries, move_back_exclude_paths = self.file_filter.get_files_to_move_back_to_array(
-                current_ondeck_items, current_watchlist_items, set(self.files_to_skip)
+                current_ondeck_items,
+                current_watchlist_items,
+                set(self.files_to_skip),
+                current_pinned_cache_paths=self.pinned_paths_cache,
             )
 
             if files_to_move_back:
@@ -2761,6 +2938,16 @@ def main():
     # Handle show mappings mode
     if show_mappings:
         _run_show_mappings(config_file)
+        return
+
+    # Handle pinned media CLI commands
+    list_pins = "--list-pins" in sys.argv
+    pin_key = "--pin" in sys.argv
+    unpin_key = "--unpin" in sys.argv
+    pin_by_title = "--pin-by-title" in sys.argv
+
+    if list_pins or pin_key or unpin_key or pin_by_title:
+        _run_pinned_command(config_file, verbose)
         return
 
     app = PlexCacheApp(config_file, dry_run, quiet, verbose)
@@ -2964,6 +3151,44 @@ def _run_show_mappings(config_file: str) -> None:
     print(f"  Enabled:            {enabled_count}")
     print(f"  Cacheable:          {cacheable_count}")
     print(f"  Non-cacheable:      {non_cacheable_count} (files tracked but not cached)")
+
+
+def _run_pinned_command(config_file: str, verbose: bool = False) -> None:
+    """Handle --list-pins, --pin, --unpin, --pin-by-title CLI commands."""
+    import logging
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+
+    config_manager = ConfigManager(config_file)
+    config_manager.load_config()
+
+    from core.pinned_cli import (
+        handle_list_pins, handle_pin, handle_unpin, handle_pin_by_title,
+        extract_flag_value,
+    )
+
+    if "--list-pins" in sys.argv:
+        handle_list_pins(config_manager)
+    elif "--pin-by-title" in sys.argv:
+        query = extract_flag_value("--pin-by-title")
+        if not query:
+            print("Error: --pin-by-title requires a search query. Example: --pin-by-title \"Breaking Bad\"")
+            return
+        handle_pin_by_title(config_manager, query)
+    elif "--pin" in sys.argv:
+        rating_key = extract_flag_value("--pin")
+        if not rating_key:
+            print("Error: --pin requires a rating_key. Example: --pin 12345")
+            return
+        handle_pin(config_manager, rating_key)
+    elif "--unpin" in sys.argv:
+        rating_key = extract_flag_value("--unpin")
+        if not rating_key:
+            print("Error: --unpin requires a rating_key. Example: --unpin 12345")
+            return
+        handle_unpin(config_manager, rating_key)
 
 
 if __name__ == "__main__":

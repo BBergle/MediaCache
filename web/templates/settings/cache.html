@@ -379,6 +379,26 @@
                 </div>
             </div>
 
+            <hr style="border-color: var(--plex-border); margin: 1.5rem 0;">
+
+            <h3 style="font-size: 1rem; color: var(--plex-orange); margin-bottom: 1rem;">
+                <i data-lucide="pin" style="width: 18px; height: 18px; vertical-align: middle;"></i>
+                Pinned Media
+            </h3>
+
+            <div class="form-group">
+                <label for="pinned_preferred_resolution">Preferred Version</label>
+                <select id="pinned_preferred_resolution" name="pinned_preferred_resolution">
+                    <option value="highest" {% if settings.pinned_preferred_resolution == 'highest' or not settings.pinned_preferred_resolution %}selected{% endif %}>Highest quality (largest bitrate)</option>
+                    <option value="lowest" {% if settings.pinned_preferred_resolution == 'lowest' %}selected{% endif %}>Lowest quality (saves cache space)</option>
+                    <option value="4k" {% if settings.pinned_preferred_resolution == '4k' %}selected{% endif %}>4K (fallback to highest)</option>
+                    <option value="1080p" {% if settings.pinned_preferred_resolution == '1080p' %}selected{% endif %}>1080p (fallback to highest)</option>
+                    <option value="720p" {% if settings.pinned_preferred_resolution == '720p' %}selected{% endif %}>720p (fallback to highest)</option>
+                    <option value="first" {% if settings.pinned_preferred_resolution == 'first' %}selected{% endif %}>First version (Plex default order)</option>
+                </select>
+                <div class="form-hint">Which version to cache when a pinned item has multiple media files (e.g., 4K + 1080p). Use the picker below to add pins.</div>
+            </div>
+
             <div class="form-group mb-0">
                 <button type="submit" class="btn btn-primary">
                     <i data-lucide="save"></i>
@@ -386,6 +406,111 @@
                 </button>
             </div>
         </form>
+    </div>
+</div>
+
+<div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+        <i data-lucide="pin"></i>
+        <h2>Pinned Media</h2>
+    </div>
+    <div class="card-body">
+        <p class="form-hint" style="margin-bottom: 1.25rem;">
+            Pinned media is always cached and is never evicted or moved back to the array, regardless of watch state or priority score. Useful for intro episodes, favorite movies, or anything you always want instantly available with the array spun down. Use the Cache Pinned Now button below to copy any missing files immediately, or wait for the next scheduled run.
+        </p>
+
+        <div class="form-group">
+            <label for="pinned-search-input">
+                <i data-lucide="search" style="width: 14px; height: 14px; vertical-align: middle;"></i>
+                Search Plex
+            </label>
+            <input type="text" id="pinned-search-input" name="q"
+                   class="input-medium"
+                   placeholder="Search movies and shows…"
+                   hx-get="/api/pinned/search"
+                   hx-trigger="keyup changed delay:300ms, search"
+                   hx-target="#pinned-search-results"
+                   hx-swap="innerHTML"
+                   autocomplete="off"
+                   spellcheck="false">
+            <div class="form-hint">Pick a movie, show, season, or episode to pin. Shows expand to reveal seasons and episodes if you want a narrower scope.</div>
+        </div>
+
+        <div id="pinned-search-results"
+             class="pinned-search-results-container"
+             style="max-height: 420px; overflow-y: auto; margin-bottom: 0.5rem;">
+        </div>
+
+        <hr style="border-color: var(--plex-border); margin: 1.5rem 0;">
+
+        <h3 style="font-size: 1rem; color: var(--plex-orange); margin-bottom: 1rem;">
+            <i data-lucide="list" style="width: 18px; height: 18px; vertical-align: middle;"></i>
+            Currently Pinned
+        </h3>
+
+        <div id="pinned-chip-list-container"
+             hx-get="/api/pinned/list"
+             hx-trigger="load, pinned-updated from:body"
+             hx-swap="innerHTML">
+            <p style="color: var(--plex-text-muted); font-size: 0.85rem; margin: 0; padding: 0.5rem 0.25rem;">
+                Loading pinned media…
+            </p>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Pinned group unpin confirmation (styled modal — replaces native confirm()).
+    // Called from the "Unpin all" button inside each pinned group header.
+    var _pendingUnpinGroupForm = null;
+    function openUnpinGroupModal(form, count, title) {
+        _pendingUnpinGroupForm = form;
+        document.getElementById('unpin-group-count').textContent = count;
+        document.getElementById('unpin-group-title').textContent = title || 'this group';
+        var modal = document.getElementById('unpin-group-modal');
+        modal.style.display = 'flex';
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+    function closeUnpinGroupModal() {
+        document.getElementById('unpin-group-modal').style.display = 'none';
+        _pendingUnpinGroupForm = null;
+    }
+    function confirmUnpinGroupModal() {
+        var form = _pendingUnpinGroupForm;
+        closeUnpinGroupModal();
+        if (form && typeof form.requestSubmit === 'function') {
+            form.requestSubmit();
+        } else if (form) {
+            form.submit();
+        }
+    }
+</script>
+
+<div id="unpin-group-modal" class="modal" style="display: none;">
+    <div class="modal-backdrop" onclick="closeUnpinGroupModal()"></div>
+    <div class="modal-content" style="max-width: 440px;">
+        <div class="modal-header">
+            <h3>Unpin group</h3>
+            <button type="button" class="modal-close" onclick="closeUnpinGroupModal()" aria-label="Close">
+                <i data-lucide="x"></i>
+            </button>
+        </div>
+        <div class="modal-body">
+            <p style="margin: 0 0 0.75rem 0;">
+                Unpin all <strong id="unpin-group-count">0</strong> pins in
+                <strong id="unpin-group-title">this group</strong>?
+            </p>
+            <p style="margin: 0; color: var(--plex-text-muted); font-size: 0.85rem;">
+                Files uniquely held by these pins will move back to the array in the background.
+            </p>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeUnpinGroupModal()">Cancel</button>
+            <button type="button" class="btn btn-danger" id="unpin-group-confirm" onclick="confirmUnpinGroupModal()">
+                <i data-lucide="trash-2" style="width: 14px; height: 14px;"></i>
+                Unpin all
+            </button>
+        </div>
     </div>
 </div>
 

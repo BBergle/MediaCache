@@ -1,0 +1,37 @@
+{#
+  Shared pin/unpin button for any surface that wants to toggle a pin inline
+  (Settings pin picker, Cached Files row, future Dashboard widget).
+
+  Parameters:
+    rating_key  — Plex rating key (required)
+    pin_type    — "episode", "season", "show", or "movie" (required)
+    title       — display title, passed through to /api/pinned/toggle (required)
+    is_pinned   — current state; controls icon + variant + label
+
+  Wire contract:
+    POST /api/pinned/toggle returns web/templates/settings/partials/pinned_toggle_response.html,
+    which renders the exact same <form> shape with the flipped state. hx-target="this"
+    + hx-swap="outerHTML" means only the form gets swapped — surrounding row markup
+    (filename cell, action buttons, etc.) is preserved. A successful toggle also sets
+    HX-Trigger: pinned-updated so the settings chip list auto-refreshes.
+
+  See PINNED_MEDIA_PLAN.md → Phase 4 discovery #6 for the rationale behind this shape.
+#}
+{% macro pin_button(rating_key, pin_type, title, is_pinned) %}
+<form hx-post="/api/pinned/toggle"
+      hx-target="this"
+      hx-swap="outerHTML"
+      class="pinned-toggle-form"
+      data-rating-key="{{ rating_key }}"
+      data-is-pinned="{{ 'true' if is_pinned else 'false' }}"
+      style="margin: 0; display: inline-block;">
+    <input type="hidden" name="rating_key" value="{{ rating_key }}">
+    <input type="hidden" name="pin_type" value="{{ pin_type }}">
+    <input type="hidden" name="title" value="{{ title }}">
+    <button type="submit" class="btn btn-sm {% if is_pinned %}btn-secondary{% else %}btn-primary{% endif %}"
+            title="{% if is_pinned %}Unpin this item{% else %}Pin this item{% endif %}">
+        <i data-lucide="{% if is_pinned %}pin-off{% else %}pin{% endif %}" style="width: 14px; height: 14px; vertical-align: middle;"></i>
+        {% if is_pinned %}Unpin{% else %}Pin{% endif %}
+    </button>
+</form>
+{% endmacro %}

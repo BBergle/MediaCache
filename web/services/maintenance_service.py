@@ -110,6 +110,11 @@ class AuditResults:
     stale_exclude_entries: List[str] = field(default_factory=list)
     stale_timestamp_entries: List[str] = field(default_factory=list)
     duplicates: List[DuplicateFile] = field(default_factory=list)
+    # Pinned cache files missing from the exclude list — would be eaten by the
+    # Unraid mover on its next run. User declared these always-cached, so an
+    # unprotected pinned file is a user-visible contract violation, not just
+    # "untracked". Next run restores protection automatically.
+    pinned_missing_from_exclude: List[str] = field(default_factory=list)
 
     # Health status
     health_status: str = "healthy"  # "healthy", "warnings", "critical"
@@ -126,7 +131,9 @@ class AuditResults:
         if truly_orphaned:
             self.health_status = "critical"
         # Warnings: stale entries need cleanup, superseded/redundant backups can be cleaned
-        elif self.stale_exclude_entries or self.stale_timestamp_entries or self.orphaned_plexcached or self.extensionless_files:
+        elif (self.stale_exclude_entries or self.stale_timestamp_entries
+              or self.orphaned_plexcached or self.extensionless_files
+              or self.pinned_missing_from_exclude):
             self.health_status = "warnings"
         else:
             self.health_status = "healthy"
@@ -137,7 +144,8 @@ class AuditResults:
         return (len(self.orphaned_plexcached) +
                 len(self.extensionless_files) +
                 len(self.stale_exclude_entries) +
-                len(self.stale_timestamp_entries))
+                len(self.stale_timestamp_entries) +
+                len(self.pinned_missing_from_exclude))
 
 
 @dataclass
@@ -217,6 +225,21 @@ class MaintenanceService:
         """Translate container cache path to host path for exclude file."""
         settings = self._load_settings()
         return translate_container_to_host_path(path, settings.get('path_mappings', []))
+
+    def _get_pinned_cache_paths(self) -> Set[str]:
+        """Return the current set of pinned cache-form paths.
+
+        Used as a safety net in the cleanup actions so a transiently-missing
+        pinned file is never dropped from the exclude list or timestamps.
+        Failure returns an empty set — the cleanups fall back to their
+        original (unprotected) behavior rather than aborting.
+        """
+        try:
+            from web.services import get_pinned_service
+            return get_pinned_service().resolve_all_to_cache_paths()
+        except Exception as e:
+            logging.debug(f"MaintenanceService: could not resolve pinned paths: {e}")
+            return set()
 
     def _should_skip_directory(self, dirname: str) -> bool:
         """Check if directory should be skipped during scanning.
@@ -675,6 +698,15 @@ class MaintenanceService:
 
         # Find stale timestamp entries (in timestamps but not on cache)
         results.stale_timestamp_entries = sorted(list(timestamp_files - cache_files))
+
+        # Flag pinned files that are on cache but missing from the exclude
+        # list — the Unraid mover would move them back on the next run,
+        # silently violating the "pinned = always cached" contract.
+        pinned_cache_paths = self._get_pinned_cache_paths()
+        if pinned_cache_paths:
+            results.pinned_missing_from_exclude = sorted(
+                list((pinned_cache_paths & cache_files) - exclude_files)
+            )
 
         results.duplicates.sort(key=lambda f: f.size, reverse=True)
 
@@ -1868,6 +1900,224 @@ class MaintenanceService:
             affected_paths=affected_paths
         )
 
+    def cache_pinned(self, dry_run: bool = False,
+                     stop_check: Optional[Callable[[], bool]] = None,
+                     progress_callback: Optional[Callable] = None,
+                     bytes_progress_callback: Optional[Callable] = None,
+                     max_workers: int = 1,
+                     active_callback: Optional[Callable] = None) -> ActionResult:
+        """Copy currently-pinned media from array to cache (missing files only).
+
+        Resolves the pinned set via PinnedService, skips any files already on
+        cache, and copies the rest from the array. When the source is a real
+        array file, it's renamed to ``.plexcached`` as a backup (mirroring the
+        normal caching flow). Copied files are added to the exclude list and
+        timestamps so the Unraid mover leaves them in place.
+
+        ``affected_paths`` on the result are the cache paths that were newly
+        cached — the runner uses this to write "Cached" activity entries.
+        """
+        pinned_cache_paths = self._get_pinned_cache_paths()
+        if not pinned_cache_paths:
+            return ActionResult(
+                success=True,
+                message="No pinned media to cache",
+                affected_count=0,
+            )
+
+        # Filter to paths not already on cache
+        missing: List[str] = []
+        for cache_path in sorted(pinned_cache_paths):
+            try:
+                if os.path.exists(cache_path):
+                    continue
+            except OSError:
+                continue
+            missing.append(cache_path)
+
+        if not missing:
+            return ActionResult(
+                success=True,
+                message="All pinned media already on cache",
+                affected_count=0,
+            )
+
+        if dry_run:
+            return ActionResult(
+                success=True,
+                message=f"Would cache {len(missing)} pinned file(s)",
+                affected_count=len(missing),
+            )
+
+        # Pre-resolve sources (prefer real file, fall back to .plexcached) and total bytes
+        sources: Dict[str, str] = {}
+        total_bytes = 0
+        for cache_path in missing:
+            array_path = self._cache_to_array_path(cache_path)
+            if not array_path:
+                continue
+            candidate = None
+            if os.path.exists(array_path):
+                candidate = array_path
+            elif os.path.exists(array_path + ".plexcached"):
+                candidate = array_path + ".plexcached"
+            if candidate:
+                sources[cache_path] = candidate
+                try:
+                    total_bytes += os.path.getsize(candidate)
+                except OSError:
+                    pass
+
+        if bytes_progress_callback and total_bytes > 0:
+            bytes_progress_callback(0, total_bytes)
+
+        # --- Parallel path ---
+        if max_workers > 1:
+            aggregator = _ByteProgressAggregator(total_bytes, bytes_progress_callback) if total_bytes > 0 else None
+
+            def _cache_worker(cache_path: str) -> Tuple[str, bool, Optional[str]]:
+                try:
+                    array_path = self._cache_to_array_path(cache_path)
+                    if not array_path:
+                        return (cache_path, False, f"{os.path.basename(cache_path)}: Unknown path mapping")
+
+                    source = sources.get(cache_path)
+                    if not source:
+                        if os.path.exists(array_path):
+                            source = array_path
+                        elif os.path.exists(array_path + ".plexcached"):
+                            source = array_path + ".plexcached"
+                        else:
+                            return (cache_path, False, f"{os.path.basename(cache_path)}: Not found on array")
+
+                    cache_dir = os.path.dirname(cache_path)
+                    os.makedirs(cache_dir, exist_ok=True)
+
+                    src_size = os.path.getsize(source)
+                    worker_cb = aggregator.make_worker_callback() if aggregator else None
+                    self._copy_with_progress(source, cache_path, worker_cb)
+
+                    if not os.path.exists(cache_path):
+                        return (cache_path, False, f"{os.path.basename(cache_path)}: Copy failed")
+                    dst_size = os.path.getsize(cache_path)
+                    if dst_size != src_size:
+                        try:
+                            os.remove(cache_path)
+                        except OSError:
+                            pass
+                        return (cache_path, False, f"{os.path.basename(cache_path)}: Size mismatch ({src_size} vs {dst_size})")
+
+                    # If source was the real array file, rename to .plexcached as backup
+                    if source == array_path:
+                        plexcached_path = array_path + ".plexcached"
+                        try:
+                            os.rename(array_path, plexcached_path)
+                        except OSError as e:
+                            logging.warning(f"Could not create .plexcached backup for {os.path.basename(cache_path)}: {e}")
+
+                    return (cache_path, True, None)
+                except (IOError, OSError) as e:
+                    logging.exception(f"Error caching pinned {os.path.basename(cache_path)}: {e}")
+                    return (cache_path, False, f"{os.path.basename(cache_path)}: {str(e)}")
+
+            results = self._run_parallel(missing, _cache_worker, max_workers, stop_check, progress_callback, active_callback)
+            successful_paths = [path for path, success, _ in results if success]
+            errors = [err for _, success, err in results if not success and err]
+
+            if successful_paths:
+                self._batch_add_to_exclude(successful_paths)
+                self._batch_add_to_timestamps(successful_paths)
+
+            logging.info(f"cache_pinned complete: Cached {len(successful_paths)} file(s), {len(errors)} errors")
+            return ActionResult(
+                success=len(errors) == 0,
+                message=f"Cached {len(successful_paths)} pinned file(s)",
+                affected_count=len(successful_paths),
+                errors=errors,
+                affected_paths=successful_paths,
+            )
+
+        # --- Sequential path ---
+        affected_paths: List[str] = []
+        errors: List[str] = []
+        bytes_copied_so_far = 0
+
+        for i, cache_path in enumerate(missing):
+            if stop_check and stop_check():
+                break
+            if progress_callback:
+                progress_callback(i + 1, len(missing), os.path.basename(cache_path))
+
+            array_path = self._cache_to_array_path(cache_path)
+            if not array_path:
+                errors.append(f"{os.path.basename(cache_path)}: Unknown path mapping")
+                continue
+
+            source = sources.get(cache_path)
+            if not source:
+                if os.path.exists(array_path):
+                    source = array_path
+                elif os.path.exists(array_path + ".plexcached"):
+                    source = array_path + ".plexcached"
+                else:
+                    errors.append(f"{os.path.basename(cache_path)}: Not found on array")
+                    continue
+
+            try:
+                cache_dir = os.path.dirname(cache_path)
+                os.makedirs(cache_dir, exist_ok=True)
+
+                src_size = os.path.getsize(source)
+                logging.info(f"Caching pinned {os.path.basename(cache_path)} ({src_size / (1024**3):.2f} GB)...")
+
+                if total_bytes > 0 and bytes_progress_callback:
+                    base = bytes_copied_so_far
+                    total = total_bytes
+                    def _per_file_cb(copied: int, fsize: int, base=base, total=total):
+                        bytes_progress_callback(base + copied, total)
+                    self._copy_with_progress(source, cache_path, _per_file_cb)
+                else:
+                    self._copy_with_progress(source, cache_path, bytes_progress_callback)
+                bytes_copied_so_far += src_size
+
+                if not os.path.exists(cache_path):
+                    errors.append(f"{os.path.basename(cache_path)}: Copy failed")
+                    continue
+                dst_size = os.path.getsize(cache_path)
+                if dst_size != src_size:
+                    try:
+                        os.remove(cache_path)
+                    except OSError:
+                        pass
+                    errors.append(f"{os.path.basename(cache_path)}: Size mismatch ({src_size} vs {dst_size})")
+                    continue
+
+                if source == array_path:
+                    plexcached_path = array_path + ".plexcached"
+                    try:
+                        os.rename(array_path, plexcached_path)
+                    except OSError as e:
+                        logging.warning(f"Could not create .plexcached backup for {os.path.basename(cache_path)}: {e}")
+
+                affected_paths.append(cache_path)
+                logging.info(f"Cached pinned: {os.path.basename(cache_path)}")
+            except (IOError, OSError) as e:
+                logging.exception(f"Error caching pinned {os.path.basename(cache_path)}: {e}")
+                errors.append(f"{os.path.basename(cache_path)}: {str(e)}")
+
+        if affected_paths:
+            self._batch_add_to_exclude(affected_paths)
+            self._batch_add_to_timestamps(affected_paths)
+
+        logging.info(f"cache_pinned complete: Cached {len(affected_paths)} file(s), {len(errors)} errors")
+        return ActionResult(
+            success=len(errors) == 0,
+            message=f"Cached {len(affected_paths)} pinned file(s)",
+            affected_count=len(affected_paths),
+            errors=errors,
+            affected_paths=affected_paths,
+        )
+
     def _add_to_timestamps(self, cache_path: str):
         """Add a file to timestamps.json with current time"""
         import json
@@ -1916,6 +2166,14 @@ class MaintenanceService:
         exclude_files = self.get_exclude_files()
         stale = exclude_files - cache_files
 
+        # Defense-in-depth: a pinned file whose physical copy temporarily
+        # disappears (mid-move race, mount hiccup) should NOT be dropped
+        # from the exclude list — the mover would then see it as cacheable
+        # and could move it back to array before the next pinned run.
+        pinned_cache_paths = self._get_pinned_cache_paths()
+        if pinned_cache_paths:
+            stale = stale - pinned_cache_paths
+
         if not stale:
             return ActionResult(success=True, message="No stale entries to clean")
 
@@ -1952,6 +2210,12 @@ class MaintenanceService:
         cache_files = self.get_cache_files()
         timestamp_files = self.get_timestamp_files()
         stale = timestamp_files - cache_files
+
+        # Same defense-in-depth as clean_exclude: pinned files keep their
+        # timestamp entries even if transiently missing on disk.
+        pinned_cache_paths = self._get_pinned_cache_paths()
+        if pinned_cache_paths:
+            stale = stale - pinned_cache_paths
 
         if not stale:
             return ActionResult(success=True, message="No stale entries to clean")

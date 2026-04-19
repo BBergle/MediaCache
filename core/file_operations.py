@@ -1116,7 +1116,7 @@ class WatchlistTracker(JSONTracker):
         super().__init__(tracker_file, "watchlist")
 
     def update_entry(self, file_path: str, username: str, watchlisted_at: Optional[datetime],
-                     rating_key: Optional[str] = None) -> None:
+                     rating_key: Optional[str] = None, media_type: Optional[str] = None) -> None:
         """Update or create an entry for a watchlist item.
 
         If the item already exists and the new watchlisted_at is more recent,
@@ -1127,6 +1127,10 @@ class WatchlistTracker(JSONTracker):
             username: The user who has this on their watchlist.
             watchlisted_at: When the user added it to their watchlist (from Plex API).
             rating_key: Plex rating key for upgrade tracking (None to leave unchanged).
+            media_type: "episode" or "movie" — used by the web UI to derive the correct
+                pin_type for watchlisted TV episodes. None leaves any existing value
+                unchanged so legacy entries keep their current behavior until the next
+                Plex fetch repopulates them.
         """
         with self._lock:
             now_iso = datetime.now().isoformat()
@@ -1160,6 +1164,10 @@ class WatchlistTracker(JSONTracker):
                 if rating_key is not None:
                     entry['rating_key'] = rating_key
 
+                # Store media_type if provided (never overwrite with None)
+                if media_type is not None:
+                    entry['media_type'] = media_type
+
                 # Always update last_seen
                 entry['last_seen'] = now_iso
             else:
@@ -1176,6 +1184,8 @@ class WatchlistTracker(JSONTracker):
                 }
                 if rating_key is not None:
                     new_entry['rating_key'] = rating_key
+                if media_type is not None:
+                    new_entry['media_type'] = media_type
                 self._data[file_path] = new_entry
                 logging.debug(f"[USER:{username}] Added new watchlist entry: {file_path}")
 
@@ -1733,6 +1743,10 @@ class CachePriorityManager:
         self.eviction_min_priority = eviction_min_priority
         self.number_episodes = number_episodes
         self.active_ondeck_paths: Optional[Set[str]] = None  # Set by app when retention is enabled
+        # Cache-form paths currently pinned. None = no pins configured; empty set = pins
+        # configured but none resolve here. Files in this set always score 100 and are
+        # excluded from eviction candidates regardless of budget pressure.
+        self.active_pinned_paths: Optional[Set[str]] = None
 
     def calculate_priority(self, cache_path: str) -> int:
         """Calculate 0-100 priority score for a cached file.
@@ -1749,6 +1763,13 @@ class CachePriorityManager:
         Returns:
             Priority score between 0 and 100.
         """
+        # Pinned items are always maximum priority — skip all factor scoring.
+        # Checked before sibling delegation so pinned siblings also score 100
+        # (sibling will delegate to the pinned parent below otherwise, but this
+        # short-circuit is faster and keeps the semantics explicit).
+        if self.active_pinned_paths and cache_path in self.active_pinned_paths:
+            return 100
+
         # Associated file delegation: use parent's priority so they're evicted together
         if not is_video_file(cache_path):
             parent = self.timestamp_tracker.find_parent_video(cache_path)
@@ -1910,7 +1931,19 @@ class CachePriorityManager:
         candidates = []
         bytes_accumulated = 0
 
+        pinned_set = self.active_pinned_paths or set()
+
         for cache_path, score in priorities:
+            # Pinned files are never evicted, regardless of score. This is
+            # defense-in-depth: calculate_priority() already returns 100 for
+            # pinned items (which is above eviction_min_priority in every
+            # sensible config), but an explicit set-membership check keeps
+            # the intent grep-able and survives a hypothetical bug where a
+            # future change lowers the pinned score.
+            if cache_path in pinned_set:
+                logging.debug(f"Skipping eviction candidate (pinned): {os.path.basename(cache_path)}")
+                continue
+
             # Only evict files below minimum priority threshold
             if score >= self.eviction_min_priority:
                 logging.debug(f"Skipping eviction candidate (score {score} >= {self.eviction_min_priority}): {os.path.basename(cache_path)}")
@@ -3519,12 +3552,15 @@ class FileFilter:
 
     def get_files_to_move_back_to_array(self, current_ondeck_items: Set[str],
                                        current_watchlist_items: Set[str],
-                                       files_to_skip: Optional[Set[str]] = None) -> Tuple[List[str], List[str], List[str]]:
+                                       files_to_skip: Optional[Set[str]] = None,
+                                       current_pinned_cache_paths: Optional[Set[str]] = None) -> Tuple[List[str], List[str], List[str]]:
         """Get files in cache that should be moved back to array because they're no longer needed.
 
         For TV shows: Episodes before the OnDeck episode are considered watched and will be moved back.
                       Episodes >= OnDeck episode are kept (they're upcoming/current).
         For movies: Moved back when no longer on OnDeck or watchlist.
+        For pinned items: Never moved back regardless of OnDeck/watchlist state (takes
+                          precedence over every other keep/move decision in this method).
 
         Retention period applies uniformly to all cached files to protect against
         accidental unwatching or watchlist removal.
@@ -3534,6 +3570,10 @@ class FileFilter:
             current_watchlist_items: Set of file paths currently on watchlist.
             files_to_skip: Optional set of file paths to skip (e.g., active sessions).
                           These files will NOT be marked for removal from exclude list.
+            current_pinned_cache_paths: Optional set of cache-form paths for files
+                          protected by user-pinned media. Pinned files (videos AND
+                          their sidecars) are always kept in cache even if they are
+                          not on any user's OnDeck or watchlist.
 
         Returns:
             Tuple of (files_to_move_back, stale_entries, move_back_exclude_paths):
@@ -3562,6 +3602,8 @@ class FileFilter:
                 current_ondeck_items, current_watchlist_items
             )
 
+            pinned_set = current_pinned_cache_paths or set()
+
             # Check each cached file
             for cache_file in cache_files:
                 # In Docker, exclude file has host paths but we need container paths to check existence
@@ -3569,6 +3611,16 @@ class FileFilter:
                 if not os.path.exists(check_path):
                     logging.debug(f"Cache file no longer exists: {cache_file}")
                     stale_entries.append(cache_file)
+                    continue
+
+                # Pinned files (videos + sidecars) are always kept — short-circuit
+                # before any OnDeck/Watchlist/retention check. This is the second
+                # mandatory integration point for pinned-media protection (the first
+                # is the priority manager). Without this, pinned files that are NOT
+                # on any user's OnDeck/Watchlist would be silently moved back to the
+                # array on the next run even though smart/FIFO eviction protects them.
+                if check_path in pinned_set:
+                    logging.debug(f"Keeping pinned file in cache: {os.path.basename(cache_file)}")
                     continue
 
                 # Try stored metadata first for classification (check_path matches timestamp tracker keys)

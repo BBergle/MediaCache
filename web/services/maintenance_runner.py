@@ -34,6 +34,7 @@ ASYNC_ACTIONS = {
     "delete-duplicates",
     "delete-extensionless",
     "evict-files",
+    "cache-pinned",
 }
 
 # Human-readable display names for actions (progress messages)
@@ -48,6 +49,7 @@ ACTION_DISPLAY = {
     "delete-duplicates": "Deleting {count} duplicate(s)...",
     "delete-extensionless": "Deleting {count} extensionless file(s)...",
     "evict-files": "Evicting {count} file(s) from cache...",
+    "cache-pinned": "Caching {count} pinned file(s)...",
 }
 
 # Outcome-oriented labels for history entries
@@ -67,6 +69,7 @@ ACTION_HISTORY_LABELS = {
     "delete-duplicates": "Delete Duplicates",
     "delete-extensionless": "Delete Extensionless",
     "evict-files": "Evict from Cache",
+    "cache-pinned": "Cache Pinned",
 }
 
 
@@ -628,6 +631,8 @@ class MaintenanceRunner:
         "fix-with-backup": "Fixed",
         "restore-plexcached": "Restored Backup",
         "delete-plexcached": "Deleted Backup",
+        "evict-files": "Restored",
+        "cache-pinned": "Cached",
     }
 
     def _record_maintenance_activity(self, action_name: str, action_result: ActionResult):

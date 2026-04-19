@@ -1,0 +1,53 @@
+{#
+  A single search result row. ``item`` is a dict from PinnedService.search():
+  {rating_key, title, type, year, library, size_bytes, size_display, already_pinned}.
+
+  The pin/unpin form uses hx-target="this" so only the form (not the row)
+  gets swapped when toggled — the title, expand button, and row metadata
+  survive the round-trip.
+#}
+<li class="pinned-result-row" data-rating-key="{{ item.rating_key }}" data-type="{{ item.type }}"
+    style="display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0.25rem; border-bottom: 1px solid rgba(255,255,255,0.06);">
+    <span class="pinned-result-type-icon" title="{{ item.type | capitalize }}"
+          style="display: inline-flex; width: 28px; height: 28px; align-items: center; justify-content: center; border-radius: var(--plex-radius-sm); background: var(--plex-bg-darker); color: var(--plex-text-secondary); flex-shrink: 0;">
+        {% if item.type == "show" %}
+            <i data-lucide="tv" style="width: 16px; height: 16px;"></i>
+        {% elif item.type == "movie" %}
+            <i data-lucide="film" style="width: 16px; height: 16px;"></i>
+        {% else %}
+            <i data-lucide="file-video" style="width: 16px; height: 16px;"></i>
+        {% endif %}
+    </span>
+    <span class="pinned-result-title" style="flex: 1; min-width: 0;">
+        <strong style="color: var(--plex-text);">{{ item.title }}</strong>
+        {% if item.year %}<span style="color: var(--plex-text-muted); font-size: 0.85rem; margin-left: 0.3rem;">({{ item.year }})</span>{% endif %}
+        {% if item.library or item.size_display %}
+            <div style="color: var(--plex-text-muted); font-size: 0.75rem; margin-top: 0.15rem;">
+                {%- if item.library %}{{ item.library }}{% endif -%}
+                {%- if item.library and item.size_display %} · {% endif -%}
+                {%- if item.size_display %}{{ item.size_display }}{% endif -%}
+            </div>
+        {% endif %}
+    </span>
+    {% if item.type == "show" %}
+        <button type="button" class="btn btn-sm btn-secondary pinned-expand-btn"
+                onclick="togglePinnedChildren(this, '{{ item.rating_key }}', 'show')"
+                title="Show seasons">
+            <i data-lucide="chevron-down" style="width: 14px; height: 14px; vertical-align: middle; transition: transform 0.2s;"></i>
+            <span class="expand-label">Expand</span>
+        </button>
+    {% endif %}
+    <form hx-post="/api/pinned/toggle"
+          hx-target="this"
+          hx-swap="outerHTML"
+          style="margin: 0; display: inline-block;">
+        <input type="hidden" name="rating_key" value="{{ item.rating_key }}">
+        <input type="hidden" name="pin_type" value="{{ item.type }}">
+        <input type="hidden" name="title" value="{{ item.title }}">
+        <button type="submit" class="btn btn-sm {% if item.already_pinned %}btn-secondary{% else %}btn-primary{% endif %}"
+                title="{% if item.already_pinned %}Unpin this item{% else %}Pin this item{% endif %}">
+            <i data-lucide="{% if item.already_pinned %}pin-off{% else %}pin{% endif %}" style="width: 14px; height: 14px; vertical-align: middle;"></i>
+            {% if item.already_pinned %}Unpin{% else %}Pin{% endif %}
+        </button>
+    </form>
+</li>

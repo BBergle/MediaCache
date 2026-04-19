@@ -1,0 +1,130 @@
+{#
+  Currently pinned media — grouped list + budget summary.
+  ``groups`` is from PinnedService.list_pins_grouped(): a list of
+  {group_rating_key, group_title, group_type, pin_count, group_bytes,
+   group_size_display, pins: [...]} dicts, one per show/movie.
+  ``pin_count`` is the total across all groups.
+  ``budget`` is from PinnedService.budget_check().
+
+  Loaded by #pinned-chip-list-container on page load and on the
+  "pinned-updated" event emitted by the toggle route.
+#}
+<div class="pinned-list" id="pinned-chip-list">
+    {% if groups %}
+    <div class="pinned-budget-summary"
+         style="display: flex; align-items: center; gap: 0.5rem; color: var(--plex-text-muted); font-size: 0.85rem; margin-bottom: 0.75rem;">
+        <i data-lucide="pin" style="width: 14px; height: 14px;"></i>
+        <span>
+            <strong style="color: var(--plex-text);">{{ pin_count }}</strong>
+            pin{% if pin_count != 1 %}s{% endif %}
+        </span>
+        <span>•</span>
+        <span>
+            <strong style="color: var(--plex-text);">{{ total_pinned_display }}</strong> total
+        </span>
+        {% if budget.effective_budget_bytes %}
+            <span>•</span>
+            <span>
+                using
+                <strong style="color: var(--plex-text);">{{ (budget.total_pinned_bytes / budget.effective_budget_bytes * 100) | round(1) }}%</strong>
+                of cache budget
+            </span>
+        {% endif %}
+        {% if budget.over_budget %}
+            <span class="badge" style="background: var(--plex-error); color: white; padding: 0.1rem 0.5rem; border-radius: var(--plex-radius-sm); font-size: 0.7rem;">
+                OVER BUDGET
+            </span>
+        {% endif %}
+    </div>
+
+    <div class="pinned-groups" style="display: flex; flex-direction: column; gap: 0.75rem;">
+    {% for group in groups %}
+        <div class="pinned-group"
+             style="background: var(--plex-bg-darker); border: 1px solid rgba(255,255,255,0.08); border-radius: var(--plex-radius-sm); overflow: hidden;">
+            <div class="pinned-group-header"
+                 style="display: flex; align-items: center; gap: 0.5rem; padding: 0.6rem 0.75rem; border-bottom: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.02);">
+                <span style="display: inline-flex; width: 18px; height: 18px; align-items: center; justify-content: center; color: var(--plex-text-muted);">
+                    {% if group.group_type == 'show' %}
+                        <i data-lucide="tv" style="width: 14px; height: 14px;"></i>
+                    {% else %}
+                        <i data-lucide="film" style="width: 14px; height: 14px;"></i>
+                    {% endif %}
+                </span>
+                <span style="color: var(--plex-text); font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                      title="{{ group.group_title }}">{{ group.group_title }}</span>
+                <span style="color: var(--plex-text-muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; white-space: nowrap;">
+                    {{ group.pin_count }} pin{% if group.pin_count != 1 %}s{% endif %} · {{ group.group_size_display }}
+                </span>
+                {% if group.pin_count > 1 %}
+                <form hx-post="/api/pinned/unpin-group"
+                      hx-target="#settings-alert-container"
+                      hx-swap="innerHTML"
+                      style="margin: 0; flex-shrink: 0;">
+                    {% for pin in group.pins %}
+                    <input type="hidden" name="rating_keys" value="{{ pin.rating_key }}">
+                    {% endfor %}
+                    <button type="button" class="btn-icon" title="Unpin all items in {{ group.group_title }}"
+                            aria-label="Unpin all items in {{ group.group_title }}"
+                            onclick='openUnpinGroupModal(this.form, {{ group.pin_count }}, {{ group.group_title | tojson }});'
+                            style="background: none; border: 0; cursor: pointer; color: var(--plex-text-muted); padding: 0.15rem 0.35rem; display: inline-flex; align-items: center; gap: 0.25rem; border-radius: var(--plex-radius-sm); font-size: 0.75rem;">
+                        <i data-lucide="trash-2" style="width: 13px; height: 13px;"></i>
+                        <span>Unpin all</span>
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+            <ul style="list-style: none; padding: 0; margin: 0;">
+            {% for pin in group.pins %}
+                <li class="pinned-row" data-rating-key="{{ pin.rating_key }}" data-type="{{ pin.type }}"
+                    style="display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.75rem; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 0.85rem;">
+                    <span style="display: inline-flex; width: 18px; height: 18px; align-items: center; justify-content: center; color: var(--plex-text-muted); flex-shrink: 0;"
+                          title="{{ pin.type | capitalize }}">
+                        <i data-lucide="{{ pin.scope_icon }}" style="width: 14px; height: 14px;"></i>
+                    </span>
+                    <span style="color: var(--plex-text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                          title="{{ pin.scope_text }}">{{ pin.scope_text }}</span>
+                    {% if pin.size_bytes %}
+                        <span style="color: var(--plex-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0;">{{ pin.size_display }}</span>
+                    {% endif %}
+                    <form hx-post="/api/pinned/toggle"
+                          hx-swap="none"
+                          style="margin: 0; flex-shrink: 0;">
+                        <input type="hidden" name="rating_key" value="{{ pin.rating_key }}">
+                        <input type="hidden" name="pin_type" value="{{ pin.type }}">
+                        <input type="hidden" name="title" value="{{ pin.title }}">
+                        <button type="submit" class="btn-icon" title="Unpin" aria-label="Unpin {{ pin.scope_text }}"
+                                style="background: none; border: 0; cursor: pointer; color: var(--plex-text-muted); padding: 0.1rem 0.3rem; display: inline-flex; align-items: center; border-radius: var(--plex-radius-sm);">
+                            <i data-lucide="x" style="width: 14px; height: 14px;"></i>
+                        </button>
+                    </form>
+                </li>
+            {% endfor %}
+            </ul>
+        </div>
+    {% endfor %}
+    </div>
+
+    <div style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid rgba(255,255,255,0.06);">
+        <button type="button" class="btn btn-sm btn-primary"
+                hx-post="/maintenance/cache-pinned"
+                hx-target="#settings-alert-container"
+                hx-swap="innerHTML"
+                title="Copy any pinned files not already on cache"
+                style="display: inline-flex; align-items: center; gap: 0.4rem;">
+            <i data-lucide="download" style="width: 14px; height: 14px;"></i>
+            Cache Pinned Now
+        </button>
+        <span style="color: var(--plex-text-muted); font-size: 0.8rem; margin-left: 0.5rem;">
+            Copies any missing pinned files to cache in the background.
+        </span>
+    </div>
+    {% else %}
+    <p style="color: var(--plex-text-muted); font-size: 0.85rem; margin: 0; padding: 0.5rem 0.25rem;">
+        <i data-lucide="pin-off" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 0.25rem;"></i>
+        No pinned media yet. Search above and pin a movie, show, season, or episode to keep it always cached.
+    </p>
+    {% endif %}
+</div>
+<script>
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+</script>

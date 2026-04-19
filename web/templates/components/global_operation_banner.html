@@ -388,6 +388,17 @@ document.addEventListener('htmx:afterSwap', function(evt) {
                 outer.setAttribute('data-di-prev-state', newState);
                 pill.classList.add('di-pill--entrance');
                 pill.addEventListener('animationend', function() { pill.classList.remove('di-pill--entrance'); }, { once: true });
+
+                // When a background action finishes, cache/pin sizes may have
+                // changed on disk. Dispatch pinned-updated so the Settings
+                // "Currently Pinned" chip list refetches — harmless on pages
+                // that don't render the container.
+                var wasRunning = prevState.indexOf('maint-running') === 0 || prevState.indexOf('op-running') === 0;
+                var nowIdle = newState.indexOf('maint-completed') === 0 || newState.indexOf('op-completed') === 0
+                    || newState.indexOf('idle') === 0;
+                if (wasRunning && nowIdle) {
+                    document.body.dispatchEvent(new CustomEvent('pinned-updated'));
+                }
             }
         }
 

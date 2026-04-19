@@ -20,6 +20,28 @@ document.addEventListener('htmx:responseError', function(event) {
     }
 });
 
+// Auto-dismiss alerts marked with `.alert-auto-dismiss`.
+// Centralized here so every success/info action-result alert — regardless of
+// which router or template emits it — fades out after 4s without each caller
+// duplicating the setTimeout. Runs on initial load and after every HTMX swap.
+function _pcScheduleAutoDismiss(root) {
+    var scope = root || document;
+    var alerts = scope.querySelectorAll('.alert-auto-dismiss');
+    for (var i = 0; i < alerts.length; i++) {
+        var el = alerts[i];
+        if (el.dataset.autoDismissScheduled === '1') continue;
+        el.dataset.autoDismissScheduled = '1';
+        (function(alert) {
+            setTimeout(function() {
+                alert.classList.add('alert-fade-out');
+                setTimeout(function() { if (alert.parentNode) alert.remove(); }, 300);
+            }, 4000);
+        })(el);
+    }
+}
+document.addEventListener('DOMContentLoaded', function() { _pcScheduleAutoDismiss(document); });
+document.addEventListener('htmx:afterSettle', function(e) { _pcScheduleAutoDismiss(e.target); });
+
 // Handle showAlert event from HX-Trigger response header
 document.addEventListener('showAlert', function(event) {
     var detail = event.detail || {};

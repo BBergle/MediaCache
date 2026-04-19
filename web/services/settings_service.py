@@ -564,6 +564,7 @@ class SettingsService:
             "cache_eviction_mode": raw.get("cache_eviction_mode", "none"),
             "cache_eviction_threshold_percent": raw.get("cache_eviction_threshold_percent", 95),
             "eviction_min_priority": raw.get("eviction_min_priority", 60),
+            "pinned_preferred_resolution": raw.get("pinned_preferred_resolution", "highest"),
             "remote_watchlist_toggle": raw.get("remote_watchlist_toggle", False),
             "remote_watchlist_rss_url": raw.get("remote_watchlist_rss_url", ""),
             # Upgrade tracking
@@ -607,6 +608,7 @@ class SettingsService:
             "cache_eviction_mode": ("cache_eviction_mode", str),
             "cache_eviction_threshold_percent": ("cache_eviction_threshold_percent", safe_int),
             "eviction_min_priority": ("eviction_min_priority", safe_int),
+            "pinned_preferred_resolution": ("pinned_preferred_resolution", str),
             "remote_watchlist_toggle": ("remote_watchlist_toggle", lambda x: x == "on" or x is True),
             "remote_watchlist_rss_url": ("remote_watchlist_rss_url", str),
             # Upgrade tracking
@@ -1398,6 +1400,21 @@ class SettingsService:
         import re
         settings = copy.deepcopy(self._load_raw())
 
+        # Include the pinned_media tracker so pins survive export→import
+        # round-trips. The tracker is stored as a separate JSON file on disk,
+        # not inside plexcache_settings.json, so we read it here and embed
+        # the raw rating_key → entry dict under the "pinned_media" key.
+        # Pin data is not sensitive (rating_keys + titles + timestamps) —
+        # nothing to redact even when include_sensitive is False.
+        try:
+            pinned_data = self._read_pinned_tracker_file()
+            if pinned_data:
+                settings["pinned_media"] = pinned_data
+        except Exception as e:
+            # Non-fatal: settings export still works, pins just won't round-trip
+            import logging
+            logging.warning(f"export_settings: could not read pinned tracker: {e}")
+
         if not include_sensitive:
             # Remove main Plex token
             if "PLEX_TOKEN" in settings:
@@ -1532,7 +1549,7 @@ class SettingsService:
             "notification_type", "unraid_level", "unraid_levels", "webhook_url",
             "webhook_level", "webhook_levels", "max_log_files", "keep_error_logs_days",
             "days_to_monitor", "number_episodes", "activity_retention_hours",
-            "excluded_folders",
+            "excluded_folders", "pinned_preferred_resolution", "pinned_media",
             # Advanced settings
             "max_concurrent_moves_array", "max_concurrent_moves_cache", "exit_if_active_session",
             # Integrations (Sonarr/Radarr) - multi-instance list
@@ -1565,6 +1582,11 @@ class SettingsService:
             Dict with: success (bool), message (str)
         """
         try:
+            # Extract the pinned tracker payload before saving the main file —
+            # pins live in a separate tracker JSON, not inside plexcache_settings.
+            settings_data = dict(settings_data)  # don't mutate caller's dict
+            pinned_payload = settings_data.pop("pinned_media", None)
+
             if merge:
                 # Load existing and merge
                 current = self._load_raw()
@@ -1586,6 +1608,15 @@ class SettingsService:
             success = self._save_raw(settings_to_save)
 
             if success:
+                # Restore pinned tracker on disk + invalidate the service
+                # singleton so a fresh tracker is constructed on next access.
+                # Merge mode unions with existing pins; replace mode overwrites.
+                if pinned_payload is not None:
+                    try:
+                        self._restore_pinned_tracker_file(pinned_payload, merge=merge)
+                    except Exception as e:
+                        import logging
+                        logging.warning(f"import_settings: pinned tracker restore failed: {e}")
                 # Invalidate caches since settings changed
                 self.invalidate_plex_cache()
                 return {"success": True, "message": "Settings imported successfully"}
@@ -1594,6 +1625,56 @@ class SettingsService:
 
         except Exception as e:
             return {"success": False, "message": f"Import error: {str(e)}"}
+
+    # ------------------------------------------------------------------
+    # Pinned tracker helpers (used by export_settings / import_settings)
+    # ------------------------------------------------------------------
+
+    def _pinned_tracker_path(self):
+        """Return the path to the pinned_media.json tracker file."""
+        from web.dependencies import DATA_DIR
+        return DATA_DIR / "pinned_media.json"
+
+    def _read_pinned_tracker_file(self) -> Dict[str, Any]:
+        """Return the raw pinned_media.json contents as a dict, or {} if absent."""
+        import json
+        path = self._pinned_tracker_path()
+        if not path.exists():
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
+
+    def _restore_pinned_tracker_file(self, payload: Dict[str, Any], merge: bool) -> None:
+        """Write the imported pin payload to the tracker file.
+
+        In merge mode, unions the imported pins with whatever is already on
+        disk (imported values win on key collision). In replace mode, the
+        imported payload overwrites the file entirely. After writing, the
+        PinnedService singleton is reset so the next access constructs a
+        fresh tracker that loads from the new file.
+        """
+        from core.file_operations import save_json_atomically
+        if not isinstance(payload, dict):
+            raise ValueError("pinned_media payload must be a JSON object")
+
+        if merge:
+            existing = self._read_pinned_tracker_file()
+            merged = dict(existing)
+            merged.update(payload)
+            to_write = merged
+        else:
+            to_write = payload
+
+        path = self._pinned_tracker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        save_json_atomically(str(path), to_write, "pinned_media")
+
+        # Reset the PinnedService singleton so subsequent reads see fresh data.
+        try:
+            import web.services.pinned_service as ps_mod
+            ps_mod._pinned_service = None
+        except Exception:
+            pass
 
 
 # Singleton instance

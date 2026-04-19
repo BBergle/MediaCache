@@ -575,7 +575,7 @@ class TestWatchlist4Tuple:
             sys.modules.pop(mod, None)
 
     def test_process_watchlist_show_yields_episode_info(self):
-        """_process_watchlist_show yields 4-tuple with episode_info for TV."""
+        """_process_watchlist_show yields 6-tuple with episode_info + media_type='episode'."""
         from core.plex_api import PlexManager
 
         # Create a mock episode
@@ -598,7 +598,7 @@ class TestWatchlist4Tuple:
         results = list(api._process_watchlist_show(mock_show, 5, "user1", None))
 
         assert len(results) == 1
-        file_path, username, watchlisted_at, episode_info, rating_key = results[0]
+        file_path, username, watchlisted_at, episode_info, rating_key, media_type = results[0]
         assert file_path == "/data/TV/Show/Season 02/S02E07.mkv"
         assert username == "user1"
         assert episode_info is not None
@@ -606,9 +606,10 @@ class TestWatchlist4Tuple:
         assert episode_info["season"] == 2
         assert episode_info["episode"] == 7
         assert rating_key is not None
+        assert media_type == "episode"
 
     def test_process_watchlist_movie_yields_none_episode_info(self):
-        """_process_watchlist_movie yields 4-tuple with None episode_info."""
+        """_process_watchlist_movie yields 6-tuple with None episode_info + media_type='movie'."""
         from core.plex_api import PlexManager
 
         mock_part = MagicMock()
@@ -622,10 +623,11 @@ class TestWatchlist4Tuple:
         results = list(api._process_watchlist_movie(mock_movie, "user1", None))
 
         assert len(results) == 1
-        file_path, username, watchlisted_at, episode_info, rating_key = results[0]
+        file_path, username, watchlisted_at, episode_info, rating_key, media_type = results[0]
         assert file_path == "/data/Movies/Inception.mkv"
         assert episode_info is None
         assert rating_key is not None
+        assert media_type == "movie"
 
     def test_process_watchlist_show_missing_indices(self):
         """Episodes with missing parentIndex/index yield None episode_info."""
@@ -649,5 +651,8 @@ class TestWatchlist4Tuple:
         results = list(api._process_watchlist_show(mock_show, 5, "user1", None))
 
         assert len(results) == 1
-        _, _, _, episode_info, _ = results[0]
+        _, _, _, episode_info, _, media_type = results[0]
         assert episode_info is None
+        # media_type still reflects the source (an episode without S/E metadata
+        # is still an episode for pin-scope purposes).
+        assert media_type == "episode"

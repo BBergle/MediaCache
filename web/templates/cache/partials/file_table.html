@@ -7,7 +7,9 @@
         <td>
             <input type="checkbox" class="file-checkbox" value="{{ file.path }}" onchange="updateBulkActions()">
         </td>
-        <td title="{{ file.path }}">{{ file.filename }}</td>
+        <td title="{{ file.path }}">
+            {{ file.filename }}
+        </td>
         <td class="text-muted">
             {{ file.size_display }}
             {{ af_popup(file.associated_files or [], assoc_count) }}
@@ -20,13 +22,19 @@
         </td>
         {% endif %}
         <td class="source-badges">
+            {% if file.is_pinned %}
+            <span class="badge badge-pinned" title="Pinned — protected from eviction">
+                <i data-lucide="pin" style="width: 10px; height: 10px; vertical-align: middle;"></i>
+                Pinned
+            </span>
+            {% endif %}
             {% if file.is_ondeck %}
             <span class="badge badge-info">OnDeck</span>
             {% endif %}
             {% if file.is_watchlist %}
             <span class="badge badge-muted">Watchlist</span>
             {% endif %}
-            {% if not file.is_ondeck and not file.is_watchlist %}
+            {% if not file.is_ondeck and not file.is_watchlist and not file.is_pinned %}
                 {% if file.source == 'ondeck' %}
                 <span class="badge badge-warning">Stale OnDeck</span>
                 {% elif file.source == 'watchlist' %}
@@ -80,6 +88,15 @@
                     <strong>{{ totals.total_size_display }}</strong> total
                 </span>
                 <span class="totals-divider"></span>
+                {% if totals.pinned_count|default(0) > 0 %}
+                <span class="totals-item">
+                    <span class="badge badge-pinned">
+                        <i data-lucide="pin" style="width: 10px; height: 10px; vertical-align: middle;"></i>
+                        Pinned
+                    </span>
+                    <strong>{{ totals.pinned_count }}</strong>
+                </span>
+                {% endif %}
                 <span class="totals-item">
                     <span class="badge badge-info">OnDeck</span>
                     <strong>{{ totals.ondeck_count }}</strong>
