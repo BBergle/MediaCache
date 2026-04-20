@@ -129,7 +129,7 @@
                     <label class="toggle-switch">
                         <input type="checkbox" id="auth_password_enabled" name="auth_password_enabled" value="on"
                                {% if auth_password_enabled %}checked{% endif %}
-                               onchange="togglePasswordSection()">
+                               onchange="togglePasswordSectionSetup()">
                         <span class="toggle-slider"></span>
                     </label>
                 </div>
@@ -180,7 +180,10 @@ function toggleAuthDetails() {
     document.getElementById('auth-details').style.display = enabled ? '' : 'none';
 }
 
-function togglePasswordSection() {
+// Setup-only: clears the fields on disable so the wizard doesn't submit stale
+// values. The settings page (settings/security.html) has a same-named toggle
+// that preserves the fields, so keep these two functions distinct.
+function togglePasswordSectionSetup() {
     var enabled = document.getElementById('auth_password_enabled').checked;
     document.getElementById('password-section').style.display = enabled ? '' : 'none';
     if (!enabled) {
