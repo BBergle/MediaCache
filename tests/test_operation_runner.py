@@ -3,7 +3,7 @@
 import os
 import sys
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 from datetime import datetime, timedelta
 
 import pytest
@@ -397,3 +397,85 @@ class TestGetStatusDictIdle:
         status = runner.get_status_dict()
         assert status["state"] == "idle"
         assert status["is_running"] is False
+
+
+# ============================================================================
+# External CLI detection — stale-lock handling after ungraceful shutdown
+# ============================================================================
+
+class TestCheckExternalProcess:
+    """Guard against phantom "CLI running" banners after power-loss / SIGKILL.
+
+    The lock file survives an ungraceful shutdown with a stale PID. In the new
+    container that PID is routinely held by an unrelated thread/worker, so a
+    bare ``/proc/{pid}`` existence check returns True and the dashboard parses
+    the old log header as a fresh run. ``_check_external_process`` must validate
+    the PID actually corresponds to a ``plexcache.py`` CLI invocation and clean
+    up the stale lock when it doesn't.
+    """
+
+    @pytest.fixture
+    def runner(self, tmp_path):
+        with patch('web.services.operation_runner.load_activity', return_value=[]):
+            r = OperationRunner()
+        r._lock_file = tmp_path / "plexcache.lock"
+        return r
+
+    def _write_lock(self, runner, pid: int | str):
+        runner._lock_file.write_text(str(pid))
+
+    def test_no_lock_file_returns_none(self, runner):
+        assert runner._check_external_process() is None
+
+    def test_empty_lock_file_is_cleaned_up(self, runner):
+        self._write_lock(runner, "")
+        assert runner._check_external_process() is None
+        assert not runner._lock_file.exists()
+
+    def test_own_pid_is_ignored(self, runner):
+        self._write_lock(runner, os.getpid())
+        assert runner._check_external_process() is None
+
+    def test_stale_lock_with_non_plexcache_cmdline_is_cleaned_up(self, runner):
+        """PID collision after reboot: /proc/{pid} exists but isn't plexcache."""
+        self._write_lock(runner, 999999)
+        with patch.object(OperationRunner, '_is_plexcache_cli_process', return_value=False):
+            assert runner._check_external_process() is None
+        assert not runner._lock_file.exists()
+
+    def test_live_plexcache_cli_returns_pid(self, runner):
+        self._write_lock(runner, 999999)
+        with patch.object(OperationRunner, '_is_plexcache_cli_process', return_value=True):
+            assert runner._check_external_process() == 999999
+        # Lock file should be preserved while the CLI is running
+        assert runner._lock_file.exists()
+
+    def test_non_integer_pid_does_not_crash(self, runner):
+        self._write_lock(runner, "garbage")
+        assert runner._check_external_process() is None
+
+    def test_is_plexcache_cli_process_accepts_plain_cli(self):
+        """``python3 plexcache.py`` without --web → True."""
+        fake_cmdline = b'python3\x00/app/plexcache.py\x00--verbose\x00'
+        m = mock_open(read_data=fake_cmdline)
+        with patch('builtins.open', m):
+            assert OperationRunner._is_plexcache_cli_process(1234) is True
+
+    def test_is_plexcache_cli_process_rejects_web_server(self):
+        """``plexcache.py --web`` is the web server itself, not a CLI run."""
+        fake_cmdline = b'python3\x00/app/plexcache.py\x00--web\x00--host\x000.0.0.0\x00'
+        m = mock_open(read_data=fake_cmdline)
+        with patch('builtins.open', m):
+            assert OperationRunner._is_plexcache_cli_process(1234) is False
+
+    def test_is_plexcache_cli_process_rejects_other_python_process(self):
+        """Random python process with recycled PID → False."""
+        fake_cmdline = b'python3\x00-m\x00http.server\x00'
+        m = mock_open(read_data=fake_cmdline)
+        with patch('builtins.open', m):
+            assert OperationRunner._is_plexcache_cli_process(1234) is False
+
+    def test_is_plexcache_cli_process_missing_proc_entry(self):
+        """/proc/{pid}/cmdline unreadable (process gone, permission denied) → False."""
+        with patch('builtins.open', side_effect=FileNotFoundError):
+            assert OperationRunner._is_plexcache_cli_process(1234) is False
