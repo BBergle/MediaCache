@@ -923,6 +923,9 @@ footer {
     font-size: 0.65rem;
     opacity: 0.55;
 }
+.di-file-row--sub .di-file-row__size {
+    color: rgba(255,255,255,0.55);
+}
 .di-sub-arrow {
     color: rgba(255,255,255,0.25);
     flex-shrink: 0;
