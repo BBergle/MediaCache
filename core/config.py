@@ -203,6 +203,11 @@ class CacheConfig:
     # "move" - Cache hard-linked files; seed copy preserved via remaining hard link
     hardlinked_files: str = "skip"
 
+    # Check for hard links when restoring files from cache back to array
+    # When True, cache files with multiple hard links (e.g., actively seeding from cache)
+    # are skipped and kept on cache until their links are resolved.
+    check_hardlinks_on_restore: bool = False
+
     # Associated files handling: which sibling files to cache alongside media
     # "all" - Cache all sibling files (subtitles, artwork, NFOs, metadata)
     # "subtitles" - Cache subtitle files only
@@ -541,6 +546,9 @@ class ConfigManager:
             logging.warning(f"Invalid hardlinked_files '{hardlinked_files}', using 'skip'")
             hardlinked_files = 'skip'
         self.cache.hardlinked_files = hardlinked_files
+
+        # Load hard-link check on restore setting (default False for backward compat)
+        self.cache.check_hardlinks_on_restore = self.settings_data.get('check_hardlinks_on_restore', False)
 
         # Load associated files caching mode (default "subtitles" for backward compat)
         cache_associated_files = self.settings_data.get('cache_associated_files', 'subtitles')
