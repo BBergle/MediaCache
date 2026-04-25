@@ -3044,6 +3044,7 @@ class FileFilter:
                  path_modifier: Optional['MultiPathModifier'] = None,
                  is_docker: bool = False,
                  use_symlinks: bool = False,
+                 check_hardlinks_on_restore: bool = False,
                  dry_run: bool = False):
         self.real_source = real_source
         self.cache_dir = cache_dir
@@ -3056,6 +3057,7 @@ class FileFilter:
         self.path_modifier = path_modifier  # For multi-path support
         self.is_docker = is_docker  # For path translation in Docker
         self.use_symlinks = use_symlinks  # Whether to create/preserve symlinks at original locations
+        self.check_hardlinks_on_restore = check_hardlinks_on_restore
         self.dry_run = dry_run  # Skip all file operations when True
         self.last_already_cached_count = 0  # Track files already on cache during filtering
         self._media_info_map = {}  # Plex media type info (set via set_media_info_map)
@@ -3670,6 +3672,19 @@ class FileFilter:
                     display_name = self._extract_display_name(cache_file)
                     logging.debug(f"Active session, keeping protected: {display_name}")
                     continue
+
+                # Skip files with active hard links
+                if self.check_hardlinks_on_restore:
+                    try:
+                        stat_info = os.stat(check_path)
+                        if stat_info.st_nlink > 1:
+                            display_name = self._extract_display_name(cache_file)
+                            logging.warning(
+                                f"Hard-linked ({stat_info.st_nlink} links), keeping in cache: {display_name}"
+                            )
+                            continue
+                    except OSError as e:
+                        logging.debug(f"Could not check hard link count for {cache_file}: {e}")
 
                 # Move file back to array (use container path for path conversion)
                 if self.path_modifier:

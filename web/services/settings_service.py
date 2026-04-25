@@ -555,6 +555,7 @@ class SettingsService:
             "cleanup_empty_folders": raw.get("cleanup_empty_folders", True),
             "use_symlinks": raw.get("use_symlinks", False),
             "hardlinked_files": raw.get("hardlinked_files", "skip"),
+            "check_hardlinks_on_restore": raw.get("check_hardlinks_on_restore", False),
             "cache_associated_files": raw.get("cache_associated_files", "subtitles"),
             "cache_retention_hours": raw.get("cache_retention_hours", 12),
             "cache_drive_size": raw.get("cache_drive_size", ""),
@@ -599,6 +600,7 @@ class SettingsService:
             "cleanup_empty_folders": ("cleanup_empty_folders", lambda x: x == "on" or x is True),
             "use_symlinks": ("use_symlinks", lambda x: x == "on" or x is True),
             "hardlinked_files": ("hardlinked_files", str),
+            "check_hardlinks_on_restore": ("check_hardlinks_on_restore", lambda x: x == "on" or x is True),
             "cache_associated_files": ("cache_associated_files", str),
             "cache_retention_hours": ("cache_retention_hours", safe_int),
             "cache_drive_size": ("cache_drive_size", str),
@@ -624,7 +626,8 @@ class SettingsService:
         boolean_fields = {
             "watchlist_toggle", "watched_move", "create_plexcached_backups",
             "cleanup_empty_folders", "use_symlinks", "auto_transfer_upgrades",
-            "backup_upgraded_files", "remote_watchlist_toggle", "exit_if_active_session"
+            "backup_upgraded_files", "remote_watchlist_toggle", "exit_if_active_session",
+            "check_hardlinks_on_restore"
         }
 
         for form_field, (setting_key, converter) in field_mapping.items():
@@ -1543,7 +1546,7 @@ class SettingsService:
             "PLEX_URL", "PLEX_TOKEN", "valid_sections", "path_mappings", "users",
             "users_toggle", "skip_ondeck", "skip_watchlist", "watchlist_toggle",
             "watchlist_episodes", "watchlist_retention_days", "watched_move",
-            "create_plexcached_backups", "hardlinked_files", "use_symlinks", "cache_retention_hours",
+            "create_plexcached_backups", "hardlinked_files", "check_hardlinks_on_restore", "use_symlinks", "cache_retention_hours",
             "cache_limit", "min_free_space", "plexcache_quota", "cache_eviction_mode", "cache_eviction_threshold_percent",
             "eviction_min_priority", "remote_watchlist_toggle", "remote_watchlist_rss_url",
             "notification_type", "unraid_level", "unraid_levels", "webhook_url",

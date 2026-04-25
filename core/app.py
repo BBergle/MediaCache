@@ -198,6 +198,8 @@ class PlexCacheApp:
             # Log hard-linked files handling mode
             if self.config_manager.cache.hardlinked_files == "move":
                 logging.info("[CONFIG] Hard-linked files mode: MOVE - Hard-linked files will be cached (seed copies preserved via remaining hard links)")
+            if self.config_manager.cache.check_hardlinks_on_restore:
+                logging.info("[CONFIG] Hard-link restore check: ENABLED - Hard-linked files in cache will be skipped")
 
             # Log associated files mode
             assoc_mode = self.config_manager.cache.cache_associated_files
@@ -563,6 +565,7 @@ class PlexCacheApp:
             path_modifier=self.file_path_modifier,
             is_docker=self.system_detector.is_docker,
             use_symlinks=self.config_manager.cache.use_symlinks,
+            check_hardlinks_on_restore=self.config_manager.cache.check_hardlinks_on_restore,
             dry_run=self.dry_run
         )
 
