@@ -1546,7 +1546,7 @@ class SettingsService:
             "PLEX_URL", "PLEX_TOKEN", "valid_sections", "path_mappings", "users",
             "users_toggle", "skip_ondeck", "skip_watchlist", "watchlist_toggle",
             "watchlist_episodes", "watchlist_retention_days", "watched_move",
-            "create_plexcached_backups", "hardlinked_files", "use_symlinks", "cache_retention_hours",
+            "create_plexcached_backups", "hardlinked_files", "check_hardlinks_on_restore", "use_symlinks", "cache_retention_hours",
             "cache_limit", "min_free_space", "plexcache_quota", "cache_eviction_mode", "cache_eviction_threshold_percent",
             "eviction_min_priority", "remote_watchlist_toggle", "remote_watchlist_rss_url",
             "notification_type", "unraid_level", "unraid_levels", "webhook_url",

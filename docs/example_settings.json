@@ -90,6 +90,7 @@
 
     "create_plexcached_backups": true,
     "hardlinked_files": "skip",
+    "check_hardlinks_on_restore": false,
     "cleanup_empty_folders": true,
     "use_symlinks": false,
     "auto_transfer_upgrades": true,

@@ -978,6 +978,20 @@ def _setup_advanced_settings():
             hardlink_choice = 'skip'
         settings_data['hardlinked_files'] = hardlink_choice
 
+    # Hard-linked files on restore (cache → array)
+    if 'check_hardlinks_on_restore' not in settings_data:
+        print('\n--- Hard-Linked Files on Restore ---')
+        print('When restoring files from cache back to the array, PlexCache can')
+        print('skip files that are still actively hard-linked (e.g., being seeded')
+        print('by a torrent client from the cache drive).')
+        print('')
+        print('When enabled, any cached file with more than one hard link is left')
+        print('on cache until its extra links are resolved, avoiding unnecessary')
+        print('array spin-ups while seeding is active.')
+        print('')
+        restore_hardlink_choice = input('Skip hard-linked files on restore? [y/N] ').strip().lower()
+        settings_data['check_hardlinks_on_restore'] = restore_hardlink_choice == 'y'
+
     # Symlink Support (non-Unraid systems)
     if 'use_symlinks' not in settings_data:
         print('\n--- Symlink Support ---')
@@ -1449,6 +1463,7 @@ def check_for_missing_settings(settings: dict) -> list:
         'webhook_level',
         'create_plexcached_backups',
         'hardlinked_files',
+        'check_hardlinks_on_restore',
         'use_symlinks',
     ]
     missing = [s for s in optional_new_settings if s not in settings]
