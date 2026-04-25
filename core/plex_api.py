@@ -780,23 +780,33 @@ class PlexManager:
             logging.debug(f"[USER:{username}] Fetching onDeck media...")
 
             on_deck_files: List[OnDeckItem] = []
-            # Get all sections available for the user
+            # Per-section iteration (not plex_instance.library.onDeck()) so libraries
+            # marked "Exclude from home screen" still surface — the global /library/onDeck
+            # endpoint applies that visibility filter server-side and silently drops them.
             available_sections = [section.key for section in plex_instance.library.sections()]
-            filtered_sections = list(set(available_sections) & set(valid_sections))
+            if valid_sections:
+                sections_to_query = list(set(available_sections) & set(valid_sections))
+            else:
+                sections_to_query = available_sections
 
-            for video in plex_instance.library.onDeck():
-                section_key = video.section().key
-                if not filtered_sections or section_key in filtered_sections:
-                    delta = datetime.now() - video.lastViewedAt
-                    if delta.days <= days_to_monitor:
+            for section_key in sections_to_query:
+                try:
+                    section = plex_instance.library.sectionByID(section_key)
+                    for video in section.onDeck():
+                        delta = datetime.now() - video.lastViewedAt
+                        if delta.days > days_to_monitor:
+                            continue
                         if isinstance(video, Episode):
                             self._process_episode_ondeck(video, number_episodes, on_deck_files, username)
                         elif isinstance(video, Movie):
                             self._process_movie_ondeck(video, on_deck_files, username)
                         else:
                             logging.warning(f"Skipping OnDeck item '{video.title}' — unknown type {type(video)}")
-                else:
-                    logging.debug(f"Skipping OnDeck item '{video.title}' — section {section_key} not in valid_sections {filtered_sections}")
+                except Exception as e:
+                    logging.warning(f"[USER:{username}] Failed to fetch onDeck for section {section_key}: {e}")
+                    if not user:
+                        self._ondeck_data_complete = False
+                    continue
 
             return on_deck_files
 
