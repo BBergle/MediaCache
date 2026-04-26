@@ -526,6 +526,54 @@ class MaintenanceRunner:
             logger.info(f"Queued maintenance action: {display_name} (#{len(self._queue)})")
             return item_id
 
+    def merge_into_queued(self, action_name: str, additional_paths: List[str]) -> bool:
+        """Append paths to the tail-most queued action of the same name.
+
+        Used when a caller would otherwise create a near-duplicate queue
+        entry (e.g. rapid unpin clicks each spawning their own evict-files
+        job). Merging keeps the queue from filling up with sibling jobs
+        and removes the 10-second countdown gap between each.
+
+        Only merges into queued items, never the currently running action
+        (its path list is being iterated by the service). The merged
+        action keeps the original `max_workers` / `on_complete` /
+        `method_kwargs` — only the path list and `file_count` change.
+
+        Returns True if merged, False if no compatible queue tail item
+        exists (caller should fall back to `enqueue_action`).
+        """
+        if not additional_paths:
+            return False
+
+        with self._lock:
+            for item in reversed(self._queue):
+                if item.action_name != action_name:
+                    continue
+                if not item.method_args or not isinstance(item.method_args[0], list):
+                    continue
+
+                existing = list(item.method_args[0])
+                existing_set = set(existing)
+                added = 0
+                for p in additional_paths:
+                    if p not in existing_set:
+                        existing.append(p)
+                        existing_set.add(p)
+                        added += 1
+
+                if added == 0:
+                    return True  # All paths already in queue — caller can stop
+
+                item.method_args = (existing,) + item.method_args[1:]
+                item.file_count = len(existing)
+                logger.info(
+                    f"Merged {added} path(s) into queued action: {item.display_name} "
+                    f"(now {item.file_count} file(s))"
+                )
+                return True
+
+            return False
+
     def remove_from_queue(self, item_id: str) -> bool:
         """Remove an item from the queue by ID."""
         with self._lock:

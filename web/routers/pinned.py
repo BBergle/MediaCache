@@ -165,7 +165,13 @@ def _start_unpin_eviction(cache_paths: list) -> bool:
         )
         if started:
             return True
-        # Runner is busy; queue if there's room, otherwise give up quietly.
+        # Runner is busy. Try to merge into an existing queued evict-files
+        # first so rapid unpin clicks coalesce into one batch instead of
+        # filling the queue with sibling jobs (and getting silently dropped
+        # at queue overflow).
+        if runner.merge_into_queued("evict-files", cache_paths):
+            return True
+        # No compatible tail item — enqueue normally if there's room.
         if runner.queue_count < runner._max_queue_size:
             item_id = runner.enqueue_action(
                 action_name="evict-files",
