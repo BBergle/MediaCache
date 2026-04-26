@@ -201,6 +201,18 @@ footer {
 }
 
 /* Activity table column tweaks */
+/* Fixed layout pins column widths via <colgroup> so expanding a run-row
+   doesn't shift column boundaries based on the newly visible filenames. */
+.recent-activity-table {
+    table-layout: fixed;
+    width: 100%;
+}
+.activity-col-time   { width: 130px; }
+.activity-col-action { width: 130px; }
+.activity-col-file   { width: auto; }
+.activity-col-users  { width: 130px; }
+.activity-col-size   { width: 110px; }
+
 .activity-file-col {
     word-break: break-word;
     white-space: normal;
