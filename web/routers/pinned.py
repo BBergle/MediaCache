@@ -118,8 +118,12 @@ def pinned_toggle(
 def _record_pin_activity(cache_paths: list) -> None:
     """Record a Cached activity entry for each pinned path that exists on cache."""
     import os
+    import uuid
     try:
         from core.activity import record_file_activity
+        # One run_id per pin batch so the dashboard groups all paths from a
+        # single pin operation together.
+        pin_run_id = uuid.uuid4().hex
         for path in cache_paths:
             try:
                 if not os.path.exists(path):
@@ -131,6 +135,8 @@ def _record_pin_activity(cache_paths: list) -> None:
                 action="Cached",
                 filename=os.path.basename(path),
                 size_bytes=size_bytes,
+                run_id=pin_run_id,
+                run_source="web",
             )
     except Exception as e:
         logger.warning("Pin activity could not be recorded: %s", e)

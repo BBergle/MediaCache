@@ -304,6 +304,9 @@ class MaintenanceRunner:
         self._queue_paused = False
         self._dequeue_timer: Optional[threading.Timer] = None
         self._countdown_started_at: Optional[datetime] = None
+        # Run grouping: minted at start_action(), attached to every FileActivity
+        # so the dashboard's run-grouped Recent Activity view can bucket entries.
+        self._run_id: Optional[str] = None
 
     @property
     def state(self) -> MaintenanceState:
@@ -366,6 +369,7 @@ class MaintenanceRunner:
 
             self._state = MaintenanceState.RUNNING
             self._stop_requested = False
+            self._run_id = uuid.uuid4().hex
 
             display = ACTION_DISPLAY.get(action_name, "Running maintenance action...")
             display = display.format(count=file_count)
@@ -658,6 +662,8 @@ class MaintenanceRunner:
                 action=label,
                 filename=filename,
                 size_bytes=size_bytes,
+                run_id=self._run_id,
+                run_source="maintenance",
             )
 
     def _record_history(self, action_name: str, action_result: Optional[ActionResult]):
