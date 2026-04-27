@@ -155,6 +155,13 @@ class OperationRunner:
 
         Returns the PID if a live external process is detected, None otherwise.
         Only detects processes NOT started by this OperationRunner.
+
+        Validates by inspecting ``/proc/{pid}/cmdline`` — a bare ``os.path.exists``
+        check is unreliable because after an ungraceful shutdown (power outage,
+        SIGKILL) the lock file survives with a stale PID, and low PIDs in the
+        new container are routinely held by unrelated threads/workers. Without
+        cmdline validation this produces a phantom "CLI running" banner whose
+        start time is parsed out of the old log header.
         """
         if not self._lock_file.exists():
             return None
@@ -163,15 +170,50 @@ class OperationRunner:
             with open(self._lock_file, 'r') as f:
                 pid_str = f.read().strip()
             if not pid_str:
+                self._cleanup_stale_lock()
                 return None
             pid = int(pid_str)
 
-            # Verify process is actually alive via /proc (Linux/Docker)
-            if os.path.exists(f'/proc/{pid}'):
+            if pid == os.getpid():
+                return None
+
+            if self._is_plexcache_cli_process(pid):
                 return pid
+
+            self._cleanup_stale_lock()
         except (ValueError, IOError, OSError):
             pass
         return None
+
+    @staticmethod
+    def _is_plexcache_cli_process(pid: int) -> bool:
+        """Return True if PID points to a running ``plexcache.py`` CLI process.
+
+        Reads ``/proc/{pid}/cmdline`` (NUL-separated) and looks for a
+        ``plexcache.py`` invocation that is *not* the web server itself. This
+        distinguishes a genuine CLI run from an unrelated process that happens
+        to have inherited the stale PID written in the lock file.
+        """
+        try:
+            with open(f'/proc/{pid}/cmdline', 'rb') as f:
+                cmdline = f.read().replace(b'\x00', b' ').decode('utf-8', 'replace')
+        except (IOError, OSError):
+            return False
+        if 'plexcache.py' not in cmdline:
+            return False
+        if '--web' in cmdline:
+            return False
+        return True
+
+    def _cleanup_stale_lock(self) -> None:
+        """Remove a lock file left behind by an ungraceful shutdown."""
+        try:
+            self._lock_file.unlink(missing_ok=True)
+            logging.info(
+                "[CLI-DETECT] Removed stale lock file (no active plexcache CLI process)"
+            )
+        except OSError as e:
+            logging.warning(f"[CLI-DETECT] Failed to remove stale lock file: {e}")
 
     def _parse_external_log(self) -> dict:
         """Parse the log file to extract progress for an external CLI run.
