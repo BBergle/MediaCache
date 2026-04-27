@@ -1,13 +1,13 @@
-"""Shared activity writer — CLI and Web UI both write here.
+"""Shared activity writer — CLI, Web UI, and Maintenance all write here.
 
 Provides file activity recording, last-run timestamps, and run summaries
 that the Web UI dashboard reads. This module has NO web framework imports
 so it can be used from core/app.py (CLI path) as well as from the web layer.
 
-Both CLI runs and web-triggered runs write to the same files:
+All run paths write to the same files:
   - data/recent_activity.json   (per-file activity feed)
   - data/last_run.txt           (last run timestamp)
-  - data/last_run_summary.json  (run statistics)
+  - data/run_summaries.json     (run statistics keyed by run_id)
 """
 
 import json
@@ -56,14 +56,21 @@ SETTINGS_FILE = _get_settings_file()
 # File paths
 ACTIVITY_FILE = DATA_DIR / "recent_activity.json"
 LAST_RUN_FILE = DATA_DIR / "last_run.txt"
-LAST_RUN_SUMMARY_FILE = DATA_DIR / "last_run_summary.json"
+RUN_SUMMARIES_FILE = DATA_DIR / "run_summaries.json"
+# Legacy single-dict file; migrated into RUN_SUMMARIES_FILE on first load.
+_LEGACY_RUN_SUMMARY_FILE = DATA_DIR / "last_run_summary.json"
 
 # Defaults
 DEFAULT_ACTIVITY_RETENTION_HOURS = 24
 MAX_RECENT_ACTIVITY = 500
 
-# Thread lock for concurrent access to activity file
+# Run sources excluded from load_last_run_summary() so the dashboard's
+# "PlexCache last run" widget reflects caching runs, not maintenance.
+_LAST_RUN_DEFAULT_SOURCES = ("cli", "web", "scheduled")
+
+# Thread locks
 _activity_file_lock = threading.Lock()
+_run_summaries_lock = threading.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -385,24 +392,124 @@ def save_last_run_time() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Run summary
+# Run summaries (keyed by run_id, pruned by activity_retention_hours)
 # ---------------------------------------------------------------------------
 
-def load_last_run_summary() -> Optional[dict]:
-    """Load the last run summary from disk."""
+def _migrate_legacy_run_summary_unlocked(summaries: dict) -> dict:
+    """One-shot migration: fold old single-dict last_run_summary.json into the
+    new keyed-dict file. Idempotent — only runs when the legacy file exists
+    and the new file is empty/missing the same entry. Caller must hold
+    _run_summaries_lock.
+    """
+    if not _LEGACY_RUN_SUMMARY_FILE.exists():
+        return summaries
     try:
-        if LAST_RUN_SUMMARY_FILE.exists():
-            with open(LAST_RUN_SUMMARY_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
+        with open(_LEGACY_RUN_SUMMARY_FILE, 'r', encoding='utf-8') as f:
+            old = json.load(f)
+        if not isinstance(old, dict):
+            _LEGACY_RUN_SUMMARY_FILE.unlink(missing_ok=True)
+            return summaries
+        run_id = old.get("run_id") or f"legacy-{old.get('timestamp', datetime.now().isoformat())}"
+        if run_id not in summaries:
+            entry = dict(old)
+            entry.setdefault("run_id", run_id)
+            entry.setdefault("run_source", "legacy")
+            # Old shape stored the completion timestamp as "timestamp"; map
+            # it to completed_at so downstream consumers see a uniform schema.
+            if "completed_at" not in entry and "timestamp" in entry:
+                entry["completed_at"] = entry["timestamp"]
+            entry.setdefault("started_at", entry.get("completed_at", datetime.now().isoformat()))
+            summaries[run_id] = entry
+        _LEGACY_RUN_SUMMARY_FILE.unlink(missing_ok=True)
+        logger.info("Migrated legacy last_run_summary.json into run_summaries.json")
+    except (json.JSONDecodeError, IOError, OSError) as e:
+        logger.debug(f"Legacy run-summary migration skipped: {e}")
+    return summaries
+
+
+def _prune_summaries(summaries: dict) -> dict:
+    """Drop entries older than activity_retention_hours, keyed by started_at."""
+    cutoff = datetime.now() - timedelta(hours=_get_activity_retention_hours())
+    pruned = {}
+    for run_id, entry in summaries.items():
+        ts_str = entry.get("started_at") or entry.get("completed_at")
+        if not ts_str:
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_str)
+        except ValueError:
+            continue
+        if ts > cutoff:
+            pruned[run_id] = entry
+    return pruned
+
+
+def _load_run_summaries_unlocked() -> dict:
+    """Load run summaries dict from disk, migrate legacy file, prune. Caller
+    must hold _run_summaries_lock.
+    """
+    summaries: dict = {}
+    try:
+        if RUN_SUMMARIES_FILE.exists():
+            with open(RUN_SUMMARIES_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    summaries = data
     except (json.JSONDecodeError, IOError):
-        pass
-    return None
+        summaries = {}
+    summaries = _migrate_legacy_run_summary_unlocked(summaries)
+    return _prune_summaries(summaries)
 
 
-def save_run_summary(summary: dict) -> None:
-    """Save a run summary to disk atomically."""
+def load_run_summaries() -> dict:
+    """All run summaries keyed by run_id, pruned by retention setting."""
+    with _run_summaries_lock:
+        return _load_run_summaries_unlocked()
+
+
+def load_run_summary(run_id: str) -> Optional[dict]:
+    """One run summary by id, or None if not found / pruned."""
+    return load_run_summaries().get(run_id)
+
+
+def save_run_summary(run_id: str, summary: dict) -> None:
+    """Persist a run summary keyed by run_id. Load-merge-save under a lock so
+    concurrent writers (CLI, web/scheduled, maintenance) don't clobber.
+    """
+    if not run_id:
+        logger.debug("save_run_summary called with empty run_id; ignoring")
+        return
     try:
-        LAST_RUN_SUMMARY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        save_json_atomically(str(LAST_RUN_SUMMARY_FILE), summary, label="last run summary")
+        with _run_summaries_lock:
+            summaries = _load_run_summaries_unlocked()
+            entry = dict(summary)
+            entry["run_id"] = run_id
+            summaries[run_id] = entry
+            summaries = _prune_summaries(summaries)
+            RUN_SUMMARIES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            save_json_atomically(str(RUN_SUMMARIES_FILE), summaries, label="run summaries")
     except IOError:
         pass
+
+
+def load_last_run_summary(run_sources: Optional[tuple] = None) -> Optional[dict]:
+    """Most-recent run summary by started_at. Backward-compat wrapper for the
+    dashboard's "Last Run Summary" widget — defaults to caching runs only
+    (cli/web/scheduled), excluding maintenance so the widget keeps its
+    semantic meaning.
+    """
+    sources = run_sources if run_sources is not None else _LAST_RUN_DEFAULT_SOURCES
+    summaries = load_run_summaries()
+    if not summaries:
+        return None
+    candidates = [
+        entry for entry in summaries.values()
+        if not sources or entry.get("run_source") in sources
+    ]
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda e: e.get("started_at") or e.get("completed_at") or "",
+        reverse=True,
+    )
+    return candidates[0]

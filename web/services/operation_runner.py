@@ -32,7 +32,7 @@ from core.activity import (
     MAX_RECENT_ACTIVITY,
     ACTIVITY_FILE,
     LAST_RUN_FILE,
-    LAST_RUN_SUMMARY_FILE,
+    RUN_SUMMARIES_FILE,
     _activity_file_lock,
     _load_activity_unlocked,
     _save_activity_unlocked,
@@ -631,20 +631,22 @@ class OperationRunner:
     def _save_last_run_summary(self):
         """Save a summary of the completed operation to disk."""
         result = self._current_result
-        if not result:
+        if not result or not self._run_id:
             return
         summary = {
+            "run_source": self._run_source,
             "status": result.state.value,
-            "timestamp": datetime.now().isoformat(),
+            "started_at": result.started_at.isoformat() if result.started_at else datetime.now().isoformat(),
+            "completed_at": result.completed_at.isoformat() if result.completed_at else datetime.now().isoformat(),
+            "duration_seconds": round(result.duration_seconds, 1),
             "files_cached": result.files_cached,
             "files_restored": result.files_restored,
             "bytes_cached": result.bytes_cached,
             "bytes_restored": result.bytes_restored,
-            "duration_seconds": round(result.duration_seconds, 1),
             "error_count": result.error_count,
             "dry_run": result.dry_run,
         }
-        save_run_summary(summary)
+        save_run_summary(self._run_id, summary)
 
     @property
     def state(self) -> OperationState:

@@ -2926,17 +2926,19 @@ class PlexCacheApp:
         # Save last run time and summary to shared activity files
         # so the Web UI dashboard reflects CLI-triggered runs too.
         # Skip in dry-run mode (no real files were moved).
-        if not self.dry_run and self._record_activity:
+        if not self.dry_run and self._record_activity and self._run_id:
             from core.activity import save_last_run_time, save_run_summary
             save_last_run_time()
-            save_run_summary({
+            save_run_summary(self._run_id, {
+                "run_source": "cli",
                 "status": "completed",
-                "timestamp": datetime.now().isoformat(),
+                "started_at": datetime.fromtimestamp(self.start_time).isoformat(),
+                "completed_at": datetime.now().isoformat(),
+                "duration_seconds": round(execution_time_seconds, 1),
                 "files_cached": cached_count,
                 "files_restored": restored_count,
                 "bytes_cached": cached_bytes,
                 "bytes_restored": restored_bytes,
-                "duration_seconds": round(execution_time_seconds, 1),
                 "error_count": 0,
                 "dry_run": False,
             })

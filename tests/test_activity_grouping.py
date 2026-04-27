@@ -45,6 +45,13 @@ def _stub_time_format():
         yield
 
 
+# Default to no run summaries; individual tests override when needed.
+@pytest.fixture(autouse=True)
+def _stub_run_summaries():
+    with patch("web.services.activity_grouping.load_run_summaries", return_value={}):
+        yield
+
+
 class TestEmpty:
     def test_empty_input_returns_empty(self):
         assert group_activity_into_runs([]) == []
@@ -193,6 +200,61 @@ class TestAggregates:
         runs = group_activity_into_runs(activities)
         assert runs[0]["files_restored"] == 1
         assert runs[0]["files_cached"] == 0
+
+
+class TestRunSummaryOverride:
+    """When a run_summary exists for a bucket's run_id, its started_at /
+    completed_at win over the first/last FileActivity timestamp — captures
+    the pre-/post-file-move tail (Plex API + scanning + audit).
+    """
+
+    def test_summary_started_at_overrides_first_file_timestamp(self):
+        now = datetime(2026, 4, 25, 10, 0, 0)
+        # Files moved at 10:01 and 10:02, but the actual run started at 10:00
+        # (Plex API + scanning took 60s before the first file).
+        activities = [
+            _entry(now + timedelta(seconds=120), "Cached", "b.mkv", run_id="r1", run_source="web"),
+            _entry(now + timedelta(seconds=60), "Cached", "a.mkv", run_id="r1", run_source="web"),
+        ]
+        summaries = {
+            "r1": {
+                "run_id": "r1",
+                "run_source": "web",
+                "started_at": now.isoformat(),
+                "completed_at": (now + timedelta(seconds=180)).isoformat(),
+            }
+        }
+        with patch("web.services.activity_grouping.load_run_summaries", return_value=summaries):
+            runs = group_activity_into_runs(activities)
+
+        # Without the override the bucket would be 60s; with summary it's 180s.
+        assert runs[0]["duration_seconds"] == 180
+        assert runs[0]["started_at"] == now.isoformat()
+        assert runs[0]["completed_at"] == (now + timedelta(seconds=180)).isoformat()
+
+    def test_missing_summary_falls_back_to_bucket_timestamps(self):
+        now = datetime(2026, 4, 25, 10, 0, 0)
+        activities = [
+            _entry(now + timedelta(seconds=60), "Cached", "b.mkv", run_id="r1", run_source="web"),
+            _entry(now, "Cached", "a.mkv", run_id="r1", run_source="web"),
+        ]
+        # No summary for r1
+        runs = group_activity_into_runs(activities)
+        assert runs[0]["duration_seconds"] == 60
+
+    def test_malformed_summary_timestamps_ignored(self):
+        now = datetime(2026, 4, 25, 10, 0, 0)
+        activities = [
+            _entry(now + timedelta(seconds=60), "Cached", "b.mkv", run_id="r1", run_source="web"),
+            _entry(now, "Cached", "a.mkv", run_id="r1", run_source="web"),
+        ]
+        summaries = {
+            "r1": {"started_at": "not-a-date", "completed_at": "also-bad"}
+        }
+        with patch("web.services.activity_grouping.load_run_summaries", return_value=summaries):
+            runs = group_activity_into_runs(activities)
+        # Falls back to bucket timestamps without raising.
+        assert runs[0]["duration_seconds"] == 60
 
 
 class TestOrdering:

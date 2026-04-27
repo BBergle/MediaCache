@@ -15,7 +15,7 @@ each ``GET /operations/activity`` request.
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 
-from core.activity import group_episodes_by_show, get_time_format
+from core.activity import group_episodes_by_show, get_time_format, load_run_summaries
 from core.system_utils import format_bytes, format_duration
 
 
@@ -102,6 +102,11 @@ def group_activity_into_runs(
         return []
 
     time_format = get_time_format()
+    # Run summaries (keyed by run_id) carry the *real* run start/end times —
+    # the period the script actually spent on Plex API + scanning + file
+    # moves. Without them we'd fall back to first/last FileActivity timestamp,
+    # which only covers the file-move window and misses the pre-/post-tail.
+    run_summaries = load_run_summaries()
 
     # Pass 1: bucket entries (iterate chronologically so legacy windows cluster correctly)
     buckets: List[Dict] = []
@@ -158,14 +163,28 @@ def group_activity_into_runs(
         bytes_restored = sum(e.get("size_bytes", 0) for e in bucket["entries"] if e.get("action") in RESTORE_ACTIONS)
         total_bytes = sum(e.get("size_bytes", 0) for e in bucket["entries"])
 
-        duration = (bucket["completed_at"] - bucket["started_at"]).total_seconds()
+        # Prefer summary-recorded times when available — they cover the full
+        # run, not just the first-to-last-file window.
+        summary = run_summaries.get(bucket["run_id"])
+        run_started_at = bucket["started_at"]
+        run_completed_at = bucket["completed_at"]
+        if summary:
+            try:
+                if summary.get("started_at"):
+                    run_started_at = datetime.fromisoformat(summary["started_at"])
+                if summary.get("completed_at"):
+                    run_completed_at = datetime.fromisoformat(summary["completed_at"])
+            except ValueError:
+                pass
+
+        duration = (run_completed_at - run_started_at).total_seconds()
 
         result.append({
             "run_id": bucket["run_id"],
             "run_source": bucket["run_source"],
             "label": SOURCE_LABELS.get(bucket["run_source"], "Activity"),
-            "started_at": bucket["started_at"].isoformat(),
-            "completed_at": bucket["completed_at"].isoformat(),
+            "started_at": run_started_at.isoformat(),
+            "completed_at": run_completed_at.isoformat(),
             "duration_seconds": duration,
             "duration_display": format_duration(duration) if duration > 0 else "",
             "files_cached": files_cached,
@@ -175,9 +194,9 @@ def group_activity_into_runs(
             "bytes_restored": bytes_restored,
             "bytes_total": total_bytes,
             "bytes_total_display": format_bytes(total_bytes) if total_bytes > 0 else "",
-            "time_range": _format_time_range(bucket["started_at"], bucket["completed_at"], time_format),
-            "date_key": bucket["started_at"].date().isoformat(),
-            "date_display": _format_date_display(bucket["started_at"]),
+            "time_range": _format_time_range(run_started_at, run_completed_at, time_format),
+            "date_key": run_started_at.date().isoformat(),
+            "date_display": _format_date_display(run_started_at),
             "entries": grouped_entries,
         })
 

@@ -761,6 +761,39 @@ class MaintenanceRunner:
                 run_source="maintenance",
             )
 
+    def _save_run_summary(self, action_name: str, action_result: Optional[ActionResult]):
+        """Persist a run summary so the dashboard's Recent Activity grouping
+        can display real start/end times for maintenance runs alongside
+        cache and restore runs."""
+        if not self._run_id or not self._result:
+            return
+
+        from core.activity import save_run_summary
+
+        result = self._result
+        if result.error_message:
+            status = "failed"
+        elif self._stop_requested:
+            status = "stopped"
+        else:
+            status = "completed"
+
+        affected_count = action_result.affected_count if action_result else 0
+        error_count = len(action_result.errors) if action_result else 0
+
+        save_run_summary(self._run_id, {
+            "run_source": "maintenance",
+            "status": status,
+            "started_at": result.started_at.isoformat() if result.started_at else datetime.now().isoformat(),
+            "completed_at": result.completed_at.isoformat() if result.completed_at else datetime.now().isoformat(),
+            "duration_seconds": round(result.duration_seconds, 1),
+            "action_name": action_name,
+            "action_display": ACTION_HISTORY_LABELS.get(action_name, action_name),
+            "affected_count": affected_count,
+            "error_count": error_count,
+            "dry_run": False,
+        })
+
     def _record_history(self, action_name: str, action_result: Optional[ActionResult]):
         """Record this action to the persistent maintenance history."""
         try:
@@ -864,6 +897,12 @@ class MaintenanceRunner:
 
             # Record to persistent history
             self._record_history(action_name, action_result)
+
+            # Persist run summary for the dashboard's Recent Activity grouping
+            try:
+                self._save_run_summary(action_name, action_result)
+            except Exception as e:
+                logger.error(f"Failed to save maintenance run summary: {e}")
 
             # Call on_complete callback (e.g., cache invalidation)
             if on_complete:
