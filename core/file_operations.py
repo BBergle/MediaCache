@@ -4156,6 +4156,7 @@ class FileMover:
         self._source_map: Dict[str, str] = {}
         # Track actual moves by destination for accurate reporting
         self.last_cache_moves_count = 0
+        self.last_cache_moves_bytes = 0
         # Flag to signal stop to running threads
         self._stop_requested = False
         # Hard-link tracking: maps cache file paths to inode numbers for restoration
@@ -4237,6 +4238,7 @@ class FileMover:
         # Track actual cache moves for accurate diagnostic reporting
         if destination == 'cache':
             self.last_cache_moves_count = len(move_commands)
+            self.last_cache_moves_bytes = total_bytes
 
         # Execute the move commands
         self._execute_move_commands(move_commands, max_concurrent_moves_array,
@@ -4372,6 +4374,19 @@ class FileMover:
                 if not self.debug:
                     self.file_utils.create_directory_with_permissions(cache_path, user_file_name)
                 move = (user_file_name, cache_path)
+            else:
+                # File visible to Plex via /mnt/user/ FUSE but missing from
+                # both the cache pool path and the array-direct path. Common
+                # cause: the file lives on a cache pool not named 'cache'
+                # (or not mounted into the container). See issue #164.
+                logging.warning(
+                    f"[CACHE] Cannot locate file to cache: {os.path.basename(user_file_name)} "
+                    f"(missing from {cache_file_name} and {user_file_name}). "
+                    f"Plex sees it via /mnt/user/ but PlexCache cannot reach the "
+                    f"physical file. If this share uses a non-default cache pool, "
+                    f"mount that pool into the container and set cache_path / "
+                    f"host_cache_path on the matching path mapping."
+                )
         return move
 
     def _translate_to_host_path(self, cache_path: str, log_translation: bool = False) -> str:
