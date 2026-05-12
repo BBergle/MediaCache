@@ -70,8 +70,10 @@ templates.env.globals["web_version"] = __version__
 templates.env.globals["product_version"] = PLEXCACHE_PRODUCT_VERSION
 
 # Searchable Settings index — exposed as JSON for client-side search.
-# See web/services/settings_search_index.py for the source of truth.
-from web.services.settings_search_index import get_search_index
+# See web/settings_search_index.py for the source of truth. Module lives outside
+# web/services/ to avoid a circular import (services/__init__.py loads cache_service
+# which re-imports web.config).
+from web.settings_search_index import get_search_index
 templates.env.globals["settings_search_index_json"] = json.dumps(get_search_index())
 
 

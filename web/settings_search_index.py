@@ -14,6 +14,11 @@ When adding a new setting in a template:
     1. Add data-setting-id="some_id" to the form-group div.
     2. Add a matching entry here.
 
+This module lives at web/ (not under web/services/) to avoid a circular import:
+web.config imports from here, but services/__init__.py imports cache_service
+which re-imports web.config. Keeping this module as pure data with no project
+imports lets web.config pull it in cleanly during initial load.
+
 Tones map to CSS classes in custom.css:
     ""           -> default orange
     "tone-info"  -> blue
