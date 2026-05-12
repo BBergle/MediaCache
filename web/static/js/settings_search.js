@@ -298,13 +298,39 @@
         requestAnimationFrame(tryFlash);
     }
 
+    // Inline style fallback so the highlight is visible even if a stale or
+    // mis-cached stylesheet is in play. CSS classes still drive the animation;
+    // these guarantee at least a visible static outline + tint.
+    var PIN_STYLES = {
+        outline: '2px solid rgba(229, 160, 13, 0.85)',
+        outlineOffset: '6px',
+        boxShadow: 'inset 3px 0 0 rgba(229, 160, 13, 0.95)',
+        backgroundColor: 'rgba(229, 160, 13, 0.06)',
+        borderRadius: 'var(--plex-radius-sm, 8px)',
+        transition: 'outline-color 420ms ease, background-color 420ms ease'
+    };
+
+    function applyInlineStyles(el, styles) {
+        if (!el) return;
+        for (var k in styles) if (Object.prototype.hasOwnProperty.call(styles, k)) {
+            el.style[k] = styles[k];
+        }
+    }
+    function clearInlineStyles(el, styles) {
+        if (!el) return;
+        for (var k in styles) if (Object.prototype.hasOwnProperty.call(styles, k)) {
+            el.style[k] = '';
+        }
+    }
+
     function applyFlash(target) {
         var card = target.closest('.card');
+        console.info('[settings-search] applyFlash: target=', target, 'card=', card);
 
         // Clear any prior pinned highlight before flashing the new target
         clearPinned(/*instant=*/true);
 
-        // Phase 1: bright pulse (matches @keyframes ss-flash-ring duration)
+        // Phase 1: bright pulse (matches @keyframes ss-flash-pulse duration)
         target.classList.add('ss-flash-highlight');
         if (card) card.classList.add('ss-flash-highlight-card');
 
@@ -325,6 +351,9 @@
 
             target.classList.add('ss-flash-pinned');
             if (card) card.classList.add('ss-flash-pinned-card');
+
+            // Inline fallback (also clears any stuck inline styles from prior runs)
+            applyInlineStyles(target, PIN_STYLES);
 
             _pinnedTarget = target;
             _pinnedCard   = card;
@@ -363,14 +392,20 @@
         if (instant) {
             t.classList.remove('ss-flash-pinned', 'is-dismissing');
             if (c) c.classList.remove('ss-flash-pinned-card', 'is-dismissing');
+            clearInlineStyles(t, PIN_STYLES);
             return;
         }
         // Animated fade-out via .is-dismissing, then remove
         t.classList.add('is-dismissing');
         if (c) c.classList.add('is-dismissing');
+        // Fade the inline outline/bg to transparent so the visual decay matches
+        t.style.outlineColor = 'rgba(229, 160, 13, 0)';
+        t.style.boxShadow = 'inset 3px 0 0 rgba(229, 160, 13, 0)';
+        t.style.backgroundColor = 'transparent';
         setTimeout(function() {
             t.classList.remove('ss-flash-pinned', 'is-dismissing');
             if (c) c.classList.remove('ss-flash-pinned-card', 'is-dismissing');
+            clearInlineStyles(t, PIN_STYLES);
         }, 450);
     }
 
