@@ -1715,7 +1715,6 @@ footer {
 .ss-flash-highlight {
     outline: 3px solid rgba(229, 160, 13, 0.85);
     outline-offset: 2px;
-    box-shadow: inset 3px 0 0 rgba(229, 160, 13, 0.95);
     border-radius: var(--plex-radius-sm);
     animation: ss-flash-pulse 1100ms ease-out forwards;
 }
@@ -1729,13 +1728,11 @@ footer {
     border-radius: var(--plex-radius-sm);
     outline: 2px solid rgba(229, 160, 13, 0.60);
     outline-offset: 6px;
-    box-shadow: inset 3px 0 0 rgba(229, 160, 13, 0.95);
     background-color: rgba(229, 160, 13, 0.05);
-    transition: outline-color 420ms ease, background-color 420ms ease, box-shadow 420ms ease;
+    transition: outline-color 420ms ease, background-color 420ms ease;
 }
 .ss-flash-pinned.is-dismissing {
     outline-color: rgba(229, 160, 13, 0);
-    box-shadow: inset 3px 0 0 rgba(229, 160, 13, 0);
     background-color: transparent;
 }
 .ss-flash-pinned-card {

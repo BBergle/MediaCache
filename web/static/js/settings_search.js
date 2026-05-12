@@ -308,7 +308,6 @@
     var PIN_STYLES = {
         outline: '2px solid rgba(229, 160, 13, 0.85)',
         outlineOffset: '6px',
-        boxShadow: 'inset 3px 0 0 rgba(229, 160, 13, 0.95)',
         backgroundColor: 'rgba(229, 160, 13, 0.06)',
         borderRadius: 'var(--plex-radius-sm, 8px)',
         transition: 'outline-color 420ms ease, background-color 420ms ease'
@@ -404,7 +403,6 @@
         if (c) c.classList.add('is-dismissing');
         // Fade the inline outline/bg to transparent so the visual decay matches
         t.style.outlineColor = 'rgba(229, 160, 13, 0)';
-        t.style.boxShadow = 'inset 3px 0 0 rgba(229, 160, 13, 0)';
         t.style.backgroundColor = 'transparent';
         setTimeout(function() {
             t.classList.remove('ss-flash-pinned', 'is-dismissing');
