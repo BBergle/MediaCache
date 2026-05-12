@@ -2813,31 +2813,29 @@ class PlexCacheApp:
                     self.logging_manager.add_summary_message(
                         f"{would_prefix}{verb} {total_size:.2f} {total_size_unit} to {destination}"
                     )
-            else:
-                # Track cached bytes for summary
-                size_multipliers = {'KB': 1024, 'MB': 1024**2, 'GB': 1024**3, 'TB': 1024**4}
-                self.cached_bytes = int(total_size * size_multipliers.get(total_size_unit, 1))
-                verb = "cache" if self.dry_run else "Cached"
-                self.logging_manager.add_summary_message(
-                    f"{would_prefix}{verb} {total_size:.2f} {total_size_unit}"
-                )
-            
+            # NOTE: cache summary is deferred until after move_media_files() so
+            # the byte count reflects what was actually queued for caching, not
+            # the planned total. Files visible via /mnt/user/ FUSE but missing
+            # from both the cache pool path and /mnt/user0/ get silently skipped
+            # by _get_move_command, which used to leave the SUMMARY claiming
+            # success. See issue #164.
+
             free_space, free_space_unit = self.file_utils.get_free_space(
                 cache_dir if destination == 'cache' else real_source
             )
-            
+
             # Check if enough space
             # Multipliers convert to KB as base unit (KB=1, MB=1024, GB=1024^2, TB=1024^3)
             size_multipliers = {'KB': 1, 'MB': 1024, 'GB': 1024**2, 'TB': 1024**3}
             total_size_kb = total_size * size_multipliers.get(total_size_unit, 1)
             free_space_kb = free_space * size_multipliers.get(free_space_unit, 1)
-            
+
             if total_size_kb > free_space_kb:
                 if not self.dry_run:
                     sys.exit(f"Not enough space on {destination} drive.")
                 else:
                     logging.error(f"Not enough space on {destination} drive.")
-            
+
             self.file_mover.move_media_files(
                 media_files_filtered, destination,
                 self.config_manager.performance.max_concurrent_moves_array,
@@ -2845,6 +2843,23 @@ class PlexCacheApp:
                 source_map,
                 media_info_map
             )
+
+            # Cache summary: use actual queued bytes from move_media_files().
+            # If no commands were generated (e.g., all files missing from both
+            # cache and array — see issue #164), skip the summary line. The
+            # per-file WARNING in _get_move_command surfaces the cause, and
+            # [RESULTS] Moved to cache: 0 files reflects the truth.
+            if destination == 'cache':
+                actual_bytes = getattr(self.file_mover, 'last_cache_moves_bytes', 0)
+                if actual_bytes > 0:
+                    actual_size, actual_unit = self.file_utils._convert_bytes_to_readable_size(actual_bytes)
+                    self.cached_bytes = actual_bytes
+                    verb = "cache" if self.dry_run else "Cached"
+                    self.logging_manager.add_summary_message(
+                        f"{would_prefix}{verb} {actual_size:.2f} {actual_unit}"
+                    )
+                else:
+                    self.cached_bytes = 0
         else:
             if not self.logging_manager.files_moved:
                 self.logging_manager.summary_messages = ["There were no files to move to any destination."]
