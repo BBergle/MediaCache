@@ -48,7 +48,7 @@
     <div class="card-body">
         <form id="schedule-form" hx-post="/api/settings/schedule" hx-target="#settings-alert-container" hx-swap="innerHTML">
             <!-- Enable Toggle -->
-            <div class="form-group">
+            <div class="form-group" data-setting-id="schedule_enabled">
                 <label class="switch">
                     <input type="checkbox" name="enabled" id="schedule-enabled"
                            {% if schedule.enabled %}checked{% endif %}
@@ -60,7 +60,7 @@
 
             <div id="schedule-options" {% if not schedule.enabled %}style="opacity: 0.5; pointer-events: none;"{% endif %}>
                 <!-- Schedule Type -->
-                <div class="form-group">
+                <div class="form-group" data-setting-id="schedule_type">
                     <label>Schedule Type</label>
                     <div class="schedule-type-selector">
                         <label class="radio-card">
@@ -89,7 +89,7 @@
                 <!-- Interval Options -->
                 <div id="interval-options" {% if schedule.schedule_type != 'interval' %}style="display: none;"{% endif %}>
                     <div class="interval-grid">
-                        <div class="form-group">
+                        <div class="form-group" data-setting-id="interval_hours">
                             <label for="interval-hours">Run Every</label>
                             <select name="interval_hours" id="interval-hours">
                                 <option value="1" {% if schedule.interval_hours == 1 %}selected{% endif %}>1 hour</option>
@@ -100,7 +100,7 @@
                                 <option value="24" {% if schedule.interval_hours == 24 %}selected{% endif %}>24 hours</option>
                             </select>
                         </div>
-                        <div class="form-group">
+                        <div class="form-group" data-setting-id="interval_start_time">
                             <label for="interval-start-time">Starting At</label>
                             <input type="time" name="interval_start_time" id="interval-start-time"
                                    value="{{ schedule.interval_start_time|default('00:00') }}">
@@ -111,13 +111,13 @@
 
                 <!-- Cron Options -->
                 <div id="cron-options" {% if schedule.schedule_type != 'cron' %}style="display: none;"{% endif %}>
-                    <div class="form-group">
+                    <div class="form-group" data-setting-id="cron_expression">
                         <label for="cron-expression">Cron Expression</label>
                         <div class="cron-input-group">
                             <input type="text" name="cron_expression" id="cron-expression"
                                    value="{{ schedule.cron_expression }}"
                                    placeholder="0 */4 * * *">
-                            <button type="button" class="btn btn-secondary" onclick="validateCron()">
+                            <button type="button" class="btn btn-secondary" data-setting-id="cron_validate_btn" onclick="validateCron()">
                                 <i data-lucide="check"></i>
                                 Validate
                             </button>
@@ -134,12 +134,12 @@
                 <div class="form-group">
                     <label>Run Options</label>
                     <div class="checkbox-group">
-                        <label class="checkbox-item">
+                        <label class="checkbox-item" data-setting-id="dry_run">
                             <input type="checkbox" name="dry_run" {% if schedule.dry_run %}checked{% endif %}>
                             <span>Dry Run</span>
                             <small>Simulate without moving files</small>
                         </label>
-                        <label class="checkbox-item">
+                        <label class="checkbox-item" data-setting-id="verbose">
                             <input type="checkbox" name="verbose" {% if schedule.verbose %}checked{% endif %}>
                             <span>Verbose Logging</span>
                             <small>Enable detailed debug output</small>

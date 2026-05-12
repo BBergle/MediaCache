@@ -1401,3 +1401,344 @@ footer {
 .pinned-row-pending-unpin .pinned-unpin-btn {
     cursor: default;
 }
+
+/* ============================================================
+   Settings Search
+   See web/services/settings_search_index.py + settings_search.js
+   ============================================================ */
+.settings-search {
+    position: relative;
+    margin-bottom: 1.25rem;
+}
+.settings-search-input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background: var(--plex-bg-card);
+    border: 1px solid var(--plex-border);
+    border-radius: var(--plex-radius-md);
+    padding: 0 0.85rem;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.settings-search-input-wrap:focus-within {
+    border-color: rgba(229, 160, 13, 0.5);
+    box-shadow: 0 0 0 3px rgba(229, 160, 13, 0.12);
+}
+.settings-search-lead {
+    width: 18px;
+    height: 18px;
+    color: var(--plex-text-muted);
+    flex-shrink: 0;
+}
+#settings-search-input {
+    flex: 1;
+    background: transparent;
+    border: 0;
+    outline: 0;
+    color: var(--plex-text);
+    font-size: 1rem;
+    padding: 0.75rem 0.65rem;
+    min-width: 0;
+}
+/* Suppress the global input:focus ring (plex-theme.css) — the wrapper's
+   :focus-within already provides the visual focus indicator, so the inner ring
+   would render a confusing double-outline. */
+#settings-search-input:focus {
+    box-shadow: none;
+    border-color: transparent;
+}
+#settings-search-input::placeholder {
+    color: var(--plex-text-muted);
+}
+.settings-search-kbd {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem;
+    color: var(--plex-text-muted);
+    background: var(--plex-bg-input);
+    border: 1px solid var(--plex-border);
+    border-radius: var(--plex-radius-xs);
+    padding: 0.15rem 0.4rem;
+    flex-shrink: 0;
+}
+.settings-search-kbd .kbd-mod {
+    font-size: 0.9em;
+    opacity: 0.9;
+}
+.settings-search-clear {
+    background: transparent;
+    border: 0;
+    color: var(--plex-text-muted);
+    cursor: pointer;
+    padding: 0.25rem;
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+.settings-search-clear i {
+    width: 16px;
+    height: 16px;
+}
+.settings-search-clear:hover {
+    color: var(--plex-text);
+}
+.settings-search.has-query .settings-search-clear {
+    display: inline-flex;
+}
+.settings-search.has-query .settings-search-kbd {
+    display: none;
+}
+
+/* Results panel */
+.settings-search-results {
+    margin-top: 0.75rem;
+    background: var(--plex-bg-card);
+    border: 1px solid var(--plex-border);
+    border-radius: var(--plex-radius-md);
+    box-shadow: var(--plex-shadow-card);
+    overflow: hidden;
+    max-height: 60vh;
+    overflow-y: auto;
+    display: none;
+}
+.settings-search.has-query .settings-search-results {
+    display: block;
+}
+
+.ss-results-summary {
+    padding: 0.65rem 1rem;
+    border-bottom: 1px solid var(--plex-border);
+    font-size: 0.8rem;
+    color: var(--plex-text-muted);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+.ss-results-summary kbd {
+    font-family: ui-monospace, monospace;
+    font-size: 0.7rem;
+    background: var(--plex-bg-input);
+    border: 1px solid var(--plex-border);
+    border-radius: var(--plex-radius-xs);
+    padding: 0.1rem 0.35rem;
+    color: var(--plex-text-light);
+}
+
+.ss-results-group {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--plex-border);
+}
+.ss-results-group:last-child {
+    border-bottom: 0;
+}
+.ss-results-group-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 1rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--plex-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.ss-results-group-header i {
+    width: 12px;
+    height: 12px;
+}
+
+.ss-result-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.85rem;
+    padding: 0.7rem 1rem;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    transition: background 120ms ease, border-color 120ms ease;
+}
+.ss-result-row:hover {
+    background: var(--plex-bg-hover);
+}
+.ss-result-row.is-selected {
+    background: var(--plex-bg-hover);
+    border-left-color: var(--plex-orange);
+}
+.ss-result-icon {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    border-radius: var(--plex-radius-sm);
+    background: rgba(229, 160, 13, 0.08);
+    color: var(--plex-orange);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.ss-result-icon i {
+    width: 16px;
+    height: 16px;
+}
+.ss-result-icon.tone-info  { background: rgba(10, 132, 255, 0.10); color: var(--plex-info); }
+.ss-result-icon.tone-ok    { background: rgba(52, 199, 89, 0.10); color: var(--plex-success); }
+.ss-result-icon.tone-purple{ background: rgba(167, 139, 250, 0.12); color: var(--plex-purple); }
+.ss-result-icon.tone-warn  { background: rgba(255, 152, 0, 0.10); color: var(--plex-warning); }
+.ss-result-body {
+    flex: 1;
+    min-width: 0;
+}
+.ss-result-crumb {
+    font-size: 0.72rem;
+    color: var(--plex-text-muted);
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-bottom: 0.15rem;
+    flex-wrap: wrap;
+}
+.ss-result-crumb i {
+    width: 11px;
+    height: 11px;
+}
+.ss-result-label {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--plex-text);
+}
+.ss-result-hint {
+    font-size: 0.82rem;
+    color: var(--plex-text-muted);
+    margin-top: 0.1rem;
+    line-height: 1.35;
+}
+.ss-result-row mark {
+    background: rgba(229, 160, 13, 0.25);
+    color: var(--plex-orange-light);
+    padding: 0 0.1rem;
+    border-radius: 2px;
+}
+[data-theme="light"] .ss-result-row mark {
+    color: var(--plex-orange-dark);
+    background: rgba(229, 160, 13, 0.30);
+}
+.ss-result-arrow {
+    color: var(--plex-text-muted);
+    align-self: center;
+    flex-shrink: 0;
+}
+.ss-result-arrow i {
+    width: 14px;
+    height: 14px;
+}
+
+/* Empty state */
+.ss-empty-state {
+    padding: 1rem 1rem 0.25rem;
+}
+.ss-empty-section {
+    margin-bottom: 1rem;
+}
+.ss-empty-section:last-child {
+    margin-bottom: 0;
+}
+.ss-empty-section h4 {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--plex-text-muted);
+    letter-spacing: 0.05em;
+    margin: 0 0 0.5rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.ss-empty-section h4 i {
+    width: 12px;
+    height: 12px;
+}
+.ss-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+.ss-chip {
+    background: var(--plex-bg-input);
+    border: 1px solid var(--plex-border);
+    color: var(--plex-text);
+    padding: 0.35rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+.ss-chip:hover {
+    background: var(--plex-bg-hover);
+    border-color: var(--plex-border-light);
+}
+.ss-chip-icon {
+    width: 12px;
+    height: 12px;
+}
+
+.ss-no-results {
+    text-align: center;
+    padding: 2rem 1rem;
+    color: var(--plex-text-muted);
+}
+.ss-no-results i {
+    width: 32px;
+    height: 32px;
+    margin-bottom: 0.5rem;
+    opacity: 0.5;
+}
+.ss-no-results-hint {
+    font-size: 0.78rem;
+    margin-top: 0.4rem;
+}
+
+/* Jump-and-flash highlight on the target setting (click-through from a result).
+ * Two-phase: bright outline pulse, then a padded outline that persists until
+ * the user clicks or presses a key, so they can find their place after the
+ * pulse fades. outline-offset puts a visible gap between the element edge
+ * and the ring (no layout shift). */
+@keyframes ss-flash-pulse {
+    0%   { outline-color: rgba(229, 160, 13, 0.85); outline-offset: 2px; background-color: rgba(229, 160, 13, 0.14); }
+    40%  { outline-color: rgba(229, 160, 13, 0.95); outline-offset: 8px; background-color: rgba(229, 160, 13, 0.20); }
+    100% { outline-color: rgba(229, 160, 13, 0.55); outline-offset: 6px; background-color: rgba(229, 160, 13, 0.06); }
+}
+.ss-flash-highlight {
+    outline: 3px solid rgba(229, 160, 13, 0.85);
+    outline-offset: 2px;
+    border-radius: var(--plex-radius-sm);
+    animation: ss-flash-pulse 1100ms ease-out forwards;
+}
+.ss-flash-highlight-card {
+    border-color: rgba(229, 160, 13, 0.55) !important;
+    transition: border-color 1100ms ease;
+}
+
+/* Persistent marker after the pulse. Cleared by JS on user interaction. */
+.ss-flash-pinned {
+    border-radius: var(--plex-radius-sm);
+    outline: 2px solid rgba(229, 160, 13, 0.60);
+    outline-offset: 6px;
+    background-color: rgba(229, 160, 13, 0.05);
+    transition: outline-color 420ms ease, background-color 420ms ease;
+}
+.ss-flash-pinned.is-dismissing {
+    outline-color: rgba(229, 160, 13, 0);
+    background-color: transparent;
+}
+.ss-flash-pinned-card {
+    border-color: rgba(229, 160, 13, 0.45) !important;
+    transition: border-color 420ms ease;
+}
+.ss-flash-pinned-card.is-dismissing {
+    border-color: rgba(229, 160, 13, 0) !important;
+}

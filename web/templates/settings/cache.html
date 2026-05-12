@@ -15,7 +15,7 @@
             </h3>
 
             <div class="grid grid-2">
-                <div class="form-group">
+                <div class="form-group" data-setting-id="number_episodes">
                     <label for="number_episodes">Episodes to Prefetch</label>
                     <input type="number" id="number_episodes" name="number_episodes"
                            class="input-narrow"
@@ -23,7 +23,7 @@
                     <div class="form-hint">Number of upcoming episodes to cache for in-progress shows</div>
                 </div>
 
-                <div class="form-group">
+                <div class="form-group" data-setting-id="days_to_monitor">
                     <label for="days_to_monitor">Days to Monitor</label>
                     <input type="number" id="days_to_monitor" name="days_to_monitor"
                            class="input-narrow"
@@ -32,7 +32,7 @@
                 </div>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" data-setting-id="prefetch_minimum_minutes">
                 <label for="prefetch_minimum_minutes">Minimum Prefetch Runtime (minutes)</label>
                 <input type="number" id="prefetch_minimum_minutes" name="prefetch_minimum_minutes"
                        class="input-narrow"
@@ -47,7 +47,7 @@
                 Watchlist
             </h3>
 
-            <div class="form-group">
+            <div class="form-group" data-setting-id="watchlist_toggle">
                 <label class="switch">
                     <input type="checkbox" name="watchlist_toggle"
                            onchange="toggleWatchlistOptions()"
@@ -58,7 +58,7 @@
 
             <div id="watchlist-options"{% if not (settings.watchlist_toggle | default(true)) %} style="display: none;"{% endif %}>
                 <div class="grid grid-2">
-                    <div class="form-group">
+                    <div class="form-group" data-setting-id="watchlist_episodes">
                         <label for="watchlist_episodes">Watchlist Episodes to Prefetch</label>
                         <input type="number" id="watchlist_episodes" name="watchlist_episodes"
                                class="input-narrow"
@@ -93,7 +93,7 @@
             </h3>
 
             <div class="grid grid-2">
-                <div class="form-group">
+                <div class="form-group" data-setting-id="cache_retention_hours">
                     <label for="cache_retention_hours">Cache Retention (hours)</label>
                     <input type="number" id="cache_retention_hours" name="cache_retention_hours"
                            class="input-narrow"
@@ -101,7 +101,7 @@
                     <div class="form-hint">Keep files cached at least this long before moving back (0 = no minimum)</div>
                 </div>
 
-                <div class="form-group">
+                <div class="form-group" data-setting-id="watchlist_retention_days">
                     <label for="watchlist_retention_days">Watchlist Retention (days)</label>
                     <input type="number" id="watchlist_retention_days" name="watchlist_retention_days"
                            class="input-narrow"
@@ -111,7 +111,7 @@
             </div>
 
             <div class="grid grid-2">
-                <div class="form-group">
+                <div class="form-group" data-setting-id="ondeck_retention_days">
                     <label for="ondeck_retention_days">OnDeck Retention (days)</label>
                     <input type="number" id="ondeck_retention_days" name="ondeck_retention_days"
                            class="input-narrow"
@@ -127,7 +127,7 @@
                 File Handling
             </h3>
 
-            <div class="form-group">
+            <div class="form-group" data-setting-id="watched_move">
                 <label class="switch">
                     <input type="checkbox" name="watched_move"
                            {% if settings.watched_move | default(true) %}checked{% endif %}>
@@ -135,7 +135,7 @@
                 </label>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" data-setting-id="create_plexcached_backups">
                 <label class="switch">
                     <input type="checkbox" name="create_plexcached_backups"
                            {% if settings.create_plexcached_backups | default(true) %}checked{% endif %}>
@@ -144,7 +144,7 @@
                 <div class="form-hint">When moving files to cache, keep backup on array (allows recovery if cache fails)</div>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" data-setting-id="cleanup_empty_folders">
                 <label class="switch">
                     <input type="checkbox" name="cleanup_empty_folders"
                            {% if settings.cleanup_empty_folders | default(true) %}checked{% endif %}>
@@ -153,7 +153,7 @@
                 <div class="form-hint">Remove empty parent folders on cache after moving files to array. Disable if you use year-based or other intentional empty folder structures.</div>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" data-setting-id="use_symlinks">
                 <label class="switch">
                     <input type="checkbox" name="use_symlinks"
                            {% if settings.use_symlinks %}checked{% endif %}>
@@ -165,7 +165,7 @@
                 paths in PlexCache-D and Plex containers.</div>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" data-setting-id="auto_transfer_upgrades">
                 <label class="switch">
                     <input type="checkbox" name="auto_transfer_upgrades"
                            {% if settings.auto_transfer_upgrades | default(true) %}checked{% endif %}>
@@ -174,7 +174,7 @@
                 <div class="form-hint">When Sonarr/Radarr upgrades a cached file, automatically transfer exclude list and tracker entries to the new file using Plex rating keys.</div>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" data-setting-id="backup_upgraded_files">
                 <label class="switch">
                     <input type="checkbox" name="backup_upgraded_files"
                            {% if settings.backup_upgraded_files | default(true) %}checked{% endif %}>
@@ -183,7 +183,7 @@
                 <div class="form-hint">When a cached file is upgraded, create a .plexcached backup of the new file on the array (only if the old file had a backup).</div>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" data-setting-id="hardlinked_files">
                 <label for="hardlinked_files">Hardlinked Files Handling</label>
                 <select id="hardlinked_files" name="hardlinked_files">
                     <option value="skip" {% if settings.hardlinked_files == 'skip' or not settings.hardlinked_files %}selected{% endif %}>Skip (preserve for seeders)</option>
@@ -192,7 +192,7 @@
                 <div class="form-hint">Files with multiple hardlinks (e.g., seeding torrents). Skip preserves links, Move copies the file.</div>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" data-setting-id="check_hardlinks_on_restore">
                 <label class="switch">
                     <input type="checkbox" name="check_hardlinks_on_restore"
                            {% if settings.check_hardlinks_on_restore | default(false) %}checked{% endif %}>
@@ -201,7 +201,7 @@
                 <div class="form-hint">When enabled, cached files with multiple hard links (e.g., actively seeding from cache) are skipped and kept on cache until their links are resolved.</div>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" data-setting-id="cache_associated_files">
                 <label for="cache_associated_files">Associated Files</label>
                 <select id="cache_associated_files" name="cache_associated_files">
                     <option value="all" {% if settings.cache_associated_files == 'all' %}selected{% endif %}>All (subtitles, artwork, NFOs, metadata)</option>
@@ -216,7 +216,7 @@
                 Add additional folder names below for non-dot-prefixed directories to exclude from scanning.
             </div>
 
-            <div class="form-group">
+            <div class="form-group" data-setting-id="excluded_folders">
                 <label>Excluded Folders</label>
                 <div id="excluded-folders-list">
                     {% for folder in settings.excluded_folders or [] %}
@@ -251,7 +251,7 @@
                 Cache Limit and Eviction are based on <strong>total drive usage</strong> (all files on the cache drive), not just PlexCache-managed files. Other applications, downloads, and system files all count toward the limit.
             </div>
 
-            <div class="form-group">
+            <div class="form-group" data-setting-id="cache_drive_size">
                 <label for="cache_drive_size">Cache Drive Size {% if drive_info.is_zfs and not drive_info.is_manual_override %}(recommended for ZFS){% else %}(optional){% endif %}</label>
                 <input type="text" id="cache_drive_size" name="cache_drive_size"
                        class="input-medium"
@@ -276,7 +276,7 @@
             </div>
 
             <div class="grid grid-2">
-                <div class="form-group">
+                <div class="form-group" data-setting-id="cache_limit">
                     <label for="cache_limit">Cache Limit</label>
                     <input type="text" id="cache_limit" name="cache_limit"
                            class="input-medium"
@@ -292,7 +292,7 @@
                     <div id="cache_limit_hint" class="form-hint" style="display: none; color: var(--plex-text-muted); margin-top: 0.25rem;"></div>
                 </div>
 
-                <div class="form-group">
+                <div class="form-group" data-setting-id="min_free_space">
                     <label for="min_free_space">Min Free Space</label>
                     <input type="text" id="min_free_space" name="min_free_space"
                            class="input-medium"
@@ -309,7 +309,7 @@
                 </div>
             </div>
 
-            <div class="form-group" style="margin-top: 1rem;">
+            <div class="form-group" data-setting-id="plexcache_quota" style="margin-top: 1rem;">
                 <label for="plexcache_quota">PlexCache Quota</label>
                 <input type="text" id="plexcache_quota" name="plexcache_quota"
                        class="input-medium"
@@ -331,7 +331,7 @@
                 Eviction
             </h3>
 
-            <div class="form-group">
+            <div class="form-group" data-setting-id="cache_eviction_mode">
                 <label for="cache_eviction_mode">Eviction Mode</label>
                 <select id="cache_eviction_mode" name="cache_eviction_mode" onchange="toggleEvictionOptions()">
                     <option value="smart" {% if settings.cache_eviction_mode == 'smart' %}selected{% endif %}>Smart (priority-based)</option>
@@ -342,7 +342,7 @@
 
             <div id="eviction-options"{% if settings.cache_eviction_mode == 'none' %} style="display: none;"{% endif %}>
                 <div class="grid grid-2">
-                    <div class="form-group">
+                    <div class="form-group" data-setting-id="cache_eviction_threshold_percent">
                         <label for="cache_eviction_threshold_percent">Eviction Threshold (%)</label>
                         <input type="number" id="cache_eviction_threshold_percent" name="cache_eviction_threshold_percent"
                                class="input-narrow"
@@ -352,7 +352,7 @@
                         <div id="eviction_threshold_calculated" class="form-hint" style="color: var(--plex-orange); margin-top: 0.25rem;"></div>
                     </div>
 
-                    <div class="form-group">
+                    <div class="form-group" data-setting-id="eviction_min_priority">
                         <label for="eviction_min_priority">Minimum Priority to Keep</label>
                         <input type="number" id="eviction_min_priority" name="eviction_min_priority"
                                class="input-narrow"
@@ -369,7 +369,7 @@
                 Advanced
             </h3>
 
-            <div class="form-group">
+            <div class="form-group" data-setting-id="exit_if_active_session">
                 <label class="switch">
                     <input type="checkbox" name="exit_if_active_session"
                            {% if settings.exit_if_active_session %}checked{% endif %}>
@@ -379,7 +379,7 @@
             </div>
 
             <div class="grid grid-2">
-                <div class="form-group">
+                <div class="form-group" data-setting-id="max_concurrent_moves_cache">
                     <label for="max_concurrent_moves_cache">Concurrent Moves to Cache</label>
                     <input type="number" id="max_concurrent_moves_cache" name="max_concurrent_moves_cache"
                            class="input-narrow"
@@ -387,7 +387,7 @@
                     <div class="form-hint">Max parallel file operations when moving TO cache (default: 5)</div>
                 </div>
 
-                <div class="form-group">
+                <div class="form-group" data-setting-id="max_concurrent_moves_array">
                     <label for="max_concurrent_moves_array">Concurrent Moves to Array</label>
                     <input type="number" id="max_concurrent_moves_array" name="max_concurrent_moves_array"
                            class="input-narrow"
@@ -416,7 +416,7 @@
             Pinned media is always cached and is never evicted or moved back to the array, regardless of watch state or priority score. Useful for intro episodes, favorite movies, or anything you always want instantly available with the array spun down. Use the Cache Pinned Now button below to copy any missing files immediately, or wait for the next scheduled run.
         </p>
 
-        <div class="form-group">
+        <div class="form-group" data-setting-id="pinned_preferred_resolution">
             <label for="pinned_preferred_resolution">Preferred Version</label>
             <select id="pinned_preferred_resolution" name="pinned_preferred_resolution" form="cache-settings-form">
                 <option value="highest" {% if settings.pinned_preferred_resolution == 'highest' or not settings.pinned_preferred_resolution %}selected{% endif %}>Highest quality (largest bitrate)</option>
@@ -429,7 +429,7 @@
             <div class="form-hint">Which version to cache when a pinned item has multiple media files (e.g., 4K + 1080p). Saved with <strong>Save Cache Settings</strong> in the Cache Behavior card above.</div>
         </div>
 
-        <div class="form-group">
+        <div class="form-group" data-setting-id="pinned_search">
             <label for="pinned-search-input">
                 <i data-lucide="search" style="width: 14px; height: 14px; vertical-align: middle;"></i>
                 Search Plex
