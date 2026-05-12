@@ -270,65 +270,31 @@
 
     function flashTarget(settingId) {
         // Some settings live inside HTMX-loaded sub-partials (e.g. user rows,
-        // path-mapping rows). Poll for up to 3s so cross-tab navigation, slow
-        // partials, or first paint don't drop the highlight on the floor.
+        // path-mapping rows). Poll for up to 3s so cross-tab navigation and
+        // slow partials don't drop the highlight on the floor.
         // :not(.ss-result-row) excludes the search popup rows, which also
         // carry data-setting-id for click delegation but live inside the
-        // (hidden) results panel — without this filter the flash lands on
+        // hidden results panel — without this filter the flash would land on
         // an invisible element.
         var attempts = 0;
         var MAX_ATTEMPTS = 30;  // ~3s at 100ms per tick
         var selector = '[data-setting-id="' + cssEscape(settingId) + '"]:not(.ss-result-row)';
-        console.info('[settings-search] flashTarget:', settingId);
 
         function tryFlash() {
             var target = document.querySelector(selector);
             if (!target) {
                 attempts++;
-                if (attempts < MAX_ATTEMPTS) {
-                    setTimeout(tryFlash, 100);
-                } else {
-                    console.warn('[settings-search] Target not found after retries:', settingId, '(selector:', selector + ')');
-                }
+                if (attempts < MAX_ATTEMPTS) setTimeout(tryFlash, 100);
                 return;
-            }
-            if (attempts > 0) {
-                console.info('[settings-search] Target found after', attempts, 'retries:', settingId);
             }
             applyFlash(target);
         }
 
-        // First attempt on the next frame so layout has settled
         requestAnimationFrame(tryFlash);
-    }
-
-    // Inline style fallback so the highlight is visible even if a stale or
-    // mis-cached stylesheet is in play. CSS classes still drive the animation;
-    // these guarantee at least a visible static outline + tint.
-    var PIN_STYLES = {
-        outline: '2px solid rgba(229, 160, 13, 0.85)',
-        outlineOffset: '6px',
-        backgroundColor: 'rgba(229, 160, 13, 0.06)',
-        borderRadius: 'var(--plex-radius-sm, 8px)',
-        transition: 'outline-color 420ms ease, background-color 420ms ease'
-    };
-
-    function applyInlineStyles(el, styles) {
-        if (!el) return;
-        for (var k in styles) if (Object.prototype.hasOwnProperty.call(styles, k)) {
-            el.style[k] = styles[k];
-        }
-    }
-    function clearInlineStyles(el, styles) {
-        if (!el) return;
-        for (var k in styles) if (Object.prototype.hasOwnProperty.call(styles, k)) {
-            el.style[k] = '';
-        }
     }
 
     function applyFlash(target) {
         var card = target.closest('.card');
-        console.info('[settings-search] applyFlash: target=', target, 'card=', card);
 
         // Clear any prior pinned highlight before flashing the new target
         clearPinned(/*instant=*/true);
@@ -354,9 +320,6 @@
 
             target.classList.add('ss-flash-pinned');
             if (card) card.classList.add('ss-flash-pinned-card');
-
-            // Inline fallback (also clears any stuck inline styles from prior runs)
-            applyInlineStyles(target, PIN_STYLES);
 
             _pinnedTarget = target;
             _pinnedCard   = card;
@@ -395,19 +358,14 @@
         if (instant) {
             t.classList.remove('ss-flash-pinned', 'is-dismissing');
             if (c) c.classList.remove('ss-flash-pinned-card', 'is-dismissing');
-            clearInlineStyles(t, PIN_STYLES);
             return;
         }
         // Animated fade-out via .is-dismissing, then remove
         t.classList.add('is-dismissing');
         if (c) c.classList.add('is-dismissing');
-        // Fade the inline outline/bg to transparent so the visual decay matches
-        t.style.outlineColor = 'rgba(229, 160, 13, 0)';
-        t.style.backgroundColor = 'transparent';
         setTimeout(function() {
             t.classList.remove('ss-flash-pinned', 'is-dismissing');
             if (c) c.classList.remove('ss-flash-pinned-card', 'is-dismissing');
-            clearInlineStyles(t, PIN_STYLES);
         }, 450);
     }
 
