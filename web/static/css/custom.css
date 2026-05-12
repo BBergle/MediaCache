@@ -1440,6 +1440,13 @@ footer {
     padding: 0.75rem 0.65rem;
     min-width: 0;
 }
+/* Suppress the global input:focus ring (plex-theme.css) — the wrapper's
+   :focus-within already provides the visual focus indicator, so the inner ring
+   would render a confusing double-outline. */
+#settings-search-input:focus {
+    box-shadow: none;
+    border-color: transparent;
+}
 #settings-search-input::placeholder {
     color: var(--plex-text-muted);
 }
