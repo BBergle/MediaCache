@@ -12,7 +12,7 @@
             Download your current settings as a JSON file for backup or migration to another installation.
         </p>
 
-        <div class="form-group">
+        <div class="form-group" data-setting-id="include_sensitive">
             <label class="switch">
                 <input type="checkbox" id="include_sensitive" checked>
                 <span>Include sensitive data</span>
@@ -24,7 +24,7 @@
             </div>
         </div>
 
-        <div class="form-group mb-0">
+        <div class="form-group mb-0" data-setting-id="download_backup_btn">
             <button type="button" class="btn btn-primary" onclick="downloadBackup()">
                 <i data-lucide="download"></i>
                 Download Backup
@@ -45,14 +45,14 @@
         </p>
 
         <form id="import-form" enctype="multipart/form-data">
-            <div class="form-group">
+            <div class="form-group" data-setting-id="settings_file">
                 <label for="settings_file">Settings File</label>
                 <input type="file" id="settings_file" name="settings_file" accept=".json,application/json"
                        onchange="updateFileLabel(this)">
                 <div class="form-hint">Select a PlexCache backup JSON file</div>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" data-setting-id="import_mode">
                 <label>Import Mode</label>
                 <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.5rem;">
                     <label class="radio-label">
@@ -70,11 +70,11 @@
             <div id="validation-container" style="display: none;"></div>
 
             <div class="form-group mb-0" style="display: flex; gap: 0.75rem;">
-                <button type="button" class="btn btn-secondary" onclick="validateSettings()">
+                <button type="button" class="btn btn-secondary" data-setting-id="validate_settings_btn" onclick="validateSettings()">
                     <i data-lucide="check-circle"></i>
                     Validate
                 </button>
-                <button type="button" class="btn btn-primary" onclick="importSettings()" id="import-btn">
+                <button type="button" class="btn btn-primary" onclick="importSettings()" id="import-btn" data-setting-id="import_settings_btn">
                     <i data-lucide="upload"></i>
                     Import
                 </button>
@@ -165,7 +165,7 @@
                         Cache paths in your CLI data will be converted to Docker container paths.
                     </p>
 
-                    <div class="form-group" style="margin-bottom: 1rem;">
+                    <div class="form-group" data-setting-id="cli_cache_prefix" style="margin-bottom: 1rem;">
                         <label for="cli_cache_prefix">CLI Cache Path Prefix</label>
                         <input type="text" id="cli_cache_prefix" name="cli_cache_prefix"
                                value="/mnt/cache_downloads/"
@@ -173,7 +173,7 @@
                         <p class="form-hint">The cache path used in your CLI installation</p>
                     </div>
 
-                    <div class="form-group" style="margin-bottom: 0;">
+                    <div class="form-group" data-setting-id="docker_cache_prefix" style="margin-bottom: 0;">
                         <label for="docker_cache_prefix">Docker Cache Path</label>
                         <input type="text" id="docker_cache_prefix" name="docker_cache_prefix"
                                value="/mnt/cache/"
@@ -195,7 +195,7 @@
 
                 <!-- Action buttons -->
                 <div style="display: flex; gap: 0.75rem;">
-                    <button type="button" id="cli-import-btn" class="btn btn-primary" style="flex: 1;" onclick="executeCliImport()">
+                    <button type="button" id="cli-import-btn" class="btn btn-primary" data-setting-id="cli_import_btn" style="flex: 1;" onclick="executeCliImport()">
                         <i data-lucide="download" class="btn-icon"></i>
                         <span class="btn-text">Import Data</span>
                         <div class="spinner btn-spinner" style="display: none; width: 14px; height: 14px;"></div>

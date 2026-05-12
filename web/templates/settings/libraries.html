@@ -16,7 +16,7 @@
         </div>
         {% endif %}
 
-        <div id="library-cards">
+        <div id="library-cards" data-setting-id="library_toggles">
             {% for card in library_cards %}
                 {% include "settings/partials/library_card.html" %}
             {% endfor %}
@@ -41,7 +41,7 @@
 
         <hr style="border-color: var(--plex-border); margin: 1.5rem 0;">
 
-        <details>
+        <details data-setting-id="path_mappings">
             <summary style="cursor: pointer; color: var(--plex-orange);">
                 <i data-lucide="plus"></i> Add Custom Path Mapping
             </summary>

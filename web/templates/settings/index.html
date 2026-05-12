@@ -14,6 +14,29 @@
     </div>
 </header>
 
+<!-- Settings Search -->
+<div class="settings-search" id="settings-search" data-active-tab="{{ active_tab | default('') }}">
+    <div class="settings-search-input-wrap">
+        <i data-lucide="search" class="settings-search-lead"></i>
+        <input id="settings-search-input"
+               type="text"
+               placeholder="Search settings — try &ldquo;token&rdquo;, &ldquo;discord&rdquo;, or &ldquo;schedule&rdquo;"
+               autocomplete="off"
+               spellcheck="false"
+               aria-label="Search settings"
+               aria-controls="settings-search-results"
+               aria-expanded="false">
+        <button class="settings-search-clear" id="settings-search-clear" type="button" aria-label="Clear search">
+            <i data-lucide="x"></i>
+        </button>
+        <span class="settings-search-kbd"><span class="kbd-mod">Ctrl</span>K</span>
+    </div>
+
+    <div class="settings-search-results" id="settings-search-results" role="listbox" aria-label="Settings search results"></div>
+</div>
+
+<script id="settings-search-index" type="application/json">{{ settings_search_index_json | safe }}</script>
+
 <!-- Settings Tabs -->
 <div class="tabs">
     <a href="/settings/plex" class="tab {% if active_tab == 'plex' %}active{% endif %}">
@@ -59,4 +82,6 @@
     </div>
 </div>
 {% endblock %}
+
+<script src="/static/js/settings_search.js" defer></script>
 {% endblock %}

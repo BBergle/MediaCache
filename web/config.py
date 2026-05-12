@@ -69,6 +69,11 @@ templates.env.globals["is_docker"] = IS_DOCKER
 templates.env.globals["web_version"] = __version__
 templates.env.globals["product_version"] = PLEXCACHE_PRODUCT_VERSION
 
+# Searchable Settings index — exposed as JSON for client-side search.
+# See web/services/settings_search_index.py for the source of truth.
+from web.services.settings_search_index import get_search_index
+templates.env.globals["settings_search_index_json"] = json.dumps(get_search_index())
+
 
 def get_time_format() -> str:
     """Read time_format from settings JSON. Returns '12h' or '24h' (default)."""

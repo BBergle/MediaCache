@@ -66,7 +66,7 @@
                     Web UI Authentication
                 </div>
 
-                <div class="form-group" style="margin-bottom: 0.75rem;">
+                <div class="form-group" data-setting-id="auth_enabled" style="margin-bottom: 0.75rem;">
                     <div class="security-toggle-row">
                         <div>
                             <label for="auth_enabled" style="margin-bottom: 0;">Require Login</label>
@@ -90,7 +90,7 @@
                 {% endif %}
 
                 <div id="auth-details" style="{% if not settings.auth_enabled %}display: none;{% endif %}">
-                    <div class="form-group" style="margin-top: 1.25rem; margin-bottom: 0;">
+                    <div class="form-group" data-setting-id="auth_session_hours" style="margin-top: 1.25rem; margin-bottom: 0;">
                         <label for="auth_session_hours">Session Duration</label>
                         <select id="auth_session_hours" name="auth_session_hours">
                             <option value="1" {% if settings.auth_session_hours == 1 %}selected{% endif %}>1 hour</option>
@@ -116,7 +116,7 @@
                     Optional password login as fallback when Plex OAuth is unavailable.
                 </div>
 
-                <div class="form-group" style="margin-bottom: 0.75rem;">
+                <div class="form-group" data-setting-id="auth_password_enabled" style="margin-bottom: 0.75rem;">
                     <div class="security-toggle-row">
                         <div>
                             <label for="auth_password_enabled" style="margin-bottom: 0;">Enable Password Login</label>
@@ -132,13 +132,13 @@
 
                 <div id="password-section" style="{% if not settings.auth_password_enabled %}display: none;{% endif %}">
                     <div class="grid grid-2" style="margin-top: 0.75rem;">
-                        <div class="form-group">
+                        <div class="form-group" data-setting-id="auth_password_username">
                             <label for="auth_password_username">Username</label>
                             <input type="text" id="auth_password_username" name="auth_password_username"
                                    value="{{ settings.auth_password_username | default('') }}"
                                    autocomplete="off">
                         </div>
-                        <div class="form-group">
+                        <div class="form-group" data-setting-id="auth_password">
                             <label for="auth_password">New Password</label>
                             <input type="password" id="auth_password" name="auth_password"
                                    placeholder="Leave blank to keep current"
@@ -161,6 +161,7 @@
                     </span>
                     {% if active_sessions > 0 %}
                     <button type="button" class="btn btn-sm"
+                            data-setting-id="logout_all_btn"
                             style="background: rgba(244, 67, 54, 0.1); color: var(--plex-error); border: 1px solid rgba(244, 67, 54, 0.3);"
                             hx-post="/settings/security/logout-all"
                             hx-target="#settings-alert-container"

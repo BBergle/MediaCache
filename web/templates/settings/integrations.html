@@ -3,7 +3,7 @@
 {% block settings_content %}
 
 <!-- Add Instance Form -->
-<div class="card">
+<div class="card" data-setting-id="arr_instances">
     <div class="card-header">
         <i data-lucide="plus-circle"></i>
         <h2>Add Instance</h2>
@@ -28,7 +28,7 @@
                     <label for="arr-url">URL</label>
                     <input type="text" id="arr-url" name="url" placeholder="http://localhost:8989">
                 </div>
-                <div class="form-group mb-1">
+                <div class="form-group mb-1" data-setting-id="arr_api_key">
                     <label for="arr-api-key">API Key</label>
                     <div class="flex gap-1">
                         <input type="password" id="arr-api-key" name="api_key" placeholder="Your API key" style="flex: 1;">
@@ -45,7 +45,7 @@
                     <span>Enabled</span>
                 </label>
                 <div style="flex: 1;"></div>
-                <button type="button" class="btn btn-sm btn-secondary" onclick="testAddFormConnection()" id="add-test-btn">
+                <button type="button" class="btn btn-sm btn-secondary" onclick="testAddFormConnection()" id="add-test-btn" data-setting-id="arr_test_btn">
                     <i data-lucide="plug"></i> Test
                 </button>
                 <span id="add-test-result" style="margin-left: 0.25rem;"></span>
