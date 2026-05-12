@@ -263,28 +263,111 @@
         }
     }
 
+    // Track the currently pinned target so a new jump clears the old marker.
+    var _pinnedTarget = null;
+    var _pinnedCard   = null;
+    var _pinnedDismissHandler = null;
+
     function flashTarget(settingId) {
-        // Defer to next frame to ensure layout is settled
-        requestAnimationFrame(function() {
-            var target = document.querySelector('[data-setting-id="' + cssEscape(settingId) + '"]');
-            if (!target) return;
+        // Some settings live inside HTMX-loaded sub-partials (e.g. user rows,
+        // path-mapping rows). Poll for up to 3s so cross-tab navigation, slow
+        // partials, or first paint don't drop the highlight on the floor.
+        var attempts = 0;
+        var MAX_ATTEMPTS = 30;  // ~3s at 100ms per tick
+        var selector = '[data-setting-id="' + cssEscape(settingId) + '"]';
 
-            var card = target.closest('.card');
-            target.classList.add('ss-flash-highlight');
-            if (card) card.classList.add('ss-flash-highlight-card');
+        function tryFlash() {
+            var target = document.querySelector(selector);
+            if (!target) {
+                attempts++;
+                if (attempts < MAX_ATTEMPTS) {
+                    setTimeout(tryFlash, 100);
+                } else {
+                    console.warn('[settings-search] Target not found after retries:', settingId);
+                }
+                return;
+            }
+            applyFlash(target);
+        }
 
-            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // First attempt on the next frame so layout has settled
+        requestAnimationFrame(tryFlash);
+    }
 
-            setTimeout(function() {
-                target.classList.remove('ss-flash-highlight');
-                if (card) card.classList.remove('ss-flash-highlight-card');
-            }, 1700);
+    function applyFlash(target) {
+        var card = target.closest('.card');
 
-            var focusable = target.querySelector('input, select, textarea');
-            if (focusable) setTimeout(function() {
-                try { focusable.focus({ preventScroll: true }); } catch (e) {}
-            }, 450);
-        });
+        // Clear any prior pinned highlight before flashing the new target
+        clearPinned(/*instant=*/true);
+
+        // Phase 1: bright pulse (matches @keyframes ss-flash-ring duration)
+        target.classList.add('ss-flash-highlight');
+        if (card) card.classList.add('ss-flash-highlight-card');
+
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+        // Auto-focus the first interactive child after the smooth scroll settles
+        var focusable = target.querySelector('input, select, textarea');
+        if (focusable) setTimeout(function() {
+            try { focusable.focus({ preventScroll: true }); } catch (e) {}
+        }, 450);
+
+        // Phase 2: after the pulse finishes, settle into a persistent pin.
+        // The pin clears on the next click or keystroke (installed after a
+        // short tick so the click that triggered the jump doesn't dismiss it).
+        setTimeout(function() {
+            target.classList.remove('ss-flash-highlight');
+            if (card) card.classList.remove('ss-flash-highlight-card');
+
+            target.classList.add('ss-flash-pinned');
+            if (card) card.classList.add('ss-flash-pinned-card');
+
+            _pinnedTarget = target;
+            _pinnedCard   = card;
+
+            setTimeout(installPinnedDismiss, 60);
+        }, 1000);
+    }
+
+    function installPinnedDismiss() {
+        if (_pinnedDismissHandler) return;  // already installed
+        _pinnedDismissHandler = function(e) {
+            // Don't dismiss if there's no pin to clear
+            if (!_pinnedTarget) {
+                teardownPinnedDismiss();
+                return;
+            }
+            clearPinned(false);
+        };
+        document.addEventListener('click', _pinnedDismissHandler, true);
+        document.addEventListener('keydown', _pinnedDismissHandler, true);
+    }
+
+    function teardownPinnedDismiss() {
+        if (!_pinnedDismissHandler) return;
+        document.removeEventListener('click', _pinnedDismissHandler, true);
+        document.removeEventListener('keydown', _pinnedDismissHandler, true);
+        _pinnedDismissHandler = null;
+    }
+
+    function clearPinned(instant) {
+        var t = _pinnedTarget, c = _pinnedCard;
+        _pinnedTarget = null;
+        _pinnedCard = null;
+        teardownPinnedDismiss();
+        if (!t) return;
+        if (instant) {
+            t.classList.remove('ss-flash-pinned', 'is-dismissing');
+            if (c) c.classList.remove('ss-flash-pinned-card', 'is-dismissing');
+            return;
+        }
+        // Animated fade-out via .is-dismissing, then remove
+        t.classList.add('is-dismissing');
+        if (c) c.classList.add('is-dismissing');
+        setTimeout(function() {
+            t.classList.remove('ss-flash-pinned', 'is-dismissing');
+            if (c) c.classList.remove('ss-flash-pinned-card', 'is-dismissing');
+        }, 450);
     }
 
     function cssEscape(s) {
@@ -401,9 +484,9 @@
         var hash = location.hash;
         if (hash && hash.indexOf('#setting-') === 0) {
             var id = hash.slice('#setting-'.length);
-            // Small delay so HTMX-loaded partials (e.g. user list) have a chance
-            // to render before we try to find the target.
-            setTimeout(function() { flashTarget(id); }, 200);
+            // flashTarget() polls for the element for up to 3s, so HTMX-loaded
+            // partials (user list, path-mapping rows) have time to render.
+            flashTarget(id);
         }
     }
     handleInitialHash();
