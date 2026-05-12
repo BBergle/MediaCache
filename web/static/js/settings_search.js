@@ -275,6 +275,7 @@
         var attempts = 0;
         var MAX_ATTEMPTS = 30;  // ~3s at 100ms per tick
         var selector = '[data-setting-id="' + cssEscape(settingId) + '"]';
+        console.info('[settings-search] flashTarget:', settingId);
 
         function tryFlash() {
             var target = document.querySelector(selector);
@@ -283,9 +284,12 @@
                 if (attempts < MAX_ATTEMPTS) {
                     setTimeout(tryFlash, 100);
                 } else {
-                    console.warn('[settings-search] Target not found after retries:', settingId);
+                    console.warn('[settings-search] Target not found after retries:', settingId, '(selector:', selector + ')');
                 }
                 return;
+            }
+            if (attempts > 0) {
+                console.info('[settings-search] Target found after', attempts, 'retries:', settingId);
             }
             applyFlash(target);
         }

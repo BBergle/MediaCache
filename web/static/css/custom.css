@@ -1703,39 +1703,43 @@ footer {
 }
 
 /* Jump-and-flash highlight on the target setting (click-through from a result).
- * Two-phase: bright ring/glow pulse, then a thin left-edge accent + soft ring
- * that persists until the user clicks or types so they can find their place. */
-@keyframes ss-flash-ring {
-    0%   { box-shadow: 0 0 0 0   rgba(229, 160, 13, 0.55); background-color: rgba(229, 160, 13, 0.08); }
-    40%  { box-shadow: 0 0 0 6px rgba(229, 160, 13, 0.32); background-color: rgba(229, 160, 13, 0.10); }
-    100% { box-shadow: 0 0 0 0   rgba(229, 160, 13, 0);    background-color: transparent; }
+ * Two-phase: bright outline pulse, then a padded outline that persists until
+ * the user clicks or presses a key, so they can find their place after the
+ * pulse fades. outline-offset puts a visible gap between the element edge
+ * and the ring (no layout shift). */
+@keyframes ss-flash-pulse {
+    0%   { outline-color: rgba(229, 160, 13, 0.85); outline-offset: 2px; background-color: rgba(229, 160, 13, 0.14); }
+    40%  { outline-color: rgba(229, 160, 13, 0.95); outline-offset: 8px; background-color: rgba(229, 160, 13, 0.20); }
+    100% { outline-color: rgba(229, 160, 13, 0.55); outline-offset: 6px; background-color: rgba(229, 160, 13, 0.06); }
 }
 .ss-flash-highlight {
-    animation: ss-flash-ring 1000ms ease-out;
+    outline: 3px solid rgba(229, 160, 13, 0.85);
+    outline-offset: 2px;
+    box-shadow: inset 3px 0 0 rgba(229, 160, 13, 0.95);
     border-radius: var(--plex-radius-sm);
+    animation: ss-flash-pulse 1100ms ease-out forwards;
 }
 .ss-flash-highlight-card {
-    border-color: rgba(229, 160, 13, 0.45) !important;
-    transition: border-color 1000ms ease;
+    border-color: rgba(229, 160, 13, 0.55) !important;
+    transition: border-color 1100ms ease;
 }
 
-/* Persistent marker after the initial flash. Cleared by JS on user interaction. */
+/* Persistent marker after the pulse. Cleared by JS on user interaction. */
 .ss-flash-pinned {
     border-radius: var(--plex-radius-sm);
-    box-shadow:
-        inset 3px 0 0 rgba(229, 160, 13, 0.85),
-        0 0 0 1px rgba(229, 160, 13, 0.22);
-    background-color: rgba(229, 160, 13, 0.035);
-    transition: box-shadow 420ms ease, background-color 420ms ease;
+    outline: 2px solid rgba(229, 160, 13, 0.60);
+    outline-offset: 6px;
+    box-shadow: inset 3px 0 0 rgba(229, 160, 13, 0.95);
+    background-color: rgba(229, 160, 13, 0.05);
+    transition: outline-color 420ms ease, background-color 420ms ease, box-shadow 420ms ease;
 }
 .ss-flash-pinned.is-dismissing {
-    box-shadow:
-        inset 3px 0 0 rgba(229, 160, 13, 0),
-        0 0 0 1px rgba(229, 160, 13, 0);
+    outline-color: rgba(229, 160, 13, 0);
+    box-shadow: inset 3px 0 0 rgba(229, 160, 13, 0);
     background-color: transparent;
 }
 .ss-flash-pinned-card {
-    border-color: rgba(229, 160, 13, 0.35) !important;
+    border-color: rgba(229, 160, 13, 0.45) !important;
     transition: border-color 420ms ease;
 }
 .ss-flash-pinned-card.is-dismissing {
