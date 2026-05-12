@@ -272,9 +272,13 @@
         // Some settings live inside HTMX-loaded sub-partials (e.g. user rows,
         // path-mapping rows). Poll for up to 3s so cross-tab navigation, slow
         // partials, or first paint don't drop the highlight on the floor.
+        // :not(.ss-result-row) excludes the search popup rows, which also
+        // carry data-setting-id for click delegation but live inside the
+        // (hidden) results panel — without this filter the flash lands on
+        // an invisible element.
         var attempts = 0;
         var MAX_ATTEMPTS = 30;  // ~3s at 100ms per tick
-        var selector = '[data-setting-id="' + cssEscape(settingId) + '"]';
+        var selector = '[data-setting-id="' + cssEscape(settingId) + '"]:not(.ss-result-row)';
         console.info('[settings-search] flashTarget:', settingId);
 
         function tryFlash() {
