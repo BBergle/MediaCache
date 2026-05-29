@@ -4,7 +4,7 @@
     Repo for the Plexcache-D app. See the issues page to get help with this app. 
   </Profile>
   <!-- Optional icon -->
-  <Icon>https://raw.githubusercontent.com/StudioNirin/PlexCache-D/de0df7aa9d67147c9bc7e731c23479f2a84c8349/icon.svg</Icon>
+  <Icon>https://raw.githubusercontent.com/StudioNirin/PlexCache-D/main/docker/icon.png</Icon>
   <!-- Optional web page -->
   <WebPage>https://github.com/StudioNirin/PlexCache-D</WebPage>
   <!-- Optional support and donation links -->
