@@ -1,24 +1,18 @@
 <CommunityApplications>
   <!-- Required profile -->
   <Profile>
-    Repo for the Plexcache-D app. See the issues page to get help with this app. 
+    Repo for the Plexcache-D app. See the issues page to get help with this app.
   </Profile>
   <!-- Optional icon -->
   <Icon>https://raw.githubusercontent.com/StudioNirin/PlexCache-D/main/docker/icon.png</Icon>
   <!-- Optional web page -->
   <WebPage>https://github.com/StudioNirin/PlexCache-D</WebPage>
-  <!-- Optional support and donation links -->
-  <!-- <Forum>https://forums.unraid.net/topic/YOUR_SUPPORT_TOPIC</Forum>
-  <!-- Optional Discord link -->
-  <!-- <Discord>https://discord.gg/YOUR_INVITE_CODE</Discord>
-  <!-- Optional donation link -->
-  <!-- <DonateLink>https://github.com/sponsors/YOUR_GITHUB_USERNAME</DonateLink>
-  <!-- Optional donation text -->
-  <!-- <DonateText>Support this project</DonateText>
-  <!-- Optional photos -->
-  <!-- <Photo>URL to any photos</Photo>
-  <!-- You can add multiple photos by adding multiple <Photo> tags -->
-  <!-- Optional videos -->
-  <!-- <Video>URL to any video.  Youtube URLs are recommended</Video>
-  <!-- You can add multiple videos by adding multiple <Video> tags -->
+  <!-- Optional support and donation links (uncomment and fill in to enable) -->
+  <!-- <Forum>https://forums.unraid.net/topic/YOUR_SUPPORT_TOPIC</Forum> -->
+  <!-- <Discord>https://discord.gg/YOUR_INVITE_CODE</Discord> -->
+  <!-- <DonateLink>https://github.com/sponsors/StudioNirin</DonateLink> -->
+  <!-- <DonateText>Support this project</DonateText> -->
+  <!-- Optional photos and videos (add multiple tags as needed; YouTube URLs recommended for video) -->
+  <!-- <Photo>URL to any photo</Photo> -->
+  <!-- <Video>URL to any video</Video> -->
 </CommunityApplications>
