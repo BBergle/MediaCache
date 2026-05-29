@@ -212,6 +212,158 @@ class TestPlexcacheQuotaEnforcement:
         assert len(result) == 1
 
 
+class TestNoGapShowOrdering:
+    """Tests for #169: episodes of the same show stay contiguous when space is tight.
+
+    Once an episode of show X doesn't fit, every later file mapped to show X
+    via media_info_map is skipped — even if it would individually fit. Movies
+    and other shows still pack independently into the remaining space.
+    """
+
+    def _build_episode_file(self, cache_dir, show, season, episode):
+        """Create a placeholder file for an episode and return its path."""
+        from conftest import create_test_file
+        path = os.path.join(cache_dir, f"{show}_S{season:02d}E{episode:02d}.mkv")
+        create_test_file(path, size_bytes=1024)
+        return path
+
+    def test_oversized_episode_skips_later_episodes_same_show(self, tmp_path):
+        """S04E03 oversized → E04 and E05 skipped even though each would fit."""
+        app, cache_dir, _, disk, _ = _build_app(
+            tmp_path, quota_bytes=210*GB,  # 10GB available
+        )
+
+        e3 = self._build_episode_file(cache_dir, "ShowA", 4, 3)
+        e4 = self._build_episode_file(cache_dir, "ShowA", 4, 4)
+        e5 = self._build_episode_file(cache_dir, "ShowA", 4, 5)
+        files = [e3, e4, e5]
+
+        app.media_info_map = {
+            e3: {"media_type": "episode", "episode_info": {"show": "ShowA", "season": 4, "episode": 3}},
+            e4: {"media_type": "episode", "episode_info": {"show": "ShowA", "season": 4, "episode": 4}},
+            e5: {"media_type": "episode", "episode_info": {"show": "ShowA", "season": 4, "episode": 5}},
+        }
+
+        # E03 is 15GB (won't fit in 10GB), E04+E05 are 2GB each (would fit)
+        sizes = {e3: 15*GB, e4: 2*GB, e5: 2*GB}
+
+        with patch('core.app.get_disk_usage', return_value=disk), \
+             patch.object(app, '_get_plexcache_tracked_size', return_value=(200*GB, [])), \
+             patch('os.path.getsize', side_effect=lambda f: sizes[f]):
+            result = app._apply_cache_limit(files, cache_dir)
+
+        # E03 skipped (too big) → E04, E05 skipped to keep show contiguous
+        assert result == []
+
+    def test_first_episode_fits_then_oversized_blocks_rest(self, tmp_path):
+        """E03 fits, E04 oversized → E05+ skipped even though they'd fit."""
+        app, cache_dir, _, disk, _ = _build_app(
+            tmp_path, quota_bytes=220*GB,  # 20GB available
+        )
+
+        e3 = self._build_episode_file(cache_dir, "ShowA", 4, 3)
+        e4 = self._build_episode_file(cache_dir, "ShowA", 4, 4)
+        e5 = self._build_episode_file(cache_dir, "ShowA", 4, 5)
+        files = [e3, e4, e5]
+
+        app.media_info_map = {
+            e3: {"media_type": "episode", "episode_info": {"show": "ShowA", "season": 4, "episode": 3}},
+            e4: {"media_type": "episode", "episode_info": {"show": "ShowA", "season": 4, "episode": 4}},
+            e5: {"media_type": "episode", "episode_info": {"show": "ShowA", "season": 4, "episode": 5}},
+        }
+
+        # E03 = 5GB (fits, 15GB left), E04 = 18GB (won't fit), E05 = 2GB (would fit)
+        sizes = {e3: 5*GB, e4: 18*GB, e5: 2*GB}
+
+        with patch('core.app.get_disk_usage', return_value=disk), \
+             patch.object(app, '_get_plexcache_tracked_size', return_value=(200*GB, [])), \
+             patch('os.path.getsize', side_effect=lambda f: sizes[f]):
+            result = app._apply_cache_limit(files, cache_dir)
+
+        # E03 cached; E04 oversized; E05 skipped (same show as the gap-maker)
+        assert result == [e3]
+
+    def test_other_shows_still_pack_after_one_show_at_capacity(self, tmp_path):
+        """A show running out of space doesn't starve other shows or movies."""
+        app, cache_dir, _, disk, _ = _build_app(
+            tmp_path, quota_bytes=215*GB,  # 15GB available
+        )
+
+        a_e3 = self._build_episode_file(cache_dir, "ShowA", 4, 3)
+        a_e4 = self._build_episode_file(cache_dir, "ShowA", 4, 4)
+        b_e1 = self._build_episode_file(cache_dir, "ShowB", 1, 1)
+        movie = os.path.join(cache_dir, "movie.mkv")
+        from conftest import create_test_file
+        create_test_file(movie, size_bytes=1024)
+
+        files = [a_e3, a_e4, b_e1, movie]
+
+        app.media_info_map = {
+            a_e3: {"media_type": "episode", "episode_info": {"show": "ShowA", "season": 4, "episode": 3}},
+            a_e4: {"media_type": "episode", "episode_info": {"show": "ShowA", "season": 4, "episode": 4}},
+            b_e1: {"media_type": "episode", "episode_info": {"show": "ShowB", "season": 1, "episode": 1}},
+            movie: {"media_type": "movie", "episode_info": None},
+        }
+
+        # ShowA E03 = 20GB (won't fit), ShowA E04 = 3GB, ShowB E01 = 4GB, movie = 5GB
+        sizes = {a_e3: 20*GB, a_e4: 3*GB, b_e1: 4*GB, movie: 5*GB}
+
+        with patch('core.app.get_disk_usage', return_value=disk), \
+             patch.object(app, '_get_plexcache_tracked_size', return_value=(200*GB, [])), \
+             patch('os.path.getsize', side_effect=lambda f: sizes[f]):
+            result = app._apply_cache_limit(files, cache_dir)
+
+        # ShowA E03 skipped → ShowA E04 also skipped (gap protection).
+        # ShowB E01 (4GB) fits → 11GB left. Movie (5GB) fits → 6GB left.
+        assert result == [b_e1, movie]
+
+    def test_files_without_show_metadata_pack_normally(self, tmp_path):
+        """Non-episode files (movies, siblings) without show keys keep first-fit behavior."""
+        app, cache_dir, _, disk, _ = _build_app(
+            tmp_path, quota_bytes=215*GB,  # 15GB available
+        )
+
+        big = os.path.join(cache_dir, "big.mkv")
+        small1 = os.path.join(cache_dir, "small1.mkv")
+        small2 = os.path.join(cache_dir, "small2.mkv")
+        from conftest import create_test_file
+        for p in (big, small1, small2):
+            create_test_file(p, size_bytes=1024)
+        files = [big, small1, small2]
+
+        # No media_info_map entries → no show grouping → first-fit semantics
+        app.media_info_map = {}
+        sizes = {big: 20*GB, small1: 5*GB, small2: 5*GB}
+
+        with patch('core.app.get_disk_usage', return_value=disk), \
+             patch.object(app, '_get_plexcache_tracked_size', return_value=(200*GB, [])), \
+             patch('os.path.getsize', side_effect=lambda f: sizes[f]):
+            result = app._apply_cache_limit(files, cache_dir)
+
+        # Without show metadata, the greedy fit keeps the small ones
+        assert result == [small1, small2]
+
+    def test_in_order_episodes_all_fit(self, tmp_path):
+        """When everything fits in order, no episodes are skipped."""
+        app, cache_dir, _, disk, _ = _build_app(
+            tmp_path, quota_bytes=300*GB,  # 100GB available
+        )
+
+        eps = [self._build_episode_file(cache_dir, "ShowA", 1, i) for i in range(1, 5)]
+        app.media_info_map = {
+            eps[i]: {"media_type": "episode", "episode_info": {"show": "ShowA", "season": 1, "episode": i + 1}}
+            for i in range(4)
+        }
+        sizes = {ep: 5*GB for ep in eps}
+
+        with patch('core.app.get_disk_usage', return_value=disk), \
+             patch.object(app, '_get_plexcache_tracked_size', return_value=(200*GB, [])), \
+             patch('os.path.getsize', side_effect=lambda f: sizes[f]):
+            result = app._apply_cache_limit(eps, cache_dir)
+
+        assert result == eps
+
+
 class TestPlexcacheQuotaConfig:
     """Tests for plexcache_quota config parsing."""
 
