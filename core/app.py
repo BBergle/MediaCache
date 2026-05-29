@@ -1020,8 +1020,12 @@ class PlexCacheApp:
         logging.info("")
         logging.info("--- Fetching Media ---")
 
-        # Use a set to collect already-modified paths (real source paths)
-        modified_paths_set = set()
+        # Ordered dedup of already-modified paths (real source paths). Dict
+        # preserves insertion order (Python 3.7+), so OnDeck "current + next N
+        # episodes" survives all the way to _apply_cache_limit. Using a plain
+        # set() here drops that order and lets the space-fit loop create
+        # viewing gaps (e.g. cache S04E04+E05 while skipping S04E03). See #169.
+        modified_paths: Dict[str, None] = {}
 
         # Prepare OnDeck tracker for new run (preserves first_seen for retention tracking)
         # Snapshot the rating_key index before update loop for upgrade detection
@@ -1033,7 +1037,7 @@ class PlexCacheApp:
         # a pinned item is also currently on someone's OnDeck. The protection that
         # consumes pinned_paths_cache lands in subsequent commits (priority manager
         # in 2b, eviction/move-back in 2c) — this commit only sets up the gathering.
-        self._process_pinned_media(modified_paths_set)
+        self._process_pinned_media(modified_paths)
 
         if self.should_stop:
             logging.info("Operation stopped during media processing")
@@ -1109,9 +1113,13 @@ class PlexCacheApp:
         # Cleanup entries no longer on any user's OnDeck
         self.ondeck_tracker.cleanup_unseen()
 
-        # Store modified OnDeck items for filtering later
+        # Store modified OnDeck items for filtering later. self.ondeck_items
+        # stays a set for fast membership tests elsewhere, but the ordered
+        # `modified_ondeck` list is what feeds modified_paths so episode
+        # fetch order (current → next N) is preserved for #169.
         self.ondeck_items = set(modified_ondeck)
-        modified_paths_set.update(self.ondeck_items)
+        for path in modified_ondeck:
+            modified_paths.setdefault(path, None)
 
         # Update priority manager with active ondeck cache paths (for episode position scoring)
         # When retention is enabled, expired items should not get episode position bonuses
@@ -1145,7 +1153,8 @@ class PlexCacheApp:
         sibling_count = sum(len(siblings) for siblings in ondeck_sibling_map.values())
         # Add all siblings to the modified paths set
         for siblings in ondeck_sibling_map.values():
-            modified_paths_set.update(siblings)
+            for sibling in siblings:
+                modified_paths.setdefault(sibling, None)
         logging.debug(f"Found {sibling_count} sibling files for OnDeck media")
 
         # Track source for OnDeck siblings
@@ -1165,7 +1174,8 @@ class PlexCacheApp:
             if watchlist_items:
                 # Store watchlist items (don't override ondeck source for items in both)
                 self.watchlist_items = watchlist_items
-                modified_paths_set.update(watchlist_items)
+                for item in watchlist_items:
+                    modified_paths.setdefault(item, None)
 
                 # Track source for watchlist items (only if not already tracked as ondeck)
                 for item in watchlist_items:
@@ -1178,7 +1188,7 @@ class PlexCacheApp:
 
         # Run modify_file_paths on all collected paths to ensure consistent path format
         logging.debug("Finalizing media to cache list...")
-        self.media_to_cache = self.file_path_modifier.modify_file_paths(list(modified_paths_set))
+        self.media_to_cache = self.file_path_modifier.modify_file_paths(list(modified_paths))
 
         # Log consolidated summary of skipped disabled libraries
         self.file_path_modifier.log_disabled_skips_summary()
@@ -1231,7 +1241,7 @@ class PlexCacheApp:
                 self.file_filter.set_media_info_map(self.media_info_map)
                 self._check_files_to_move_back_to_array()
 
-    def _process_pinned_media(self, modified_paths_set: set) -> None:
+    def _process_pinned_media(self, modified_paths: Dict[str, None]) -> None:
         """Resolve pinned media to real-path file set and merge into the run.
 
         This runs before OnDeck/Watchlist so pinned items "win" the source_map
@@ -1245,7 +1255,8 @@ class PlexCacheApp:
             self.pinned_paths_cache  — cache-form paths
             self.sibling_map         — sibling files for pinned episodes/movies
             self.source_map          — path → "pinned" entries
-            modified_paths_set       — extended with pinned paths + siblings
+            modified_paths           — extended with pinned paths + siblings
+                                       (dict-as-ordered-set, preserves order)
 
         Orphan pins (rating_keys no longer resolvable in Plex) are removed
         from the tracker and logged.
@@ -1299,7 +1310,10 @@ class PlexCacheApp:
         modified_pinned = self.file_path_modifier.modify_file_paths(pinned_plex_paths)
 
         pinned_video_paths = set(modified_pinned)
-        modified_paths_set.update(pinned_video_paths)
+        # Preserve insertion order from `modified_pinned` (the list form) so
+        # pinned items keep their priority position in the cache fill queue.
+        for path in modified_pinned:
+            modified_paths.setdefault(path, None)
 
         # Mark every pinned video real path in the source_map FIRST — so OnDeck
         # and Watchlist's "if not already tracked" guards don't overwrite us.
@@ -1327,7 +1341,7 @@ class PlexCacheApp:
         pinned_sibling_paths: Set[str] = set()
         for siblings in pinned_sibling_map.values():
             for sibling in siblings:
-                modified_paths_set.add(sibling)
+                modified_paths.setdefault(sibling, None)
                 self.source_map[sibling] = "pinned"
                 pinned_sibling_paths.add(sibling)
 
@@ -2166,7 +2180,16 @@ class PlexCacheApp:
         """Apply cache size limit, min free space, and plexcache quota, filtering out files that would exceed limits.
 
         Returns the list of files that fit within the most restrictive constraint.
-        Files are prioritized in the order they appear (OnDeck items should come first).
+        Files are processed in the order they appear (OnDeck "current + next N
+        episodes" first, then watchlist). Callers are responsible for
+        delivering an ordered list — _gather_media_to_cache uses a
+        dict-as-ordered-set to preserve OnDeck fetch order. See #169.
+
+        No-gap guarantee for TV: once an episode of show X doesn't fit, every
+        subsequent file mapped to show X via media_info_map is skipped too.
+        This prevents the "S04E03 skipped, E04+E05 cached" gap pattern when
+        episode sizes vary within a show (e.g. 4K vs SDR mix). Movies and
+        other shows continue to pack independently into remaining space.
         """
         cache_limit_bytes, limit_readable = self._get_effective_cache_limit(cache_dir)
         min_free_bytes, min_free_readable = self._get_effective_min_free_space(cache_dir)
@@ -2238,16 +2261,37 @@ class PlexCacheApp:
         skipped_count = 0
         skipped_size = 0
         inaccessible_files = []
+        # Shows whose sequence broke at the space boundary — used to skip
+        # later episodes of the same show and avoid viewing gaps (#169).
+        shows_at_capacity: Set[str] = set()
+        gap_skipped_count = 0
+        media_info_map = getattr(self, 'media_info_map', {}) or {}
 
         for file in media_files:
             try:
+                info = media_info_map.get(file) or {}
+                episode_info = info.get('episode_info') or {}
+                show_key = episode_info.get('show')
+
                 file_size = os.path.getsize(file)
+
+                # Earlier episode of this show didn't fit — don't cache later
+                # ones either, even if they'd individually fit. Prevents the
+                # "skip S04E03 but cache E04/E05" gap (#169).
+                if show_key and show_key in shows_at_capacity:
+                    skipped_count += 1
+                    skipped_size += file_size
+                    gap_skipped_count += 1
+                    continue
+
                 if file_size <= available_space:
                     files_to_cache.append(file)
                     available_space -= file_size
                 else:
                     skipped_count += 1
                     skipped_size += file_size
+                    if show_key:
+                        shows_at_capacity.add(show_key)
             except (OSError, FileNotFoundError) as e:
                 # File doesn't exist or can't be accessed - track for logging
                 inaccessible_files.append((file, str(e)))
@@ -2261,7 +2305,10 @@ class PlexCacheApp:
         if skipped_count > 0:
             skipped_gb = skipped_size / (1024**3)
             constraint_name = quota_readable if bottleneck == "plexcache_quota" else (min_free_readable if bottleneck == "min_free_space" else limit_readable)
-            logging.warning(f"Cache limit reached: skipped {skipped_count} files ({skipped_gb:.2f}GB) that would exceed the {constraint_name} limit")
+            msg = f"Cache limit reached: skipped {skipped_count} files ({skipped_gb:.2f}GB) that would exceed the {constraint_name} limit"
+            if gap_skipped_count:
+                msg += f" ({gap_skipped_count} skipped to keep show episodes contiguous)"
+            logging.warning(msg)
 
         return files_to_cache
 
