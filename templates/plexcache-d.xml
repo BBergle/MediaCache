@@ -1,0 +1,70 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Plexcache-D</Name>
+  <Repository>ghcr.io/studionirin/plexcache-d:latest</Repository>
+  <Registry>https://github.com/StudioNirin/PlexCache-D</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+
+  <!-- NOTE: The port in the entry ALWAYS refers to the container port, not the host port-->
+  <WebUI>http://[IP]:[PORT:5757]</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/StudioNirin/PlexCache-D/main/templates/plexcache-d.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/StudioNirin/PlexCache-D/main/docker/icon.png</Icon>
+
+  <!-- Plain text description -->
+  <Overview>Automate Plex media management: Efficiently transfer media from the On Deck/Watchlist to an SSD cache, and seamlessly move watched media back to their respective locations.
+  This app reduces energy consumption by minimizing the need to spin up the array/hard drive(s) when watching recurrent media like TV series.
+  It achieves this by moving the media from the OnDeck and watchlist for the main user and/or other users.
+  For TV shows/anime, it also fetches the next specified number of episodes.</Overview>
+
+  <!-- NOTE: Either Support or Project is REQUIRED -->
+  <!-- Project page -->
+  <Project>https://github.com/StudioNirin/PlexCache-D/issues</Project>
+
+  <!-- Readme first file -->
+  <ReadMe>https://github.com/StudioNirin/PlexCache-D/blob/main/README.md</ReadMe>
+
+  <!-- Support and donation links -->
+  <DonateText>Support Development</DonateText>
+  <DonateLink>https://github.com/sponsors/StudioNirin</DonateLink>
+
+  <!-- Valid category entries can be generated from the Application Categorizer plugin available in Apps -->
+  <Category>Tools:System</Category>
+
+  <!-- If this container is beta container, set Beta to true-->
+  <Beta>true</Beta>
+
+  <!-- Minimum Unraid version.-->
+  <MinVer>6.1</MinVer>
+
+  <!-- If this container is deprecated for all OS versions, set Deprecated to true -->
+  <Deprecated>false</Deprecated>
+
+  <!-- License of the container-->
+  <License>MIT</License>
+
+  <Requires>
+Plex Media Server must be accessible from this container.
+CA Mover Tuning plugin recommended (optional) for mover exclude list integration.
+  </Requires>
+
+  <!-- Paths -->
+  <Config Name="Config" Target="/config" Default="/mnt/user/appdata/plexcache" Mode="rw" Description="Persistent storage for settings, logs, and tracking data" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/plexcache</Config>
+  <Config Name="Cache" Target="/mnt/cache" Default="/mnt/cache" Mode="rw" Description="Your Unraid cache drive where media files are cached for fast access" Type="Path" Display="always" Required="true" Mask="false">/mnt/cache</Config>
+  <Config Name="Array" Target="/mnt/user0" Default="/mnt/user0" Mode="rw" Description="Direct array access (user0) for creating .plexcached backups" Type="Path" Display="always" Required="true" Mask="false">/mnt/user0</Config>
+  <Config Name="User" Target="/mnt/user" Default="/mnt/user" Mode="rw" Description="User share for Plex library path resolution" Type="Path" Display="always" Required="true" Mask="false">/mnt/user</Config>
+
+  <!-- Environment Variables -->
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User ID for file permissions (99 = nobody on Unraid)" Type="Variable" Display="always" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group ID for file permissions (100 = users on Unraid)" Type="Variable" Display="always" Required="false" Mask="false">100</Config>
+  <Config Name="TZ" Target="TZ" Default="America/Chicago" Mode="" Description="Timezone for accurate log timestamps and scheduling" Type="Variable" Display="always" Required="false" Mask="false">America/Chicago</Config>
+
+  <!-- Ports -->
+  <Config Name="Port" Target="5757" Default="5757" Mode="tcp" Description="Web UI port for browser access" Type="Port" Display="always" Required="true" Mask="false">5757</Config>
+
+  <!-- Unraid Notifications (Optional) -->
+  <Config Name="Unraid Notify Script" Target="/usr/local/emhttp" Default="/usr/local/emhttp" Mode="ro" Description="Unraid's notify script and PHP includes (for native notifications)" Type="Path" Display="always" Required="false" Mask="false">/usr/local/emhttp</Config>
+  <Config Name="Notifications" Target="/tmp/notifications" Default="/tmp/notifications" Mode="rw" Description="Unraid's notification queue (for native notifications)" Type="Path" Display="always" Required="false" Mask="false">/tmp/notifications</Config>
+</Container>
