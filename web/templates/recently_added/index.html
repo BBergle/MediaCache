@@ -62,6 +62,14 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
         };
     }
 
+    // Does a single media row match the active library/search/location filters?
+    function rowMatches(row, lib, term, loc) {
+        var matchLib = lib === 'all' || row.getAttribute('data-library') === lib;
+        var matchLoc = loc === 'all' || row.getAttribute('data-loc') === loc;
+        var matchTerm = !term || (row.getAttribute('data-title') || '').indexOf(term) !== -1;
+        return matchLib && matchLoc && matchTerm;
+    }
+
     function apply() {
         var c = getControls();
         if (!c.lib && !c.search && !c.activePill) return;
@@ -69,19 +77,42 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
         var term = c.search ? c.search.value.trim().toLowerCase() : '';
         var loc = c.activePill ? c.activePill.getAttribute('data-loc') : 'all';
 
-        var rows = document.querySelectorAll('#ra-table-body .ra-row');
+        var anyRows = false;
         var shown = 0;
-        rows.forEach(function (row) {
-            var matchLib = lib === 'all' || row.getAttribute('data-library') === lib;
-            var matchLoc = loc === 'all' || row.getAttribute('data-loc') === loc;
-            var matchTerm = !term || (row.getAttribute('data-title') || '').indexOf(term) !== -1;
-            var visible = matchLib && matchLoc && matchTerm;
+
+        // Standalone rows (movies + single episodes).
+        document.querySelectorAll('#ra-table-body .ra-item').forEach(function (row) {
+            anyRows = true;
+            var visible = rowMatches(row, lib, term, loc);
             row.style.display = visible ? '' : 'none';
             if (visible) shown++;
         });
 
+        // Show groups: header shows when any child matches; children show only
+        // when the group is expanded AND they match.
+        document.querySelectorAll('#ra-table-body .ra-group-header').forEach(function (header) {
+            anyRows = true;
+            var gid = header.getAttribute('data-group-id');
+            var expanded = header.classList.contains('is-open');
+            var children = document.querySelectorAll(
+                '#ra-table-body .ra-group-child[data-group="' + gid + '"]');
+            var anyMatch = false;
+            children.forEach(function (child) {
+                var m = rowMatches(child, lib, term, loc);
+                if (m) anyMatch = true;
+                child.style.display = (m && expanded) ? '' : 'none';
+            });
+            header.style.display = anyMatch ? '' : 'none';
+            if (anyMatch) shown++;
+        });
+
         var empty = document.getElementById('ra-no-match');
-        if (empty) empty.style.display = shown === 0 && rows.length > 0 ? '' : 'none';
+        if (empty) empty.style.display = (shown === 0 && anyRows) ? '' : 'none';
+    }
+
+    function toggleGroup(header) {
+        header.classList.toggle('is-open');
+        apply();
     }
 
     function setPill(pill) {
@@ -106,7 +137,7 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
         if (e.detail.target && e.detail.target.id === 'ra-content') apply();
     });
 
-    return { apply: apply, setPill: setPill };
+    return { apply: apply, setPill: setPill, toggleGroup: toggleGroup };
 })();
 </script>
 {% endblock %}

@@ -25,7 +25,7 @@ for _mod in [
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.plex_api import RecentlyAddedItem
-from web.services.recently_added_service import RecentlyAddedService
+from web.services.recently_added_service import RecentlyAddedService, RecentlyAddedRow
 
 
 class FakePathModifier:
@@ -136,6 +136,119 @@ class TestEnrichState:
         rows = _enrich(svc, [_item(size=28_000_000_000)])
         assert rows[0].size_display.endswith("GB")
         assert rows[0].added_display  # non-empty relative age
+
+
+def _make_row(rating_key="1", title="X", media_type="movie", library_title="Movies",
+              size=1000, location="cache", state="on_cache_not_pinned",
+              is_pinned=False, episode_info=None):
+    return RecentlyAddedRow(
+        rating_key=rating_key, title=title, media_type=media_type,
+        library_title=library_title, file_path=f"/data/{title}.mkv",
+        size=size, size_display="1.00 KB", added_at=datetime.now(),
+        added_display="now", location=location, state=state, is_pinned=is_pinned,
+        pin_type="episode" if media_type == "episode" else "movie",
+        episode_info=episode_info,
+    )
+
+
+class TestGroupRowsForDisplay:
+    def test_multi_episode_show_collapses_to_one_group(self):
+        rows = [
+            _make_row("1", "Ep One", "episode", "TV Shows", 100,
+                      episode_info={"show": "The Last of Us", "season": 2, "episode": 1}),
+            _make_row("2", "Ep Two", "episode", "TV Shows", 200,
+                      episode_info={"show": "The Last of Us", "season": 2, "episode": 2}),
+            _make_row("3", "Ep Three", "episode", "TV Shows", 300, location="array",
+                      state="on_array",
+                      episode_info={"show": "The Last of Us", "season": 2, "episode": 3}),
+        ]
+        display = RecentlyAddedService.group_rows_for_display(rows)
+        assert len(display) == 1
+        g = display[0]
+        assert g["kind"] == "show"
+        assert g["show"] == "The Last of Us"
+        assert g["season"] == 2
+        assert g["episode_count"] == 3
+        assert g["total_size"] == 600
+        # Mixed cache/array → both locations present
+        assert set(g["locations"]) == {"cache", "array"}
+        assert g["not_pinned_count"] == 2
+        # Episodes sorted by episode number
+        assert [e.episode_info["episode"] for e in g["episodes"]] == [1, 2, 3]
+
+    def test_single_episode_show_stays_a_row(self):
+        rows = [_make_row("1", "Solo", "episode", "TV Shows",
+                          episode_info={"show": "Severance", "season": 1, "episode": 1})]
+        display = RecentlyAddedService.group_rows_for_display(rows)
+        assert len(display) == 1
+        assert display[0]["kind"] == "row"
+
+    def test_movies_stay_rows_and_order_preserved(self):
+        rows = [
+            _make_row("1", "Dune", "movie"),
+            _make_row("2", "EpA", "episode", "TV Shows",
+                      episode_info={"show": "Show", "season": 1, "episode": 1}),
+            _make_row("3", "EpB", "episode", "TV Shows",
+                      episode_info={"show": "Show", "season": 1, "episode": 2}),
+            _make_row("4", "Civil War", "movie"),
+        ]
+        display = RecentlyAddedService.group_rows_for_display(rows)
+        # movie, show-group (anchored at first episode), movie
+        assert [d["kind"] for d in display] == ["row", "show", "row"]
+        assert display[0]["row"].title == "Dune"
+        assert display[1]["episode_count"] == 2
+        assert display[2]["row"].title == "Civil War"
+
+    def test_different_seasons_are_separate_groups(self):
+        rows = [
+            _make_row("1", "S1E1", "episode", "TV Shows",
+                      episode_info={"show": "Show", "season": 1, "episode": 1}),
+            _make_row("2", "S1E2", "episode", "TV Shows",
+                      episode_info={"show": "Show", "season": 1, "episode": 2}),
+            _make_row("3", "S2E1", "episode", "TV Shows",
+                      episode_info={"show": "Show", "season": 2, "episode": 1}),
+        ]
+        display = RecentlyAddedService.group_rows_for_display(rows)
+        # Season 1 (2 eps) groups; Season 2 (1 ep) stays a row
+        kinds = sorted(d["kind"] for d in display)
+        assert kinds == ["row", "show"]
+
+
+class TestScanAssociatedFiles:
+    def test_matches_subtitles_and_sidecars(self, tmp_path):
+        d = tmp_path / "Movies"
+        d.mkdir()
+        video = d / "Dune.mkv"
+        video.write_bytes(b"x")
+        (d / "Dune.en.srt").write_bytes(b"sub")
+        (d / "Dune.nfo").write_bytes(b"nfo")
+        (d / "Dune-poster.jpg").write_bytes(b"img")
+        (d / "Unrelated.txt").write_bytes(b"no")
+
+        svc = RecentlyAddedService()
+        found = svc._scan_associated_files(str(video))
+        names = {f["filename"] for f in found}
+        assert names == {"Dune.en.srt", "Dune.nfo", "Dune-poster.jpg"}
+        # Each carries a size display
+        assert all(f["size"] for f in found)
+
+    def test_missing_directory_returns_empty(self):
+        svc = RecentlyAddedService()
+        assert svc._scan_associated_files("/nope/does/not/exist/Movie.mkv") == []
+
+    def test_enrich_only_scans_cache_resident_items(self):
+        svc = _service(on_disk={"/mnt/cache/movies/Movie.mkv"})
+        svc._scan_associated_files = lambda p: [{"filename": "Movie.en.srt", "size": "1 KB"}]
+        rows = _enrich(svc, [_item()])
+        assert rows[0].location == "cache"
+        assert rows[0].associated_files == [{"filename": "Movie.en.srt", "size": "1 KB"}]
+
+    def test_enrich_skips_scan_for_array_items(self):
+        svc = _service(on_disk={"/mnt/user0/movies/Movie.mkv"})
+        svc._scan_associated_files = lambda p: [{"filename": "should-not-appear", "size": "1 KB"}]
+        rows = _enrich(svc, [_item()])
+        assert rows[0].location == "array"
+        assert rows[0].associated_files == []
 
 
 class TestSummary:

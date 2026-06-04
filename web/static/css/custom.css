@@ -1751,3 +1751,14 @@ footer {
     color: var(--plex-text-muted);
     margin-top: 0.2rem;
 }
+
+/* Expandable show-group header (TV runs collapsed under one row) */
+.ra-group-header { cursor: pointer; }
+.ra-group-header:hover td { background: var(--plex-bg-hover); }
+.ra-chevron {
+    display: inline-flex;
+    color: var(--plex-text-muted);
+    transition: transform 0.15s ease;
+}
+.ra-group-header.is-open .ra-chevron { transform: rotate(90deg); }
+.ra-group-child { background: rgba(0, 0, 0, 0.12); }

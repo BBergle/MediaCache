@@ -51,6 +51,7 @@ class RecentlyAddedRow:
     protected_by: List[str] = field(default_factory=list)  # ["Pinned"], ["OnDeck"], ...
     pin_type: str = "movie"       # scope passed to /api/pinned/toggle
     episode_info: Optional[Dict[str, Any]] = None
+    associated_files: List[Dict[str, str]] = field(default_factory=list)  # [{filename, size}]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -71,6 +72,7 @@ class RecentlyAddedRow:
             "protected_by": self.protected_by,
             "pin_type": self.pin_type,
             "episode_info": self.episode_info,
+            "associated_files": self.associated_files,
         }
 
 
@@ -197,8 +199,110 @@ class RecentlyAddedService:
                 protected_by=protected_by,
                 pin_type="episode" if item.media_type == "episode" else "movie",
                 episode_info=item.episode_info,
+                associated_files=self._scan_associated_files(cache_path) if on_cache else [],
             ))
         return rows
+
+    @staticmethod
+    def group_rows_for_display(rows: List[RecentlyAddedRow]) -> List[Dict[str, Any]]:
+        """Collapse multi-episode TV runs into expandable show groups.
+
+        Returns an ordered list of display items, each either:
+
+        * ``{"kind": "row", "row": RecentlyAddedRow}`` — a movie or a standalone
+          episode (a show+season with only one episode in the window), or
+        * ``{"kind": "show", "group_id", "show", "season", "library_title",
+          "episodes": [...], "episode_count", "total_size", "total_size_display",
+          "locations": [...], "not_pinned_count", "pinned_count"}``.
+
+        Order follows first-seen position (rows arrive newest-first), so a show
+        group anchors where its first episode appeared.
+        """
+        groups: Dict[Any, List[RecentlyAddedRow]] = {}
+        order: List[Any] = []
+        for idx, row in enumerate(rows):
+            info = row.episode_info or {}
+            if row.media_type == "episode" and info.get("show"):
+                key = ("show", row.library_title, info.get("show"), info.get("season"))
+            else:
+                key = ("single", idx)
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append(row)
+
+        display: List[Dict[str, Any]] = []
+        gid = 0
+        for key in order:
+            members = groups[key]
+            if key[0] == "show" and len(members) > 1:
+                eps = sorted(members, key=lambda r: ((r.episode_info or {}).get("episode") or 0))
+                total_size = sum(r.size for r in eps)
+                locations: List[str] = []
+                for r in eps:
+                    if r.location not in locations:
+                        locations.append(r.location)
+                display.append({
+                    "kind": "show",
+                    "group_id": f"rag{gid}",
+                    "show": key[2],
+                    "season": key[3],
+                    "library_title": key[1],
+                    "episodes": eps,
+                    "episode_count": len(eps),
+                    "total_size": total_size,
+                    "total_size_display": format_bytes(total_size) if total_size else "",
+                    "locations": locations,
+                    "not_pinned_count": sum(1 for r in eps if r.state == "on_cache_not_pinned"),
+                    "pinned_count": sum(1 for r in eps if r.is_pinned),
+                })
+                gid += 1
+            else:
+                for r in members:
+                    display.append({"kind": "row", "row": r})
+        return display
+
+    def _scan_associated_files(self, video_cache_path: Optional[str]) -> List[Dict[str, str]]:
+        """Find subtitle/sidecar files sharing a cache-resident video's basename.
+
+        Scans the video's directory for siblings whose stem matches the video's
+        stem (exact, or with a ``.``/``-`` suffix — catches ``Movie.en.srt``,
+        ``Movie.nfo``, ``Movie-poster.jpg``). Cache-only: array/unknown items
+        are never probed. Returns ``[{filename, size}]`` sorted by name.
+        """
+        if not video_cache_path:
+            return []
+        directory = os.path.dirname(video_cache_path)
+        video_name = os.path.basename(video_cache_path)
+        stem = os.path.splitext(video_name)[0]
+        if not directory or not stem:
+            return []
+        found: List[Dict[str, str]] = []
+        try:
+            with os.scandir(directory) as it:
+                for entry in it:
+                    if entry.name == video_name:
+                        continue
+                    try:
+                        if not entry.is_file():
+                            continue
+                    except OSError:
+                        continue
+                    entry_stem = os.path.splitext(entry.name)[0]
+                    if (entry_stem == stem
+                            or entry_stem.startswith(stem + ".")
+                            or entry_stem.startswith(stem + "-")):
+                        try:
+                            size = entry.stat().st_size
+                        except OSError:
+                            size = 0
+                        found.append({
+                            "filename": entry.name,
+                            "size": format_bytes(size) if size else "",
+                        })
+        except OSError:
+            return []
+        return sorted(found, key=lambda f: f["filename"])
 
     @staticmethod
     def _summary(rows: List[RecentlyAddedRow]) -> Dict[str, Any]:

@@ -39,13 +39,13 @@ def _force_real_modules():
 
 _force_real_modules()
 
-from web.services.recently_added_service import RecentlyAddedRow
+from web.services.recently_added_service import RecentlyAddedRow, RecentlyAddedService
 
 
 def _row(rating_key="1", title="Dune", media_type="movie", library_title="Movies",
          size=28_000_000_000, size_display="28.00 GB", location="cache",
          state="on_cache_not_pinned", is_pinned=False, protected_by=None,
-         pin_type="movie", episode_info=None):
+         pin_type="movie", episode_info=None, associated_files=None):
     return RecentlyAddedRow(
         rating_key=rating_key,
         title=title,
@@ -65,7 +65,14 @@ def _row(rating_key="1", title="Dune", media_type="movie", library_title="Movies
         protected_by=protected_by or [],
         pin_type=pin_type,
         episode_info=episode_info,
+        associated_files=associated_files or [],
     )
+
+
+def _episode(rating_key, show, season, episode, title="Ep", **kw):
+    return _row(rating_key=rating_key, title=title, media_type="episode",
+                library_title="TV Shows", pin_type="episode",
+                episode_info={"show": show, "season": season, "episode": episode}, **kw)
 
 
 def _summary(rows):
@@ -102,6 +109,8 @@ def _patch(service_result, settings=None):
     """Patch the router's service + settings accessors."""
     fake_service = MagicMock()
     fake_service.get_recently_added.return_value = service_result
+    # Use the real grouping transform so the template renders real rows/groups.
+    fake_service.group_rows_for_display.side_effect = RecentlyAddedService.group_rows_for_display
     fake_settings = MagicMock()
     fake_settings.get_all.return_value = settings or {}
     return (
@@ -202,6 +211,49 @@ class TestList:
             r = client.get("/recently-added/list")
         assert "The Last of Us" in r.text
         assert "S02E01" in r.text
+
+
+class TestGrouping:
+    def test_multi_episode_show_renders_expandable_group(self, client):
+        rows = [
+            _episode("1", "The Last of Us", 2, 1, title="Future Days"),
+            _episode("2", "The Last of Us", 2, 2, title="Through the Valley"),
+            _episode("3", "The Last of Us", 2, 3, title="The Path"),
+        ]
+        p_svc, p_set, _ = _patch(_result(rows))
+        with p_svc, p_set:
+            r = client.get("/recently-added/list")
+        assert r.status_code == 200
+        # One group header for the show + child rows
+        assert 'class="ra-group-header"' in r.text
+        assert "3 new episodes" in r.text
+        assert 'data-group-id="rag0"' in r.text
+        assert r.text.count('ra-group-child') >= 3
+        # Episode codes appear in child rows
+        assert "S02E01" in r.text and "S02E03" in r.text
+        # Per-episode pin actions present
+        assert "/api/pinned/toggle" in r.text
+
+    def test_single_episode_not_grouped(self, client):
+        rows = [_episode("9", "Severance", 1, 1, title="Solo")]
+        p_svc, p_set, _ = _patch(_result(rows))
+        with p_svc, p_set:
+            r = client.get("/recently-added/list")
+        assert 'class="ra-group-header"' not in r.text
+        assert "Severance" in r.text
+
+
+class TestAssociatedFiles:
+    def test_associated_files_badge_and_popup(self, client):
+        rows = [_row(rating_key="1", title="Dune",
+                     associated_files=[{"filename": "Dune.en.srt", "size": "84 KB"}])]
+        p_svc, p_set, _ = _patch(_result(rows))
+        with p_svc, p_set:
+            r = client.get("/recently-added/list")
+        assert r.status_code == 200
+        assert "associated-files-badge" in r.text
+        assert "+1" in r.text
+        assert "Dune.en.srt" in r.text
 
 
 class TestWidget:

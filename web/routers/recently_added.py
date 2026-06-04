@@ -81,6 +81,8 @@ def recently_added_list(
 
     # Distinct library titles (for the Library filter dropdown).
     libraries = sorted({r.library_title for r in result["rows"] if r.library_title})
+    # Collapse multi-episode TV runs into expandable show groups.
+    groups = service.group_rows_for_display(result["rows"])
 
     return templates.TemplateResponse(
         request,
@@ -89,6 +91,7 @@ def recently_added_list(
             "available": result["available"],
             "error": result["error"],
             "rows": result["rows"],
+            "groups": groups,
             "summary": result["summary"],
             "libraries": libraries,
             "days": days,
