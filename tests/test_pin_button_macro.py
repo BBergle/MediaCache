@@ -61,13 +61,15 @@ class TestPinButtonMacroShape:
         assert 'name="title" value="Show - S01E05"' in html
         assert 'data-lucide="pin"' in html
         assert 'btn-primary' in html
-        assert 'Pin this item' in html  # button title, unambiguous
+        # Tooltip makes the "always cached" semantics explicit (distinguishes
+        # Pin from Maintenance's one-time "Keep on Cache" action).
+        assert 'Pin — always keep this item on cache (never evicted)' in html
 
     def test_pinned_state_renders_unpin_button(self):
         html = _render_macro(is_pinned=True)
         assert 'data-lucide="pin-off"' in html
         assert 'btn-secondary' in html
-        assert 'Unpin this item' in html
+        assert 'Unpin — allow this item to be evicted or moved back to the array' in html
         assert 'data-is-pinned="true"' in html
 
     def test_macro_matches_toggle_response_attributes(self):
@@ -85,6 +87,18 @@ class TestPinButtonMacroShape:
         ):
             assert attr in macro_html, f"macro missing {attr}"
             assert attr in response_html, f"toggle response missing {attr}"
+
+    def test_macro_and_toggle_response_share_tooltip_wording(self):
+        """The button tooltip must match between the macro and its HTMX
+        swap-response in the SAME state — otherwise the "always cached"
+        wording reverts to the old copy after the first toggle."""
+        pin_tip = 'Pin — always keep this item on cache (never evicted)'
+        unpin_tip = 'Unpin — allow this item to be evicted or moved back to the array'
+
+        assert pin_tip in _render_macro(is_pinned=False)
+        assert pin_tip in _render_toggle_response(is_pinned=False)
+        assert unpin_tip in _render_macro(is_pinned=True)
+        assert unpin_tip in _render_toggle_response(is_pinned=True)
 
 
 class TestFileTableRowMarkup:

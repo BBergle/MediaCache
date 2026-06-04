@@ -110,12 +110,13 @@
     </div>
     <div class="card-body" style="padding: 0.75rem;">
         <p class="text-muted" style="margin: 0 0 0.75rem 0;">
-            These files are on cache but not managed by PlexCache. {% if is_unraid %}The Unraid mover will handle them normally.{% else %}They will not be automatically moved.{% endif %} Use the actions below if you want PlexCache to manage them:
+            These files are on cache but not managed by PlexCache. {% if is_unraid %}The Unraid mover will handle them normally.{% else %}They will not be automatically moved.{% endif %} Use the actions below to decide what happens to them:
         </p>
         <!-- Bulk Actions -->
         <div id="untracked-bulk-actions" class="flex gap-1 mb-1" style="display: none;">
             <span class="text-muted">Selected: <strong id="untracked-selected-count">0</strong></span>
-            <button class="btn btn-sm btn-success" onclick="keepOnCacheSelected()">
+            <button class="btn btn-sm btn-success" onclick="keepOnCacheSelected()"
+                    title="Keep these files on cache once — creates an array backup and excludes them from the mover. This is a one-time action, not a pin: they won't be re-cached automatically. To always keep an item cached, pin it in Settings → Cache.">
                 <i data-lucide="hard-drive"></i> Keep on Cache
             </button>
             <button class="btn btn-sm btn-secondary" onclick="moveToArraySelected()">
@@ -851,7 +852,7 @@ function keepOnCacheSelected() {
                 <i data-lucide="hard-drive" style="width: 18px; height: 18px; vertical-align: middle;"></i>
                 Keep ${count} file(s) on Cache
             </h4>
-            <p style="margin: 0 0 1rem 0;">These files will remain on your fast cache drive with full protection.</p>
+            <p style="margin: 0 0 1rem 0;">These files will stay on your cache drive with a backup on the array. This is a <strong>one-time keep</strong> — it does not pin them, so they won't be re-cached automatically on future runs. To always keep an item cached, pin it in Settings → Cache.</p>
         </div>
 
         <div class="confirm-section" style="background: var(--plex-surface); padding: 1rem; border-radius: var(--plex-radius-sm); margin-bottom: 1rem;">
@@ -859,7 +860,7 @@ function keepOnCacheSelected() {
             <ol style="margin: 0.5rem 0 0 1.5rem; padding: 0;">
                 <li>Copy each file to the array as a <code>.plexcached</code> backup</li>
                 <li>Add to the {% if is_unraid %}Unraid mover exclude list{% else %}cache tracking list{% endif %}</li>
-                <li>Register in PlexCache tracking</li>
+                <li>Add to PlexCache's cache tracking (one-time — not a pin)</li>
             </ol>
         </div>
 
