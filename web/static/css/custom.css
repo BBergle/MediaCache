@@ -1860,8 +1860,10 @@ footer {
     font-size: 0.78rem;
     color: var(--plex-text-muted);
 }
+/* Name shrinks (ellipsis) only as needed so the size chip hugs it, rather than
+   being pushed to the far right edge. */
 .ra-w-detail-name {
-    flex: 1;
+    flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
