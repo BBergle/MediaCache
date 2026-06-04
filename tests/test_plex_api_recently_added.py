@@ -63,6 +63,22 @@ def _section(key, title, items):
     )
 
 
+def _show_wrapper(rating_key, title):
+    """A show-level item (what recentlyAdded() returns for a show library)."""
+    return SimpleNamespace(type='show', ratingKey=rating_key, title=title,
+                           addedAt=datetime.now(), media=[])
+
+
+def _show_section(key, title, episodes, shows=None):
+    """A show library: recentlyAdded() yields show wrappers, while
+    recentlyAddedEpisodes() yields the actual recently-added episodes."""
+    return SimpleNamespace(
+        key=key, title=title, type='show',
+        recentlyAdded=lambda maxresults=None, _s=(shows or []): list(_s),
+        recentlyAddedEpisodes=lambda maxresults=None, _e=episodes: list(_e),
+    )
+
+
 def _api(sections):
     api = PlexManager.__new__(PlexManager)
     api.plex = SimpleNamespace(library=SimpleNamespace(sections=lambda: sections))
@@ -181,6 +197,32 @@ class TestGetRecentlyAddedMedia:
         items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
 
         assert items == []
+
+    def test_show_section_uses_recently_added_episodes(self):
+        # recentlyAdded() on a show library returns show wrappers (skipped);
+        # the episodes must come from recentlyAddedEpisodes().
+        eps = [_episode(50, "Future Days", "The Last of Us", 2, 1, added_days_ago=1)]
+        section = _show_section(2, "TV Shows", episodes=eps,
+                                shows=[_show_wrapper(9, "The Last of Us")])
+        api = _api([section])
+        items = api.get_recently_added_media(valid_sections=[2], days_to_monitor=7)
+
+        assert len(items) == 1
+        assert items[0].media_type == "episode"
+        assert items[0].episode_info == {"show": "The Last of Us", "season": 2, "episode": 1}
+
+    def test_show_section_without_episode_helper_falls_back(self):
+        # type == 'show' but no recentlyAddedEpisodes() → fall back to recentlyAdded().
+        eps = [_episode(51, "Pilot", "Severance", 1, 1, added_days_ago=1)]
+        section = SimpleNamespace(
+            key=2, title="TV", type="show",
+            recentlyAdded=lambda maxresults=None, _e=eps: list(_e),
+        )
+        api = _api([section])
+        items = api.get_recently_added_media(valid_sections=[2], days_to_monitor=7)
+
+        assert len(items) == 1
+        assert items[0].media_type == "episode"
 
     def test_skips_parts_without_file_path(self):
         api = _api([_section(1, "Movies", [

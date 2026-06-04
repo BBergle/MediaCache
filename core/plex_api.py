@@ -1660,15 +1660,22 @@ class PlexManager:
         for section in sections:
             if section_ids and str(getattr(section, 'key', '')) not in section_ids:
                 continue
+            section_type = getattr(section, 'type', None)
             try:
                 # recentlyAdded() returns newest first; the days cutoff trims further.
-                recent = section.recentlyAdded(maxresults=max_items)
+                # For SHOW libraries recentlyAdded() yields show-level items, so use
+                # recentlyAddedEpisodes() to get the actual recently-added episodes.
+                if section_type == 'show' and hasattr(section, 'recentlyAddedEpisodes'):
+                    recent = section.recentlyAddedEpisodes(maxresults=max_items)
+                else:
+                    recent = section.recentlyAdded(maxresults=max_items)
             except Exception as e:
                 _log_api_error(
                     f"fetch recently added for section '{getattr(section, 'title', '?')}'", e
                 )
                 continue
 
+            section_kept = 0
             for video in recent:
                 media_type = getattr(video, 'type', None)
                 if media_type not in ('movie', 'episode'):
@@ -1710,6 +1717,12 @@ class PlexManager:
                             size=int(getattr(part, 'size', 0) or 0),
                             episode_info=episode_info,
                         ))
+                        section_kept += 1
+
+            logging.debug(
+                f"Recently added [{getattr(section, 'title', '?')}] "
+                f"(type={section_type}): {section_kept} file(s) within {days_to_monitor}d"
+            )
 
         # Newest first, then cap. Items without added_at sort last.
         items.sort(key=lambda i: i.added_at or datetime.min, reverse=True)
@@ -1719,9 +1732,9 @@ class PlexManager:
             )
             items = items[:max_items]
 
-        logging.debug(
+        logging.info(
             f"Recently added: returning {len(items)} item(s) from "
-            f"{len(section_ids) or 'all'} section(s)"
+            f"{len(section_ids) or 'all'} section(s) within {days_to_monitor}d"
         )
         return items
 
