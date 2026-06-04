@@ -27,9 +27,9 @@ PlexCache-D automatically caches your frequently-accessed Plex media (OnDeck and
 
 ### Option 2: Docker Template (Quick Install)
 
-1. Download [plexcache-d.xml](https://raw.githubusercontent.com/StudioNirin/PlexCache-D/main/docker/plexcache-d.xml)
+1. Download [plexcache-d.xml](https://raw.githubusercontent.com/StudioNirin/PlexCache-D/main/templates/plexcache-d.xml)
 2. Place it in `/boot/config/plugins/dockerMan/templates-user/` on your Unraid server
-3. Go to **Docker** → **Add Container** → Select "plexcache-d" from the template dropdown
+3. Go to **Docker** → **Add Container** → Select "Plexcache-D" from the template dropdown
 4. Adjust paths for your setup and click **Apply**
 
 ### Option 3: Manual Docker Installation
