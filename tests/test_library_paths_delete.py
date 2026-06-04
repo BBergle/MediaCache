@@ -129,3 +129,6 @@ def test_remove_button_shown_only_with_multiple_mappings(client):
     # The libraries page lists cards; ensure the edit form carries delete plumbing
     # when a library has more than one mapping.
     assert "removeLibraryMapping(4" in r.text or "delete_1" in r.text
+    # Removal uses the styled modal, not the native browser confirm().
+    assert 'id="remove-mapping-modal"' in r.text
+    assert "confirmRemoveMapping()" in r.text

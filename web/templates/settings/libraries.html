@@ -106,6 +106,34 @@
     </div>
 </div>
 
+<!-- Remove path-mapping confirmation (styled modal — replaces native confirm()) -->
+<div id="remove-mapping-modal" class="modal" style="display: none;">
+    <div class="modal-backdrop" onclick="closeRemoveMappingModal()"></div>
+    <div class="modal-content" style="max-width: 440px;">
+        <div class="modal-header">
+            <h3>Remove path mapping</h3>
+            <button type="button" class="modal-close" onclick="closeRemoveMappingModal()" aria-label="Close">
+                <i data-lucide="x"></i>
+            </button>
+        </div>
+        <div class="modal-body">
+            <p style="margin: 0 0 0.75rem 0;">
+                Remove the <strong id="remove-mapping-name">this mapping</strong> path mapping?
+            </p>
+            <p style="margin: 0; color: var(--plex-text-muted); font-size: 0.85rem;">
+                It's removed from this library when you click <strong>Save</strong>. Cached files are not touched.
+            </p>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeRemoveMappingModal()">Cancel</button>
+            <button type="button" class="btn btn-danger" onclick="confirmRemoveMapping()">
+                <i data-lucide="trash-2" style="width: 14px; height: 14px;"></i>
+                Remove
+            </button>
+        </div>
+    </div>
+</div>
+
 <script src="/static/js/path-browser.js"></script>
 <script>
     function validatePathInput(input) {
@@ -139,16 +167,38 @@
         lucide.createIcons();
     }
 
-    // Mark a library path mapping for deletion. The hidden delete_<pos> flag is
-    // submitted with the form; the server drops the mapping on Save. The block
-    // is hidden (but its inputs still submit) so the position alignment holds.
+    // Mark a library path mapping for deletion (styled modal — replaces native
+    // confirm()). The hidden delete_<pos> flag is submitted with the form; the
+    // server drops the mapping on Save. The block is hidden (but its inputs still
+    // submit) so the position alignment holds.
+    var _pendingMappingRemoval = null;
     function removeLibraryMapping(sectionId, pos, name) {
-        if (!confirm('Remove the "' + name + '" path mapping? It will be deleted when you click Save.')) return;
-        var flag = document.getElementById('lib-del-' + sectionId + '-' + pos);
+        _pendingMappingRemoval = { sectionId: sectionId, pos: pos };
+        document.getElementById('remove-mapping-name').textContent = name || 'this mapping';
+        var modal = document.getElementById('remove-mapping-modal');
+        if (modal) {
+            modal.style.display = 'flex';
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+        }
+    }
+    function closeRemoveMappingModal() {
+        var modal = document.getElementById('remove-mapping-modal');
+        if (modal) modal.style.display = 'none';
+        _pendingMappingRemoval = null;
+    }
+    function confirmRemoveMapping() {
+        var p = _pendingMappingRemoval;
+        closeRemoveMappingModal();
+        if (!p) return;
+        var flag = document.getElementById('lib-del-' + p.sectionId + '-' + p.pos);
         if (flag) flag.value = '1';
-        var block = document.getElementById('lib-edit-map-' + sectionId + '-' + pos);
+        var block = document.getElementById('lib-edit-map-' + p.sectionId + '-' + p.pos);
         if (block) block.style.display = 'none';
     }
+    // Esc closes the removal modal.
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && _pendingMappingRemoval) closeRemoveMappingModal();
+    });
     // toggleEditMode(index) is defined globally in /static/js/app.js
 </script>
 {% endblock %}
