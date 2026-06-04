@@ -138,6 +138,17 @@
         }
         lucide.createIcons();
     }
+
+    // Mark a library path mapping for deletion. The hidden delete_<pos> flag is
+    // submitted with the form; the server drops the mapping on Save. The block
+    // is hidden (but its inputs still submit) so the position alignment holds.
+    function removeLibraryMapping(sectionId, pos, name) {
+        if (!confirm('Remove the "' + name + '" path mapping? It will be deleted when you click Save.')) return;
+        var flag = document.getElementById('lib-del-' + sectionId + '-' + pos);
+        if (flag) flag.value = '1';
+        var block = document.getElementById('lib-edit-map-' + sectionId + '-' + pos);
+        if (block) block.style.display = 'none';
+    }
     // toggleEditMode(index) is defined globally in /static/js/app.js
 </script>
 {% endblock %}
