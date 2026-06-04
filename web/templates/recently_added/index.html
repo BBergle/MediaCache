@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- Page Header -->
+<header class="page-header">
+    <div class="page-title">
+        <div class="page-title-icon">
+            <i data-lucide="sparkles"></i>
+        </div>
+        <div>
+            <h1>Recently Added</h1>
+            <p>New media in your libraries and where it physically lives</p>
+        </div>
+    </div>
+    <div class="action-buttons">
+        <button class="btn btn-secondary"
+                hx-get="/recently-added/list"
+                hx-target="#ra-content"
+                hx-swap="innerHTML"
+                hx-include="#ra-days-input">
+            <i data-lucide="refresh-cw"></i>
+            Refresh
+        </button>
+    </div>
+</header>
+
+<!-- Concept explainer -->
+<div class="alert alert-info" style="margin-bottom: 1.5rem;">
+    <i data-lucide="info"></i>
+    <span>
+        New media is cached automatically once it hits your Watchlist or On&nbsp;Deck.
+        To hold something on the cache yourself, <strong>Pin</strong> it: items already on
+        the cache drive are pinned instantly (no copy); items on the array are copied over on
+        the next run. Pins stay until you unpin them.
+    </span>
+</div>
+
+<!-- Lazy-loaded content (stat cards + filters + table) -->
+<div id="ra-content"
+     hx-get="/recently-added/list?days={{ default_days }}"
+     hx-trigger="load"
+     hx-swap="innerHTML">
+    <div class="card">
+        <div class="card-body" style="text-align: center; padding: 3rem;">
+            <span class="spinner" style="width: 28px; height: 28px;"></span>
+            <div class="text-muted" style="margin-top: 0.75rem;">Loading recently added media...</div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Client-side filtering over the loaded rows (library + search + location).
+// The "Added Within" (days) dropdown re-fetches from the server via HTMX.
+var RecentlyAdded = window.RecentlyAdded || (function () {
+    function getControls() {
+        return {
+            lib: document.getElementById('ra-lib-filter'),
+            search: document.getElementById('ra-search'),
+            activePill: document.querySelector('.ra-loc-pill.active'),
+        };
+    }
+
+    function apply() {
+        var c = getControls();
+        if (!c.lib && !c.search && !c.activePill) return;
+        var lib = c.lib ? c.lib.value : 'all';
+        var term = c.search ? c.search.value.trim().toLowerCase() : '';
+        var loc = c.activePill ? c.activePill.getAttribute('data-loc') : 'all';
+
+        var rows = document.querySelectorAll('#ra-table-body .ra-row');
+        var shown = 0;
+        rows.forEach(function (row) {
+            var matchLib = lib === 'all' || row.getAttribute('data-library') === lib;
+            var matchLoc = loc === 'all' || row.getAttribute('data-loc') === loc;
+            var matchTerm = !term || (row.getAttribute('data-title') || '').indexOf(term) !== -1;
+            var visible = matchLib && matchLoc && matchTerm;
+            row.style.display = visible ? '' : 'none';
+            if (visible) shown++;
+        });
+
+        var empty = document.getElementById('ra-no-match');
+        if (empty) empty.style.display = shown === 0 && rows.length > 0 ? '' : 'none';
+    }
+
+    function setPill(pill) {
+        document.querySelectorAll('.ra-loc-pill').forEach(function (p) {
+            p.classList.remove('active');
+        });
+        pill.classList.add('active');
+        apply();
+    }
+
+    // Event delegation survives HTMX swaps of #ra-content.
+    document.addEventListener('input', function (e) {
+        if (e.target && (e.target.id === 'ra-lib-filter' || e.target.id === 'ra-search')) {
+            apply();
+        }
+    });
+    document.addEventListener('click', function (e) {
+        var pill = e.target.closest ? e.target.closest('.ra-loc-pill') : null;
+        if (pill) setPill(pill);
+    });
+    document.body.addEventListener('htmx:afterSwap', function (e) {
+        if (e.detail.target && e.detail.target.id === 'ra-content') apply();
+    });
+
+    return { apply: apply, setPill: setPill };
+})();
+</script>
+{% endblock %}

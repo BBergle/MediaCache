@@ -1,0 +1,38 @@
+{#
+  Compact dashboard card for Recently Added. Lazy-loaded into the dashboard;
+  links through to the full /recently-added page.
+#}
+{% if not available %}
+<div class="text-muted" style="padding: 1.25rem; font-size: 0.85rem;">
+    {{ error or "Recently added is unavailable." }}
+</div>
+{% else %}
+<div style="display: flex; gap: 1.25rem; flex-wrap: wrap; padding: 1rem 1.25rem; align-items: center;">
+    <div>
+        <div class="stat-value" style="font-size: 1.5rem;">{{ summary.total }}</div>
+        <div class="stat-label">new in {{ days }}d</div>
+    </div>
+    <div>
+        <div class="stat-value success" style="font-size: 1.5rem;">{{ summary.on_cache }}</div>
+        <div class="stat-label">on cache</div>
+    </div>
+    <div>
+        <div class="stat-value {% if summary.on_cache_not_pinned %}warning{% endif %}" style="font-size: 1.5rem;">{{ summary.on_cache_not_pinned }}</div>
+        <div class="stat-label">not pinned</div>
+    </div>
+</div>
+{% if rows %}
+<div style="padding: 0 1.25rem 0.5rem;">
+    {% for row in rows %}
+    <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0; font-size: 0.85rem; border-top: 1px solid var(--plex-border);">
+        <i data-lucide="{{ 'tv' if row.media_type == 'episode' else 'film' }}" style="width: 14px; height: 14px; color: var(--plex-text-muted); flex-shrink: 0;"></i>
+        <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+            {% if row.media_type == 'episode' and row.episode_info %}{{ row.episode_info.show }} · S{{ '%02d'|format(row.episode_info.season or 0) }}E{{ '%02d'|format(row.episode_info.episode or 0) }}{% else %}{{ row.title }}{% endif %}
+        </span>
+        <span class="text-muted" style="margin-left: auto; white-space: nowrap;">{{ row.added_display }}</span>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+<script>lucide.createIcons();</script>
+{% endif %}

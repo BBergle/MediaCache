@@ -1742,3 +1742,12 @@ footer {
 .ss-flash-pinned-card.is-dismissing {
     border-color: rgba(229, 160, 13, 0) !important;
 }
+
+/* ─────────────────────────────────────────────────────────────────────
+   Recently Added — small caption under a row's Pin action
+   ───────────────────────────────────────────────────────────────────── */
+.ra-status-note {
+    font-size: 0.72rem;
+    color: var(--plex-text-muted);
+    margin-top: 0.2rem;
+}

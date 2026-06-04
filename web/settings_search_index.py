@@ -166,6 +166,22 @@ _INDEX: List[Dict[str, Any]] = [
         "icon": "clock", "tone": "tone-ok",
         "keywords": ["minimum", "runtime", "minutes", "prefetch", "duration", "episodes"],
     },
+    {
+        "tab": "cache", "setting_id": "recently_added_days",
+        "label": "Recently Added — Default Window",
+        "hint": "Default time window for the Recently Added page.",
+        "section": "Cache", "subsection": "Content Discovery",
+        "icon": "sparkles", "tone": "tone-ok",
+        "keywords": ["recently", "added", "new", "window", "days", "default", "recent"],
+    },
+    {
+        "tab": "cache", "setting_id": "recently_added_max_items",
+        "label": "Recently Added — Max Items",
+        "hint": "Most recent items to load on the Recently Added page (1–500).",
+        "section": "Cache", "subsection": "Content Discovery",
+        "icon": "sparkles", "tone": "tone-ok",
+        "keywords": ["recently", "added", "new", "max", "items", "limit", "count"],
+    },
 
     # --- Cache: Watchlist --------------------------------------------------
     {

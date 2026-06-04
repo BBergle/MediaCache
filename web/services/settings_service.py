@@ -630,6 +630,9 @@ class SettingsService:
             # Content discovery (moved from Plex tab)
             "number_episodes": ("number_episodes", safe_int),
             "days_to_monitor": ("days_to_monitor", safe_int),
+            # Recently Added view (display-only; see issue #174)
+            "recently_added_days": ("recently_added_days", safe_int),
+            "recently_added_max_items": ("recently_added_max_items", safe_int),
             "watchlist_toggle": ("watchlist_toggle", lambda x: x == "on" or x is True),
             "watchlist_episodes": ("watchlist_episodes", safe_int),
             "prefetch_minimum_minutes": ("prefetch_minimum_minutes", safe_int),

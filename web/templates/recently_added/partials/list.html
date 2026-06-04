@@ -1,0 +1,192 @@
+{% from "macros/pin_button.html" import pin_button %}
+{#
+  Recently Added — stat cards + filter bar + table.
+
+  Swapped into #ra-content. The "Added Within" (days) <select> re-fetches this
+  whole partial from the server; the Library/Search/location controls filter the
+  loaded rows client-side (RecentlyAdded JS in index.html).
+#}
+
+{% if not available %}
+<div class="card">
+    <div class="card-body" style="text-align: center; padding: 3rem;">
+        <i data-lucide="cloud-off" style="width: 36px; height: 36px; color: var(--plex-text-muted);"></i>
+        <h3 style="margin: 0.75rem 0 0.25rem;">Recently added is unavailable</h3>
+        <p class="text-muted" style="margin: 0;">{{ error or "Could not load recently added media." }}</p>
+    </div>
+    {# Keep the days input present so Refresh still works in the error state. #}
+    <input type="hidden" id="ra-days-input" value="{{ days }}">
+</div>
+{% else %}
+
+<!-- Stat cards -->
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="stat-card-header"><i data-lucide="sparkles"></i> Recently Added</div>
+        <div class="stat-value">{{ summary.total }}</div>
+        <div class="stat-label">last {{ days }} day{{ 's' if days != 1 else '' }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-card-header"><i data-lucide="zap"></i> Already on Cache</div>
+        <div class="stat-value success">{{ summary.on_cache }}</div>
+        <div class="stat-label">on fast storage now</div>
+    </div>
+    <div class="stat-card {% if summary.on_cache_not_pinned %}stat-card-warning{% endif %}">
+        <div class="stat-card-header"><i data-lucide="pin-off"></i> On Cache, Not Pinned</div>
+        <div class="stat-value {% if summary.on_cache_not_pinned %}warning{% endif %}">{{ summary.on_cache_not_pinned }}</div>
+        <div class="stat-label">mover may move these to array</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-card-header"><i data-lucide="server"></i> On Array</div>
+        <div class="stat-value">{{ summary.on_array }}</div>
+        <div class="stat-label">not currently cached</div>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="card mb-2">
+    <div class="card-body">
+        <div class="grid grid-3">
+            <div class="form-group mb-0">
+                <label for="ra-lib-filter">Library</label>
+                <select id="ra-lib-filter">
+                    <option value="all">All Libraries</option>
+                    {% for lib in libraries %}
+                    <option value="{{ lib }}">{{ lib }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group mb-0">
+                <label for="ra-days-input">Added Within</label>
+                <select id="ra-days-input" name="days"
+                        hx-get="/recently-added/list"
+                        hx-target="#ra-content"
+                        hx-swap="innerHTML">
+                    <option value="1" {% if days == 1 %}selected{% endif %}>Last 24 hours</option>
+                    <option value="7" {% if days == 7 %}selected{% endif %}>Last 7 days</option>
+                    <option value="30" {% if days == 30 %}selected{% endif %}>Last 30 days</option>
+                </select>
+            </div>
+            <div class="form-group mb-0">
+                <label for="ra-search">Search</label>
+                <input type="search" id="ra-search" placeholder="Search titles...">
+            </div>
+        </div>
+        <div class="activity-filter-bar" style="padding: 0.75rem 0 0;">
+            <button type="button" class="activity-filter-pill ra-loc-pill active" data-loc="all">All</button>
+            <button type="button" class="activity-filter-pill ra-loc-pill" data-loc="cache">On Cache</button>
+            <button type="button" class="activity-filter-pill ra-loc-pill" data-loc="array">On Array</button>
+        </div>
+    </div>
+</div>
+
+<!-- Table -->
+<div class="card">
+    <div class="card-body" style="padding: 0; overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Title</th>
+                    <th>Library</th>
+                    <th>Added</th>
+                    <th>Size</th>
+                    <th>Location</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="ra-table-body">
+                {% for row in rows %}
+                <tr class="ra-row"
+                    data-library="{{ row.library_title }}"
+                    data-loc="{{ row.location }}"
+                    data-title="{{ row.title|lower }}{% if row.episode_info %} {{ row.episode_info.show|lower }}{% endif %}">
+                    <td>
+                        <div class="title-cell" style="display: flex; align-items: center; gap: 0.55rem;">
+                            <span class="media-ic" style="width: 30px; height: 30px; border-radius: 7px; background: var(--plex-bg-hover); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                                <i data-lucide="{{ 'tv' if row.media_type == 'episode' else 'film' }}" style="width: 15px; height: 15px; color: var(--plex-text-muted);"></i>
+                            </span>
+                            <div>
+                                {% if row.media_type == 'episode' and row.episode_info %}
+                                <div style="font-weight: 500;">{{ row.episode_info.show }}</div>
+                                <div class="text-muted" style="font-size: 0.76rem;">
+                                    S{{ '%02d'|format(row.episode_info.season or 0) }}E{{ '%02d'|format(row.episode_info.episode or 0) }}{% if row.title %} — {{ row.title }}{% endif %}
+                                </div>
+                                {% else %}
+                                <div style="font-weight: 500;">{{ row.title }}</div>
+                                <div class="text-muted" style="font-size: 0.76rem;">Movie</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </td>
+                    <td class="text-muted">{{ row.library_title }}</td>
+                    <td class="text-muted" style="white-space: nowrap;">{{ row.added_display or '—' }}</td>
+                    <td style="white-space: nowrap;">{{ row.size_display or '—' }}</td>
+                    <td>
+                        {% if row.location == 'cache' %}
+                        <span class="badge badge-success"><i data-lucide="zap"></i> On Cache</span>
+                        {% elif row.location == 'array' %}
+                        <span class="badge badge-muted"><i data-lucide="server"></i> On Array</span>
+                        {% else %}
+                        <span class="badge badge-muted">Unknown</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if row.state == 'pinned' %}
+                        <span class="badge badge-pinned"><i data-lucide="pin"></i> Pinned</span>
+                        {% elif row.state == 'protected' %}
+                        <span class="badge badge-info"><i data-lucide="check"></i> Protected</span>
+                        {% for p in row.protected_by %}<span class="badge badge-info badge-sm">{{ p }}</span>{% endfor %}
+                        {% elif row.state == 'on_cache_not_pinned' %}
+                        <span class="badge badge-warning" title="The Unraid mover may move this to the array on its next run">Not pinned</span>
+                        {% elif row.state == 'on_array' %}
+                        <span class="badge badge-muted">Not cached</span>
+                        {% else %}
+                        <span class="badge badge-muted">Unknown</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if row.rating_key %}
+                        {{ pin_button(row.rating_key, row.pin_type, row.title, row.is_pinned) }}
+                        {% if row.state == 'on_cache_not_pinned' %}
+                        <div class="ra-status-note">stays on cache, backs up to array</div>
+                        {% elif row.state == 'on_array' %}
+                        <div class="ra-status-note">copies ~{{ row.size_display }} to cache</div>
+                        {% elif row.state == 'protected' %}
+                        <div class="ra-status-note">{{ row.protected_by|join(' / ') }} is temporary</div>
+                        {% elif row.state == 'pinned' %}
+                        <div class="ra-status-note">stays on cache until unpinned</div>
+                        {% endif %}
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                {% if not rows %}
+                <tr id="ra-empty-row">
+                    <td colspan="7" class="text-muted" style="text-align: center; padding: 2.5rem;">
+                        Nothing added in the last {{ days }} day{{ 's' if days != 1 else '' }}.
+                    </td>
+                </tr>
+                {% endif %}
+                <tr id="ra-no-match" style="display: none;">
+                    <td colspan="7" class="text-muted" style="text-align: center; padding: 2.5rem;">
+                        No items match the current filters.
+                    </td>
+                </tr>
+            </tbody>
+            {% if rows %}
+            <tfoot>
+                <tr>
+                    <td colspan="7" style="padding: 0.75rem 0.85rem; background: rgba(0,0,0,0.15); border-top: 1px solid var(--plex-border);">
+                        <span class="text-muted"><strong>{{ summary.total }}</strong> items · <strong>{{ summary.total_size_display }}</strong> total{% if summary.on_cache_not_pinned %} · <span style="color: var(--plex-warning);"><strong>{{ summary.on_cache_not_pinned }}</strong> on cache, not pinned</span>{% endif %}</span>
+                    </td>
+                </tr>
+            </tfoot>
+            {% endif %}
+        </table>
+    </div>
+</div>
+<script>lucide.createIcons();</script>
+{% endif %}

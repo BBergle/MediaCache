@@ -261,3 +261,15 @@ class RecentlyAddedService:
             "summary": self._summary([]),
             "error": error,
         }
+
+
+# Module-level singleton (mirrors the other web services).
+_recently_added_service: Optional[RecentlyAddedService] = None
+
+
+def get_recently_added_service() -> RecentlyAddedService:
+    """Return the shared RecentlyAddedService instance."""
+    global _recently_added_service
+    if _recently_added_service is None:
+        _recently_added_service = RecentlyAddedService()
+    return _recently_added_service

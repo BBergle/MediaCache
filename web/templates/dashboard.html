@@ -53,6 +53,27 @@
     {% include "partials/dashboard_skeleton.html" %}
 </div>
 
+<!-- Recently Added (visibility into new media + where it lives) -->
+<div class="card">
+    <div class="card-header">
+        <i data-lucide="sparkles"></i>
+        <h2>Recently Added</h2>
+        <a href="/recently-added" class="btn btn-sm btn-secondary" style="margin-left: auto;">
+            View all <i data-lucide="arrow-right"></i>
+        </a>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        <div id="recently-added-widget"
+             hx-get="/recently-added/widget"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <div class="text-muted" style="text-align: center; padding: 1.5rem; font-size: 0.85rem;">
+                <span class="spinner" style="width: 18px; height: 18px;"></span>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Recent Activity (Last 24 Hours) -->
 <div class="card">
     <div class="card-header">
