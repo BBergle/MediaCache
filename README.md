@@ -1,6 +1,7 @@
 # PlexCache-D V3.2: Automate Plex Media Management
-### Updated 3/3/26
+### Updated 4/6/26
 
+# Notice - Now on the Unraid Community Apps Store! 
 # Notice - Update to new Dockerised version. For instructions and discussion - https://github.com/StudioNirin/PlexCache-D/discussions/81 
 
 ## Current Bugs / Todo List
