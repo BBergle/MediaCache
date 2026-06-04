@@ -44,7 +44,7 @@
 <span class="badge badge-info"><i data-lucide="check"></i> Protected</span>
 {% for p in row.protected_by %}<span class="badge badge-info badge-sm">{{ p }}</span>{% endfor %}
 {% elif row.state == 'on_cache_not_pinned' %}
-<span class="badge badge-warning" title="The Unraid mover may move this to the array on its next run">Not pinned</span>
+<span class="badge badge-muted" title="On cache now, but not held — it'll return to the array naturally once it's no longer OnDeck/Watchlist. Pin to keep it.">Not pinned</span>
 {% elif row.state == 'on_array' %}
 <span class="badge badge-muted">Not cached</span>
 {% else %}
@@ -139,11 +139,6 @@
         <div class="stat-value success">{{ summary.on_cache }}</div>
         <div class="stat-label">on fast storage now</div>
     </div>
-    <div class="stat-card {% if summary.on_cache_not_pinned %}stat-card-warning{% endif %}">
-        <div class="stat-card-header"><i data-lucide="pin-off"></i> On Cache, Not Pinned</div>
-        <div class="stat-value {% if summary.on_cache_not_pinned %}warning{% endif %}">{{ summary.on_cache_not_pinned }}</div>
-        <div class="stat-label">mover may move these to array</div>
-    </div>
     <div class="stat-card">
         <div class="stat-card-header"><i data-lucide="server"></i> On Array</div>
         <div class="stat-value">{{ summary.on_array }}</div>
@@ -230,7 +225,7 @@
                         </td>
                         <td>
                             {% if item.not_pinned_count %}
-                            <span class="badge badge-warning">{{ item.not_pinned_count }} not pinned</span>
+                            <span class="badge badge-muted">{{ item.not_pinned_count }} not pinned</span>
                             {% elif item.pinned_count == item.episode_count %}
                             <span class="badge badge-pinned"><i data-lucide="pin"></i> Pinned</span>
                             {% else %}
@@ -263,7 +258,7 @@
             <tfoot>
                 <tr>
                     <td colspan="7" style="padding: 0.75rem 0.85rem; background: rgba(0,0,0,0.15); border-top: 1px solid var(--plex-border);">
-                        <span class="text-muted"><strong>{{ summary.total }}</strong> items · <strong>{{ summary.total_size_display }}</strong> total{% if summary.on_cache_not_pinned %} · <span style="color: var(--plex-warning);"><strong>{{ summary.on_cache_not_pinned }}</strong> on cache, not pinned</span>{% endif %}</span>
+                        <span class="text-muted"><strong>{{ summary.total }}</strong> items · <strong>{{ summary.total_size_display }}</strong> total · <strong>{{ summary.on_cache }}</strong> on cache · <strong>{{ summary.on_array }}</strong> on array</span>
                         {% if capped %}
                         <span class="text-muted" style="display: block; margin-top: 0.35rem; font-size: 0.78rem;">
                             <i data-lucide="info" style="width: 13px; height: 13px; vertical-align: -2px;"></i>

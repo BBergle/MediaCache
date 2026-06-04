@@ -302,7 +302,9 @@ class TestWidget:
             r = client.get("/recently-added/widget")
         assert r.status_code == 200
         assert "on cache" in r.text
-        assert "not pinned" in r.text
+        # Third stat is the neutral "on array" count, not a "not pinned" nag.
+        assert "on array" in r.text
+        assert "not pinned" not in r.text
         assert "Dune" in r.text
 
     def test_widget_rows_expand_to_filename_and_size(self, client):
