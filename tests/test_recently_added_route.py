@@ -287,6 +287,19 @@ class TestWidget:
         assert "not pinned" in r.text
         assert "Dune" in r.text
 
+    def test_widget_rows_expand_to_filename_and_size(self, client):
+        rows = [_row(rating_key="1", title="Dune",
+                     filename="Dune.2021.2160p.mkv", size_display="28.00 GB")]
+        p_svc, p_set, _ = _patch(_result(rows), settings={"recently_added_days": 7})
+        with p_svc, p_set:
+            r = client.get("/recently-added/widget")
+        assert r.status_code == 200
+        # Self-contained expand (the page-level RecentlyAdded JS isn't on the dashboard)
+        assert "raWidgetToggle(this)" in r.text
+        assert "ra-w-detail" in r.text
+        assert "Dune.2021.2160p.mkv" in r.text
+        assert "28.00 GB" in r.text
+
     def test_widget_unavailable(self, client):
         p_svc, p_set, _ = _patch(_result([], available=False, error="No Plex."))
         with p_svc, p_set:

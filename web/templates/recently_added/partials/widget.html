@@ -24,16 +24,46 @@
 {% if rows %}
 <div style="padding: 0 1.25rem 0.5rem;">
     {% for row in rows %}
-    <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0; font-size: 0.85rem; border-top: 1px solid var(--plex-border);">
-        <i data-lucide="{{ 'tv' if row.media_type == 'episode' else 'film' }}" style="width: 14px; height: 14px; color: var(--plex-text-muted); flex-shrink: 0;"></i>
-        <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-            {% if row.media_type == 'episode' and row.episode_info %}{{ row.episode_info.show }} · S{{ '%02d'|format(row.episode_info.season or 0) }}E{{ '%02d'|format(row.episode_info.episode or 0) }}{% else %}{{ row.title }}{% endif %}
-        </span>
-        {% if row.size_display %}<span class="text-muted" style="margin-left: auto; white-space: nowrap;">{{ row.size_display }}</span>{% endif %}
-        <span class="text-muted" style="{% if not row.size_display %}margin-left: auto; {% endif %}white-space: nowrap;">{{ row.added_display }}</span>
+    {# Click-to-expand: reveals the underlying filename(s) + size. Self-contained
+       so it works on the dashboard (the full-page RecentlyAdded JS isn't loaded). #}
+    <div class="ra-w-row" onclick="raWidgetToggle(this)"
+         style="cursor: pointer; border-top: 1px solid var(--plex-border);" title="Show file details">
+        <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0; font-size: 0.85rem;">
+            <span class="ra-w-chevron" style="display: inline-flex; color: var(--plex-text-muted); flex-shrink: 0; transition: transform 0.15s ease;">
+                <i data-lucide="chevron-right" style="width: 13px; height: 13px;"></i>
+            </span>
+            <i data-lucide="{{ 'tv' if row.media_type == 'episode' else 'film' }}" style="width: 14px; height: 14px; color: var(--plex-text-muted); flex-shrink: 0;"></i>
+            <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                {% if row.media_type == 'episode' and row.episode_info %}{{ row.episode_info.show }} · S{{ '%02d'|format(row.episode_info.season or 0) }}E{{ '%02d'|format(row.episode_info.episode or 0) }}{% else %}{{ row.title }}{% endif %}
+            </span>
+            {% if row.size_display %}<span class="text-muted" style="margin-left: auto; white-space: nowrap;">{{ row.size_display }}</span>{% endif %}
+            <span class="text-muted" style="{% if not row.size_display %}margin-left: auto; {% endif %}white-space: nowrap; padding-left: 0.5rem;">{{ row.added_display }}</span>
+        </div>
+        <div class="ra-w-detail" style="display: none; padding: 0 0 0.4rem 1.75rem;">
+            <div style="display: flex; justify-content: space-between; gap: 1rem; padding: 0.1rem 0; font-size: 0.78rem; color: var(--plex-text-muted);">
+                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">&#8627; {{ row.filename or row.title }}</span>
+                <span style="flex-shrink: 0;">{{ row.size_display or '—' }}</span>
+            </div>
+            {% for af in row.associated_files %}
+            <div style="display: flex; justify-content: space-between; gap: 1rem; padding: 0.1rem 0; font-size: 0.78rem; color: var(--plex-text-muted);">
+                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">&#8627; {{ af.filename }}</span>
+                <span style="flex-shrink: 0;">{{ af.size or '—' }}</span>
+            </div>
+            {% endfor %}
+        </div>
     </div>
     {% endfor %}
 </div>
 {% endif %}
-<script>lucide.createIcons();</script>
+<script>
+window.raWidgetToggle = window.raWidgetToggle || function (rowEl) {
+    var detail = rowEl.querySelector('.ra-w-detail');
+    var chev = rowEl.querySelector('.ra-w-chevron');
+    if (!detail) return;
+    var open = detail.style.display === 'none';
+    detail.style.display = open ? 'block' : 'none';
+    if (chev) chev.style.transform = open ? 'rotate(90deg)' : '';
+};
+lucide.createIcons();
+</script>
 {% endif %}
