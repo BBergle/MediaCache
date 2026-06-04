@@ -119,17 +119,21 @@ class RecentlyAddedService:
             logger.warning(f"RecentlyAddedService: fetch failed: {e}")
             return self._empty_result(f"Could not fetch recently added media: {e}")
 
-        from core.file_operations import PathModifier
-        path_modifier = PathModifier(config.paths.path_mappings)
+        try:
+            from core.file_operations import MultiPathModifier
+            path_modifier = MultiPathModifier(config.paths.path_mappings)
 
-        rows = self._enrich(
-            items,
-            path_modifier,
-            pinned_keys=self._json_keys(self.pinned_file),
-            ondeck_keys=self._json_keys(self.ondeck_file),
-            watchlist_keys=self._json_keys(self.watchlist_file),
-            timestamps_keys=self._json_keys(self.timestamps_file),
-        )
+            rows = self._enrich(
+                items,
+                path_modifier,
+                pinned_keys=self._json_keys(self.pinned_file),
+                ondeck_keys=self._json_keys(self.ondeck_file),
+                watchlist_keys=self._json_keys(self.watchlist_file),
+                timestamps_keys=self._json_keys(self.timestamps_file),
+            )
+        except Exception as e:
+            logger.warning(f"RecentlyAddedService: enrichment failed: {e}")
+            return self._empty_result(f"Could not process recently added media: {e}")
 
         return {
             "available": True,

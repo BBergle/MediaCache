@@ -5,10 +5,11 @@ key sets, and the file-existence probe), so these tests exercise it directly
 without a live Plex server or real filesystem.
 """
 
+import json
 import os
 import sys
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -249,6 +250,60 @@ class TestScanAssociatedFiles:
         rows = _enrich(svc, [_item()])
         assert rows[0].location == "array"
         assert rows[0].associated_files == []
+
+
+class TestGetRecentlyAddedEndToEnd:
+    """Exercise the real get_recently_added() path (config load → connect →
+    fetch → enrich), which the mocked-service route tests don't cover. This is
+    the regression guard for the MultiPathModifier import (a wrong class name
+    here surfaces as a 500 in the browser)."""
+
+    def _settings(self, tmp_path):
+        data = {
+            "PLEX_URL": "http://x", "PLEX_TOKEN": "t", "number_episodes": 5,
+            "valid_sections": [1], "days_to_monitor": 7, "users_toggle": True,
+            "watchlist_toggle": True, "watchlist_episodes": 3, "watched_move": True,
+            "cache_dir": "/mnt/cache/", "max_concurrent_moves_array": 2,
+            "max_concurrent_moves_cache": 2, "prefetch_minimum_minutes": 0,
+            "path_mappings": [{
+                "name": "Movies", "plex_path": "/data/", "real_path": "/mnt/user/",
+                "cache_path": "/mnt/cache/", "enabled": True, "cacheable": True,
+                "section_id": 1,
+            }],
+        }
+        p = tmp_path / "settings.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+        return p
+
+    def test_enriches_real_items_without_error(self, tmp_path):
+        from core.plex_api import RecentlyAddedItem
+
+        items = [
+            RecentlyAddedItem(file_path="/data/movies/Dune.mkv", rating_key="101",
+                              title="Dune", media_type="movie",
+                              added_at=datetime.now() - timedelta(hours=2),
+                              library_title="Movies", library_section_id="1", size=28000),
+            RecentlyAddedItem(file_path="/data/tv/Show/S01E01.mkv", rating_key="201",
+                              title="Ep1", media_type="episode", added_at=None,
+                              library_title="TV", library_section_id="1", size=5000,
+                              episode_info={"show": "Show", "season": 1, "episode": 1}),
+        ]
+        svc = RecentlyAddedService()
+        svc.settings_file = str(self._settings(tmp_path))
+
+        fake_pm = MagicMock()
+        fake_pm.connect.return_value = None
+        fake_pm.get_recently_added_media.return_value = items
+
+        with patch("core.plex_api.PlexManager", return_value=fake_pm):
+            res = svc.get_recently_added(days=7, max_items=100)
+
+        assert res["available"] is True
+        assert res["error"] is None
+        assert len(res["rows"]) == 2
+        # The episode with added_at=None must still enrich (no crash on None age).
+        ep = next(r for r in res["rows"] if r.media_type == "episode")
+        assert ep.added_display is None
 
 
 class TestSummary:

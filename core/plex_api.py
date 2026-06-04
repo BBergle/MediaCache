@@ -1654,9 +1654,11 @@ class PlexManager:
             _log_api_error("list library sections for recently added", e)
             return items
 
-        section_ids = set(valid_sections or [])
+        # plexapi exposes section.key as a string ("1"), while valid_sections
+        # from config are ints — compare as strings so the filter actually matches.
+        section_ids = {str(s) for s in (valid_sections or [])}
         for section in sections:
-            if section_ids and section.key not in section_ids:
+            if section_ids and str(getattr(section, 'key', '')) not in section_ids:
                 continue
             try:
                 # recentlyAdded() returns newest first; the days cutoff trims further.
