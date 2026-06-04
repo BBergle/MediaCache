@@ -10,7 +10,7 @@ import re
 import threading
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Generator, Tuple, Dict, Set
@@ -124,6 +124,37 @@ class OnDeckItem:
     episode_info: Optional[Dict[str, any]] = None
     is_current_ondeck: bool = False
     rating_key: Optional[str] = None
+
+
+@dataclass
+class RecentlyAddedItem:
+    """Represents a recently-added library item with metadata.
+
+    Unlike OnDeck/Watchlist items, recently-added media is server-wide
+    (library-level), so there is no per-user ``username`` field. One item is
+    emitted per media file (part).
+
+    Attributes:
+        file_path: Plex path to the media file.
+        rating_key: Plex rating key (for pin lookups and version grouping).
+        title: The item's own title — episode title for episodes, movie title
+            for movies. Use ``episode_info`` for show/season context.
+        media_type: "movie" or "episode".
+        added_at: When the item was added to the library (None if unavailable).
+        library_title: Display name of the source library section.
+        library_section_id: The library section id (matches ``valid_sections``).
+        size: File size in bytes for this part (0 if unavailable).
+        episode_info: For episodes, dict with 'show', 'season', 'episode' keys.
+    """
+    file_path: str
+    rating_key: Optional[str] = None
+    title: str = ""
+    media_type: str = "movie"
+    added_at: Optional[datetime] = None
+    library_title: str = ""
+    library_section_id: Optional[int] = None
+    size: int = 0
+    episode_info: Optional[Dict[str, any]] = None
 
 
 # API delay between plex.tv calls (seconds)
@@ -1597,6 +1628,100 @@ class PlexManager:
 
         if unknown_user_ids:
             logging.debug(f"[PLEX API] {len(unknown_user_ids)} unknown user ID(s) in RSS feed: {', '.join(sorted(unknown_user_ids))}. Run 'python3 plexcache_setup.py' and refresh users to resolve.")
+
+    def get_recently_added_media(self, valid_sections: List[int], days_to_monitor: int,
+                                 max_items: int = 100) -> List['RecentlyAddedItem']:
+        """Get recently-added media across enabled libraries (server-wide).
+
+        Recently-added is a library-level view, so this uses the main account
+        only — there is no per-user token machinery (unlike OnDeck/Watchlist).
+
+        Args:
+            valid_sections: Library section ids to include (matches enabled
+                path mappings). An empty list means all available sections.
+            days_to_monitor: Only include items added within this many days.
+            max_items: Cap on the number of items returned (newest first).
+
+        Returns:
+            List of RecentlyAddedItem, newest first, one entry per media file.
+        """
+        items: List[RecentlyAddedItem] = []
+        cutoff = datetime.now() - timedelta(days=days_to_monitor)
+
+        try:
+            sections = self.plex.library.sections()
+        except Exception as e:
+            _log_api_error("list library sections for recently added", e)
+            return items
+
+        section_ids = set(valid_sections or [])
+        for section in sections:
+            if section_ids and section.key not in section_ids:
+                continue
+            try:
+                # recentlyAdded() returns newest first; the days cutoff trims further.
+                recent = section.recentlyAdded(maxresults=max_items)
+            except Exception as e:
+                _log_api_error(
+                    f"fetch recently added for section '{getattr(section, 'title', '?')}'", e
+                )
+                continue
+
+            for video in recent:
+                media_type = getattr(video, 'type', None)
+                if media_type not in ('movie', 'episode'):
+                    # Skip season/show wrappers — we surface individual files.
+                    continue
+
+                added_at = getattr(video, 'addedAt', None)
+                if added_at is not None and added_at < cutoff:
+                    continue
+
+                episode_info = None
+                if media_type == 'episode':
+                    season = getattr(video, 'parentIndex', None)
+                    episode = getattr(video, 'index', None)
+                    if season is not None and episode is not None:
+                        episode_info = {
+                            'show': getattr(video, 'grandparentTitle', None),
+                            'season': season,
+                            'episode': episode,
+                        }
+
+                rating_key = str(getattr(video, 'ratingKey', '') or '')
+                title = getattr(video, 'title', '') or ''
+                library_title = getattr(section, 'title', '') or ''
+                library_section_id = getattr(section, 'key', None)
+
+                for media in getattr(video, 'media', []) or []:
+                    for part in getattr(media, 'parts', []) or []:
+                        if not getattr(part, 'file', None):
+                            continue
+                        items.append(RecentlyAddedItem(
+                            file_path=part.file,
+                            rating_key=rating_key,
+                            title=title,
+                            media_type=media_type,
+                            added_at=added_at,
+                            library_title=library_title,
+                            library_section_id=library_section_id,
+                            size=int(getattr(part, 'size', 0) or 0),
+                            episode_info=episode_info,
+                        ))
+
+        # Newest first, then cap. Items without added_at sort last.
+        items.sort(key=lambda i: i.added_at or datetime.min, reverse=True)
+        if len(items) > max_items:
+            logging.info(
+                f"Recently added: {len(items)} files found, capping display to {max_items}"
+            )
+            items = items[:max_items]
+
+        logging.debug(
+            f"Recently added: returning {len(items)} item(s) from "
+            f"{len(section_ids) or 'all'} section(s)"
+        )
+        return items
 
     def get_watchlist_media(self, valid_sections: List[int], watchlist_episodes: int,
                             users_toggle: bool, skip_watchlist: List[str], rss_url: Optional[str] = None,
