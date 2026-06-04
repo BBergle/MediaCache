@@ -15,18 +15,17 @@
   the shared .associated-sub-row / .af-visible markup.
 #}
 
-{# ── detail sub-row: a single file (name + size) under a leaf row ── #}
+{# ── detail sub-row: a single file (name + size) under a leaf row ──
+   Full-width colspan cell so long release names wrap instead of forcing the
+   Title column wide (which would blow out the whole table). #}
 {% macro ra_detail_file(name, size, group_id='') %}
 <tr class="associated-sub-row ra-detail-row"{% if group_id %} data-group="{{ group_id }}"{% endif %}>
-    <td class="associated-sub-file"{% if group_id %} style="padding-left: 3.6rem !important;"{% endif %}>
-        <span class="associated-sub-arrow">&#8627;</span> {{ name }}
+    <td colspan="7" class="ra-detail-cell"{% if group_id %} style="padding-left: 3.6rem !important;"{% endif %}>
+        <div class="ra-detail-line">
+            <span class="ra-detail-name"><span class="associated-sub-arrow">&#8627;</span> {{ name }}</span>
+            <span class="ra-detail-size">{{ size or '—' }}</span>
+        </div>
     </td>
-    <td></td>
-    <td></td>
-    <td class="associated-sub-size">{{ size or '—' }}</td>
-    <td></td>
-    <td></td>
-    <td></td>
 </tr>
 {% endmacro %}
 

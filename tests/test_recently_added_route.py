@@ -270,7 +270,7 @@ class TestExpandDetail:
         # +N hint badge + the associated file appears in a detail sub-row
         assert "+1" in r.text
         assert "Dune.en.srt" in r.text
-        assert "associated-sub-file" in r.text
+        assert "ra-detail-row" in r.text
 
 
 class TestWidget:

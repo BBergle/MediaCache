@@ -1772,3 +1772,25 @@ footer {
 }
 .ra-detail-chevron i { width: 14px; height: 14px; }
 .ra-detail-chevron.open { transform: rotate(90deg); }
+
+/* File-detail sub-row: full-width colspan cell with a wrapping name + fixed
+   size, so long release filenames never widen the Title column / table. */
+.ra-detail-line {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+}
+.ra-detail-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    font-size: 0.8rem;
+    color: var(--plex-text-muted, #8e8e93);
+}
+.ra-detail-size {
+    flex-shrink: 0;
+    white-space: nowrap;
+    font-size: 0.8rem;
+    color: var(--plex-text-muted, #8e8e93);
+}
