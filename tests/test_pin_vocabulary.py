@@ -29,9 +29,13 @@ def _audit_source() -> str:
 class TestKeepOnCacheClarity:
     def test_keep_on_cache_button_tooltip_says_one_time_not_pin(self):
         src = _audit_source()
-        assert "This is a one-time action, not a pin" in src
-        # Points users at the real pin surface for permanent caching.
+        assert "Not a pin: won't re-cache automatically" in src
+        # The confirm modal still points users at the real pin surface.
         assert "pin it in Settings → Cache" in src
+
+    def test_move_to_array_button_has_tooltip(self):
+        src = _audit_source()
+        assert "Move these files off the cache drive to the array" in src
 
     def test_confirm_modal_distinguishes_keep_from_pin(self):
         src = _audit_source()

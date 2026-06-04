@@ -116,10 +116,11 @@
         <div id="untracked-bulk-actions" class="flex gap-1 mb-1" style="display: none;">
             <span class="text-muted">Selected: <strong id="untracked-selected-count">0</strong></span>
             <button class="btn btn-sm btn-success" onclick="keepOnCacheSelected()"
-                    title="Keep these files on cache once — creates an array backup and excludes them from the mover. This is a one-time action, not a pin: they won't be re-cached automatically. To always keep an item cached, pin it in Settings → Cache.">
+                    title="Keep on cache once — backs up to the array and excludes from the mover. Not a pin: won't re-cache automatically.">
                 <i data-lucide="hard-drive"></i> Keep on Cache
             </button>
-            <button class="btn btn-sm btn-secondary" onclick="moveToArraySelected()">
+            <button class="btn btn-sm btn-secondary" onclick="moveToArraySelected()"
+                    title="Move these files off the cache drive to the array, freeing cache space.">
                 <i data-lucide="database"></i> Move to Array
             </button>
         </div>
