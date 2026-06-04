@@ -86,8 +86,9 @@ PlexCache-D/
 │   └── static/               # CSS, JS assets
 ├── docker/                   # Docker support
 │   ├── Dockerfile            # Multi-stage container build
-│   ├── docker-entrypoint.sh  # Container startup script
-│   └── plexcache-d.xml       # Unraid Community Apps template
+│   └── docker-entrypoint.sh  # Container startup script
+├── templates/                # Unraid Community Apps store
+│   └── plexcache-d.xml       # Container template (auto-discovered by CA)
 ├── tools/                    # Diagnostic utilities
 │   └── audit_cache.py        # Cache diagnostic tool
 ├── data/                     # Runtime tracking files (auto-created, JSON)
