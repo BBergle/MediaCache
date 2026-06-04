@@ -1775,8 +1775,11 @@ footer {
 
 /* File-detail sub-row: full-width colspan cell. The filename wraps inline
    (overflow-wrap:anywhere) so long release names never widen the table, and the
-   size sits as a muted chip right after the name — not floated to the far edge. */
+   size sits as a muted chip right after the name — not floated to the far edge.
+   padding-left aligns the name under the title text above it (past the
+   chevron + media icon); child rows have no icon so they're overridden inline. */
 .ra-detail-cell {
+    padding-left: 4rem;
     font-size: 0.8rem;
     color: var(--plex-text-muted, #8e8e93);
 }
@@ -1784,12 +1787,83 @@ footer {
     overflow-wrap: anywhere;
     word-break: break-word;
 }
-.ra-detail-size {
+
+/* Shared muted size chip (file-detail rows + dashboard widget). */
+.ra-size-chip {
+    display: inline-block;
     margin-left: 0.5rem;
     padding: 0.05rem 0.4rem;
     border-radius: var(--plex-radius-sm, 8px);
     background: var(--plex-bg-hover, rgba(255, 255, 255, 0.06));
     white-space: nowrap;
     font-size: 0.72rem;
-    opacity: 0.85;
+    color: var(--plex-text-muted, #8e8e93);
+}
+
+/* ── Dashboard "Recently Added" widget: header + aligned columns ── */
+.ra-w-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid var(--plex-border);
+    font-size: 0.66rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--plex-text-muted);
+}
+.ra-w-head .ra-w-lead { width: 2.2rem; flex-shrink: 0; }
+.ra-w-row {
+    cursor: pointer;
+    border-top: 1px solid var(--plex-border);
+}
+.ra-w-row:first-of-type { border-top: none; }
+.ra-w-line {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0;
+    font-size: 0.85rem;
+}
+.ra-w-chevron {
+    display: inline-flex;
+    color: var(--plex-text-muted);
+    flex-shrink: 0;
+    transition: transform 0.15s ease;
+}
+.ra-w-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ra-w-size {
+    width: 5rem;
+    flex-shrink: 0;
+    text-align: right;
+}
+.ra-w-size .ra-size-chip { margin-left: 0; }
+.ra-w-age {
+    width: 4.5rem;
+    flex-shrink: 0;
+    text-align: right;
+    white-space: nowrap;
+    color: var(--plex-text-muted);
+}
+.ra-w-detail { padding: 0 0 0.4rem 2.2rem; }
+.ra-w-detail-line {
+    display: flex;
+    align-items: baseline;
+    padding: 0.1rem 0;
+    font-size: 0.78rem;
+    color: var(--plex-text-muted);
+}
+.ra-w-detail-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }

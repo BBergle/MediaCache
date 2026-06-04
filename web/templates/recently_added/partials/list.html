@@ -20,8 +20,8 @@
    Title column wide (which would blow out the whole table). #}
 {% macro ra_detail_file(name, size, group_id='') %}
 <tr class="associated-sub-row ra-detail-row"{% if group_id %} data-group="{{ group_id }}"{% endif %}>
-    <td colspan="7" class="ra-detail-cell"{% if group_id %} style="padding-left: 3.6rem !important;"{% endif %}>
-        <span class="associated-sub-arrow">&#8627;</span><span class="ra-detail-name">{{ name }}</span>{% if size %}<span class="ra-detail-size">{{ size }}</span>{% endif %}
+    <td colspan="7" class="ra-detail-cell"{% if group_id %} style="padding-left: 3rem !important;"{% endif %}>
+        <span class="associated-sub-arrow">&#8627;</span><span class="ra-detail-name">{{ name }}</span>{% if size %}<span class="ra-size-chip">{{ size }}</span>{% endif %}
     </td>
 </tr>
 {% endmacro %}

@@ -22,32 +22,36 @@
     </div>
 </div>
 {% if rows %}
-<div style="padding: 0 1.25rem 0.5rem;">
+<div style="padding: 0 1.25rem 0.75rem;">
+    {# Column header — aligns with the per-row columns below. #}
+    <div class="ra-w-head">
+        <span class="ra-w-lead"></span>
+        <span class="ra-w-title">Title</span>
+        <span class="ra-w-size">Size</span>
+        <span class="ra-w-age">Added</span>
+    </div>
     {% for row in rows %}
     {# Click-to-expand: reveals the underlying filename(s) + size. Self-contained
        so it works on the dashboard (the full-page RecentlyAdded JS isn't loaded). #}
-    <div class="ra-w-row" onclick="raWidgetToggle(this)"
-         style="cursor: pointer; border-top: 1px solid var(--plex-border);" title="Show file details">
-        <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0; font-size: 0.85rem;">
-            <span class="ra-w-chevron" style="display: inline-flex; color: var(--plex-text-muted); flex-shrink: 0; transition: transform 0.15s ease;">
-                <i data-lucide="chevron-right" style="width: 13px; height: 13px;"></i>
-            </span>
+    <div class="ra-w-row" onclick="raWidgetToggle(this)" title="Show file details">
+        <div class="ra-w-line">
+            <span class="ra-w-chevron"><i data-lucide="chevron-right" style="width: 13px; height: 13px;"></i></span>
             <i data-lucide="{{ 'tv' if row.media_type == 'episode' else 'film' }}" style="width: 14px; height: 14px; color: var(--plex-text-muted); flex-shrink: 0;"></i>
-            <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+            <span class="ra-w-title">
                 {% if row.media_type == 'episode' and row.episode_info %}{{ row.episode_info.show }} · S{{ '%02d'|format(row.episode_info.season or 0) }}E{{ '%02d'|format(row.episode_info.episode or 0) }}{% else %}{{ row.title }}{% endif %}
             </span>
-            {% if row.size_display %}<span class="text-muted" style="margin-left: auto; white-space: nowrap;">{{ row.size_display }}</span>{% endif %}
-            <span class="text-muted" style="{% if not row.size_display %}margin-left: auto; {% endif %}white-space: nowrap; padding-left: 0.5rem;">{{ row.added_display }}</span>
+            <span class="ra-w-size">{% if row.size_display %}<span class="ra-size-chip">{{ row.size_display }}</span>{% endif %}</span>
+            <span class="ra-w-age">{{ row.added_display }}</span>
         </div>
-        <div class="ra-w-detail" style="display: none; padding: 0 0 0.4rem 1.75rem;">
-            <div style="display: flex; justify-content: space-between; gap: 1rem; padding: 0.1rem 0; font-size: 0.78rem; color: var(--plex-text-muted);">
-                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">&#8627; {{ row.filename or row.title }}</span>
-                <span style="flex-shrink: 0;">{{ row.size_display or '—' }}</span>
+        <div class="ra-w-detail" style="display: none;">
+            <div class="ra-w-detail-line">
+                <span class="ra-w-detail-name">&#8627; {{ row.filename or row.title }}</span>
+                {% if row.size_display %}<span class="ra-size-chip">{{ row.size_display }}</span>{% endif %}
             </div>
             {% for af in row.associated_files %}
-            <div style="display: flex; justify-content: space-between; gap: 1rem; padding: 0.1rem 0; font-size: 0.78rem; color: var(--plex-text-muted);">
-                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">&#8627; {{ af.filename }}</span>
-                <span style="flex-shrink: 0;">{{ af.size or '—' }}</span>
+            <div class="ra-w-detail-line">
+                <span class="ra-w-detail-name">&#8627; {{ af.filename }}</span>
+                {% if af.size %}<span class="ra-size-chip">{{ af.size }}</span>{% endif %}
             </div>
             {% endfor %}
         </div>
