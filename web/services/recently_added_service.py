@@ -52,6 +52,7 @@ class RecentlyAddedRow:
     pin_type: str = "movie"       # scope passed to /api/pinned/toggle
     episode_info: Optional[Dict[str, Any]] = None
     associated_files: List[Dict[str, str]] = field(default_factory=list)  # [{filename, size}]
+    filename: str = ""            # basename of file_path (shown in the expand detail)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -73,6 +74,7 @@ class RecentlyAddedRow:
             "pin_type": self.pin_type,
             "episode_info": self.episode_info,
             "associated_files": self.associated_files,
+            "filename": self.filename,
         }
 
 
@@ -204,6 +206,7 @@ class RecentlyAddedService:
                 pin_type="episode" if item.media_type == "episode" else "movie",
                 episode_info=item.episode_info,
                 associated_files=self._scan_associated_files(cache_path) if on_cache else [],
+                filename=os.path.basename(item.file_path) if item.file_path else "",
             ))
         return rows
 

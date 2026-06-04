@@ -1762,3 +1762,13 @@ footer {
 }
 .ra-group-header.is-open .ra-chevron { transform: rotate(90deg); }
 .ra-group-child { background: rgba(0, 0, 0, 0.12); }
+
+/* Per-row file-detail expander (chevron on the title cell) */
+.ra-detail-chevron {
+    display: inline-flex;
+    color: var(--plex-text-muted);
+    flex-shrink: 0;
+    transition: transform 0.15s ease;
+}
+.ra-detail-chevron i { width: 14px; height: 14px; }
+.ra-detail-chevron.open { transform: rotate(90deg); }

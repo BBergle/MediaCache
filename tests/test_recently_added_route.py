@@ -45,7 +45,7 @@ from web.services.recently_added_service import RecentlyAddedRow, RecentlyAddedS
 def _row(rating_key="1", title="Dune", media_type="movie", library_title="Movies",
          size=28_000_000_000, size_display="28.00 GB", location="cache",
          state="on_cache_not_pinned", is_pinned=False, protected_by=None,
-         pin_type="movie", episode_info=None, associated_files=None):
+         pin_type="movie", episode_info=None, associated_files=None, filename=None):
     return RecentlyAddedRow(
         rating_key=rating_key,
         title=title,
@@ -66,6 +66,7 @@ def _row(rating_key="1", title="Dune", media_type="movie", library_title="Movies
         pin_type=pin_type,
         episode_info=episode_info,
         associated_files=associated_files or [],
+        filename=filename if filename is not None else f"{title}.mkv",
     )
 
 
@@ -243,17 +244,33 @@ class TestGrouping:
         assert "Severance" in r.text
 
 
-class TestAssociatedFiles:
-    def test_associated_files_badge_and_popup(self, client):
+class TestExpandDetail:
+    def test_row_is_expandable_with_filename_and_size(self, client):
         rows = [_row(rating_key="1", title="Dune",
+                     filename="Dune.2021.2160p.mkv", size_display="28.00 GB")]
+        p_svc, p_set, _ = _patch(_result(rows))
+        with p_svc, p_set:
+            r = client.get("/recently-added/list")
+        assert r.status_code == 200
+        # Title cell is click-to-expand with a chevron
+        assert "RecentlyAdded.toggleDetail(this)" in r.text
+        assert "ra-detail-chevron" in r.text
+        # Detail sub-row carries the primary filename + size
+        assert "ra-detail-row" in r.text
+        assert "Dune.2021.2160p.mkv" in r.text
+        assert "28.00 GB" in r.text
+
+    def test_associated_files_listed_in_detail(self, client):
+        rows = [_row(rating_key="1", title="Dune", filename="Dune.mkv",
                      associated_files=[{"filename": "Dune.en.srt", "size": "84 KB"}])]
         p_svc, p_set, _ = _patch(_result(rows))
         with p_svc, p_set:
             r = client.get("/recently-added/list")
         assert r.status_code == 200
-        assert "associated-files-badge" in r.text
+        # +N hint badge + the associated file appears in a detail sub-row
         assert "+1" in r.text
         assert "Dune.en.srt" in r.text
+        assert "associated-sub-file" in r.text
 
 
 class TestWidget:

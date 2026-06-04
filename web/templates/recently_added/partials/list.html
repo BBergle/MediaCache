@@ -1,5 +1,4 @@
 {% from "macros/pin_button.html" import pin_button %}
-{% from "macros/associated_files.html" import af_popup, af_popup_init %}
 {#
   Recently Added — stat cards + filter bar + table.
 
@@ -10,7 +9,26 @@
   Rows arrive pre-grouped from the router (service.group_rows_for_display):
   movies + standalone episodes render as individual rows; multi-episode TV runs
   render as an expandable show-group header + episode child rows.
+
+  Each leaf row's title cell is click-to-expand: it reveals detail sub-rows
+  (the primary media filename + size, then any subtitle/sidecar files), reusing
+  the shared .associated-sub-row / .af-visible markup.
 #}
+
+{# ── detail sub-row: a single file (name + size) under a leaf row ── #}
+{% macro ra_detail_file(name, size, group_id='') %}
+<tr class="associated-sub-row ra-detail-row"{% if group_id %} data-group="{{ group_id }}"{% endif %}>
+    <td class="associated-sub-file"{% if group_id %} style="padding-left: 3.6rem !important;"{% endif %}>
+        <span class="associated-sub-arrow">&#8627;</span> {{ name }}
+    </td>
+    <td></td>
+    <td></td>
+    <td class="associated-sub-size">{{ size or '—' }}</td>
+    <td></td>
+    <td></td>
+    <td></td>
+</tr>
+{% endmacro %}
 
 {# ── one media row (movie, standalone episode, or group child) ── #}
 {% macro ra_location_badge(location) %}
@@ -43,9 +61,12 @@
     {% if is_child %}data-group="{{ group_id }}" style="display: none;"{% endif %}
     data-library="{{ row.library_title }}"
     data-loc="{{ row.location }}"
-    data-title="{{ row.title|lower }}{% if row.episode_info %} {{ row.episode_info.show|lower }}{% endif %}">
-    <td{% if is_child %} style="padding-left: 2.4rem;"{% endif %}>
-        <div class="title-cell" style="display: flex; align-items: center; gap: 0.55rem;">
+    data-title="{{ row.title|lower }}{% if row.episode_info %} {{ row.episode_info.show|lower }}{% endif %} {{ row.filename|lower }}">
+    <td class="ra-title-cell" onclick="RecentlyAdded.toggleDetail(this)"
+        style="cursor: pointer;{% if is_child %} padding-left: 2.4rem;{% endif %}"
+        title="Show file details">
+        <div class="title-cell" style="display: flex; align-items: center; gap: 0.5rem;">
+            <span class="ra-detail-chevron"><i data-lucide="chevron-right"></i></span>
             {% if not is_child %}
             <span class="media-ic" style="width: 30px; height: 30px; border-radius: 7px; background: var(--plex-bg-hover); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;">
                 <i data-lucide="{{ 'tv' if row.media_type == 'episode' else 'film' }}" style="width: 15px; height: 15px; color: var(--plex-text-muted);"></i>
@@ -54,18 +75,19 @@
             <div>
                 {% if row.media_type == 'episode' and row.episode_info %}
                     {% if is_child %}
-                    <div style="font-weight: 500;">S{{ '%02d'|format(row.episode_info.season or 0) }}E{{ '%02d'|format(row.episode_info.episode or 0) }}{% if row.title %} — {{ row.title }}{% endif %} {{ af_popup(row.associated_files) }}</div>
+                    <div style="font-weight: 500;">S{{ '%02d'|format(row.episode_info.season or 0) }}E{{ '%02d'|format(row.episode_info.episode or 0) }}{% if row.title %} — {{ row.title }}{% endif %}</div>
                     {% else %}
-                    <div style="font-weight: 500;">{{ row.episode_info.show }} {{ af_popup(row.associated_files) }}</div>
+                    <div style="font-weight: 500;">{{ row.episode_info.show }}</div>
                     <div class="text-muted" style="font-size: 0.76rem;">
                         S{{ '%02d'|format(row.episode_info.season or 0) }}E{{ '%02d'|format(row.episode_info.episode or 0) }}{% if row.title %} — {{ row.title }}{% endif %}
                     </div>
                     {% endif %}
                 {% else %}
-                <div style="font-weight: 500;">{{ row.title }} {{ af_popup(row.associated_files) }}</div>
+                <div style="font-weight: 500;">{{ row.title }}</div>
                 <div class="text-muted" style="font-size: 0.76rem;">Movie</div>
                 {% endif %}
             </div>
+            {% if row.associated_files %}<span class="badge badge-muted badge-sm" title="{{ row.associated_files|length }} associated file(s)">+{{ row.associated_files|length }}</span>{% endif %}
         </div>
     </td>
     <td class="text-muted">{{ row.library_title }}</td>
@@ -90,6 +112,11 @@
         {% endif %}
     </td>
 </tr>
+{# Expand detail: the primary media file, then any associated files. #}
+{{ ra_detail_file(row.filename or row.title, row.size_display, group_id if is_child else '') }}
+{% for af in row.associated_files %}
+{{ ra_detail_file(af.filename, af.size, group_id if is_child else '') }}
+{% endfor %}
 {% endmacro %}
 
 {% if not available %}
@@ -248,6 +275,5 @@
         </table>
     </div>
 </div>
-{{ af_popup_init('ra-table-body') }}
 <script>lucide.createIcons(); if (window.RecentlyAdded) RecentlyAdded.apply();</script>
 {% endif %}

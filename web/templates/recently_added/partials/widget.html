@@ -29,7 +29,8 @@
         <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
             {% if row.media_type == 'episode' and row.episode_info %}{{ row.episode_info.show }} · S{{ '%02d'|format(row.episode_info.season or 0) }}E{{ '%02d'|format(row.episode_info.episode or 0) }}{% else %}{{ row.title }}{% endif %}
         </span>
-        <span class="text-muted" style="margin-left: auto; white-space: nowrap;">{{ row.added_display }}</span>
+        {% if row.size_display %}<span class="text-muted" style="margin-left: auto; white-space: nowrap;">{{ row.size_display }}</span>{% endif %}
+        <span class="text-muted" style="{% if not row.size_display %}margin-left: auto; {% endif %}white-space: nowrap;">{{ row.added_display }}</span>
     </div>
     {% endfor %}
 </div>

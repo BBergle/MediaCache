@@ -70,6 +70,20 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
         return matchLib && matchLoc && matchTerm;
     }
 
+    // A leaf row's detail sub-rows (.associated-sub-row) follow it directly.
+    // Reset them (collapse) when the leaf row itself is hidden/collapsed.
+    function resetDetailRows(leafRow, visible) {
+        var s = leafRow.nextElementSibling;
+        while (s && s.classList.contains('associated-sub-row')) {
+            if (!visible) s.classList.remove('af-visible');
+            s = s.nextElementSibling;
+        }
+        if (!visible) {
+            var chev = leafRow.querySelector('.ra-detail-chevron');
+            if (chev) chev.classList.remove('open');
+        }
+    }
+
     function apply() {
         var c = getControls();
         if (!c.lib && !c.search && !c.activePill) return;
@@ -85,6 +99,7 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
             anyRows = true;
             var visible = rowMatches(row, lib, term, loc);
             row.style.display = visible ? '' : 'none';
+            resetDetailRows(row, visible);
             if (visible) shown++;
         });
 
@@ -100,7 +115,9 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
             children.forEach(function (child) {
                 var m = rowMatches(child, lib, term, loc);
                 if (m) anyMatch = true;
-                child.style.display = (m && expanded) ? '' : 'none';
+                var visible = m && expanded;
+                child.style.display = visible ? '' : 'none';
+                resetDetailRows(child, visible);
             });
             header.style.display = anyMatch ? '' : 'none';
             if (anyMatch) shown++;
@@ -113,6 +130,19 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
     function toggleGroup(header) {
         header.classList.toggle('is-open');
         apply();
+    }
+
+    // Expand/collapse a leaf row's file-detail sub-rows.
+    function toggleDetail(td) {
+        var row = td.closest ? td.closest('tr') : null;
+        if (!row) return;
+        var chev = row.querySelector('.ra-detail-chevron');
+        if (chev) chev.classList.toggle('open');
+        var s = row.nextElementSibling;
+        while (s && s.classList.contains('associated-sub-row')) {
+            s.classList.toggle('af-visible');
+            s = s.nextElementSibling;
+        }
     }
 
     function setPill(pill) {
@@ -137,7 +167,7 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
         if (e.detail.target && e.detail.target.id === 'ra-content') apply();
     });
 
-    return { apply: apply, setPill: setPill, toggleGroup: toggleGroup };
+    return { apply: apply, setPill: setPill, toggleGroup: toggleGroup, toggleDetail: toggleDetail };
 })();
 </script>
 {% endblock %}
