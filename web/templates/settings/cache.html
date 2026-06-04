@@ -55,8 +55,8 @@
                     <label for="recently_added_max_items">Recently Added — Max Items</label>
                     <input type="number" id="recently_added_max_items" name="recently_added_max_items"
                            class="input-narrow"
-                           value="{{ settings.recently_added_max_items | default(100) }}" min="1" max="500">
-                    <div class="form-hint">Most recent items to load on the Recently Added page (1–500).</div>
+                           value="{{ settings.recently_added_max_items | default(250) }}" min="1" max="500">
+                    <div class="form-hint">Most recent media files to load on the Recently Added page (1–500). Counts individual files — TV episodes group by show for display but still count individually here.</div>
                 </div>
             </div>
 

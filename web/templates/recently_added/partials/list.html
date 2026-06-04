@@ -21,10 +21,7 @@
 {% macro ra_detail_file(name, size, group_id='') %}
 <tr class="associated-sub-row ra-detail-row"{% if group_id %} data-group="{{ group_id }}"{% endif %}>
     <td colspan="7" class="ra-detail-cell"{% if group_id %} style="padding-left: 3.6rem !important;"{% endif %}>
-        <div class="ra-detail-line">
-            <span class="ra-detail-name"><span class="associated-sub-arrow">&#8627;</span> {{ name }}</span>
-            <span class="ra-detail-size">{{ size or '—' }}</span>
-        </div>
+        <span class="associated-sub-arrow">&#8627;</span><span class="ra-detail-name">{{ name }}</span>{% if size %}<span class="ra-detail-size">{{ size }}</span>{% endif %}
     </td>
 </tr>
 {% endmacro %}
@@ -267,6 +264,12 @@
                 <tr>
                     <td colspan="7" style="padding: 0.75rem 0.85rem; background: rgba(0,0,0,0.15); border-top: 1px solid var(--plex-border);">
                         <span class="text-muted"><strong>{{ summary.total }}</strong> items · <strong>{{ summary.total_size_display }}</strong> total{% if summary.on_cache_not_pinned %} · <span style="color: var(--plex-warning);"><strong>{{ summary.on_cache_not_pinned }}</strong> on cache, not pinned</span>{% endif %}</span>
+                        {% if capped %}
+                        <span class="text-muted" style="display: block; margin-top: 0.35rem; font-size: 0.78rem;">
+                            <i data-lucide="info" style="width: 13px; height: 13px; vertical-align: -2px;"></i>
+                            Showing the {{ max_items }} most recently added files. Raise <strong>Max Items</strong> in Settings → Cache to include older media.
+                        </span>
+                        {% endif %}
                     </td>
                 </tr>
             </tfoot>

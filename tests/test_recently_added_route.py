@@ -202,6 +202,24 @@ class TestList:
         assert r.status_code == 200
         assert "Nothing added in the last 7 days" in r.text
 
+    def test_truncation_note_when_capped(self, client):
+        # rows count reaches max_items → footer surfaces the "showing newest N" note.
+        rows = [_row(rating_key=str(i), title=f"M{i}") for i in range(3)]
+        p_svc, p_set, _ = _patch(_result(rows), settings={"recently_added_max_items": 3})
+        with p_svc, p_set:
+            r = client.get("/recently-added/list?days=7")
+        assert r.status_code == 200
+        assert "most recently added files" in r.text
+        assert "Max Items" in r.text
+
+    def test_no_truncation_note_under_cap(self, client):
+        rows = [_row(rating_key=str(i), title=f"M{i}") for i in range(3)]
+        p_svc, p_set, _ = _patch(_result(rows), settings={"recently_added_max_items": 250})
+        with p_svc, p_set:
+            r = client.get("/recently-added/list?days=7")
+        assert r.status_code == 200
+        assert "most recently added files" not in r.text
+
     def test_episode_row_shows_show_and_code(self, client):
         rows = [_row(rating_key="9", title="Future Days", media_type="episode",
                      library_title="TV Shows", state="on_cache_not_pinned", location="cache",

@@ -25,7 +25,11 @@ router = APIRouter()
 # Allowed "Added Within" windows (days). Mirrors the filter dropdown.
 ALLOWED_DAYS = (1, 7, 30)
 DEFAULT_DAYS = 7
-DEFAULT_MAX_ITEMS = 100
+# Counts individual media files. TV episodes are collapsed into per-show groups
+# for display, but each episode file still consumes one slot here — so keep the
+# cap generous enough that recent movies aren't crowded out by a burst of
+# episodes. Users with very large libraries can raise it in Settings (up to 500).
+DEFAULT_MAX_ITEMS = 250
 
 
 def _resolve_days(requested: int) -> int:
@@ -96,6 +100,10 @@ def recently_added_list(
             "libraries": libraries,
             "days": days,
             "allowed_days": ALLOWED_DAYS,
+            "max_items": max_items,
+            # The fetch caps at max_items (newest first); if we hit it, older
+            # media is hidden — surface that rather than silently truncating.
+            "capped": result["summary"].get("total", 0) >= max_items,
         },
     )
 
