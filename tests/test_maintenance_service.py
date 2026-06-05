@@ -182,6 +182,94 @@ class TestGetPaths:
 
 
 # ============================================================================
+# Settings reload tests (StudioNirin/PlexCache-D#176)
+# ============================================================================
+
+class TestSettingsReloadOnChange:
+    """The singleton must not serve a stale settings/path snapshot.
+
+    A stale snapshot caused the audit to scan an old/empty cache path and report
+    "0 on cache", flagging every tracked file as stale until a restart.
+    """
+
+    @staticmethod
+    def _bump_mtime(path):
+        """Force a newer mtime (avoids same-second resolution flakiness)."""
+        future = path.stat().st_mtime + 10
+        os.utime(path, (future, future))
+
+    def test_get_paths_refreshes_when_settings_change(self, tmp_path):
+        svc = _make_service(tmp_path)
+        cache_dirs, _ = svc._get_paths()
+        assert cache_dirs == ["/mnt/cache/media/Movies", "/mnt/cache/media/TV"]
+
+        # Simulate the user editing path mappings after the process started.
+        new_settings = {
+            "path_mappings": [
+                {
+                    "name": "Movies",
+                    "cache_path": "/mnt/cache/newmedia/Movies",
+                    "real_path": "/mnt/user/newmedia/Movies",
+                    "cacheable": True,
+                    "enabled": True,
+                },
+            ]
+        }
+        svc.settings_file.write_text(json.dumps(new_settings), encoding="utf-8")
+        self._bump_mtime(svc.settings_file)
+
+        cache_dirs2, array_dirs2 = svc._get_paths()
+        assert cache_dirs2 == ["/mnt/cache/newmedia/Movies"]
+        assert array_dirs2 == ["/mnt/user0/newmedia/Movies"]
+
+    def test_get_paths_stays_cached_when_unchanged(self, tmp_path):
+        svc = _make_service(tmp_path)
+        cache1, array1 = svc._get_paths()
+        cache2, array2 = svc._get_paths()
+        # No file change → same cached objects (no needless recompute).
+        assert cache1 is cache2
+        assert array1 is array2
+
+    def test_cache_scan_recovers_after_mapping_fix(self, tmp_path):
+        """Reproduces #176: a corrected cache_path is picked up without restart."""
+        # Start with a mapping pointing at an empty cache dir → 0 files found.
+        empty_cache = tmp_path / "empty_cache"
+        empty_cache.mkdir()
+        settings_v1 = {
+            "path_mappings": [{
+                "name": "Movies",
+                "cache_path": str(empty_cache),
+                "real_path": "/mnt/user/media/Movies",
+                "cacheable": True,
+                "enabled": True,
+            }]
+        }
+        svc = _make_service(tmp_path, settings_v1)
+        assert svc.get_cache_files() == set()
+
+        # User fixes the mapping to the real cache dir that holds a file.
+        real_cache = tmp_path / "real_cache"
+        real_cache.mkdir()
+        (real_cache / "movie.mkv").write_text("x", encoding="utf-8")
+        settings_v2 = {
+            "path_mappings": [{
+                "name": "Movies",
+                "cache_path": str(real_cache),
+                "real_path": "/mnt/user/media/Movies",
+                "cacheable": True,
+                "enabled": True,
+            }]
+        }
+        svc.settings_file.write_text(json.dumps(settings_v2), encoding="utf-8")
+        self._bump_mtime(svc.settings_file)
+
+        # Without the fix this still returns set() (stale path).
+        files = svc.get_cache_files()
+        assert len(files) == 1
+        assert os.path.basename(next(iter(files))) == "movie.mkv"
+
+
+# ============================================================================
 # _cache_to_array_path() tests
 # ============================================================================
 
