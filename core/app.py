@@ -26,7 +26,7 @@ except ImportError:
 from core import __version__
 from core.config import ConfigManager
 from core.logging_config import LoggingManager, reset_warning_error_flag
-from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock, get_disk_usage, get_array_direct_path, detect_zfs, set_zfs_prefixes, format_bytes
+from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock, get_disk_usage, get_array_direct_path, detect_zfs, set_zfs_prefixes, format_bytes, create_dir_with_ownership
 from core.plex_api import PlexManager, OnDeckItem
 from core.file_operations import MultiPathModifier, SiblingFileFinder, FileFilter, FileMover, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration, get_media_identity, find_matching_plexcached, is_directory_level_file
 from core.pinned_media import PinnedMediaTracker, resolve_pins_to_paths
@@ -801,7 +801,9 @@ class PlexCacheApp:
         """Ensure a cache directory exists, creating it if necessary."""
         if not os.path.exists(cache_path):
             try:
-                os.makedirs(cache_path, exist_ok=True)
+                # Honor PUID/PGID so a cache dir created while running as root
+                # isn't left root:root.
+                create_dir_with_ownership(cache_path)
                 logging.info(f"[CONFIG] Created missing cache directory: {cache_path}")
             except OSError as e:
                 raise FileNotFoundError(f"Cannot create cache directory {cache_path}: {e}")
@@ -1749,7 +1751,7 @@ class PlexCacheApp:
                 if not os.path.isfile(new_plexcached) and os.path.isfile(new_cache_path):
                     try:
                         new_array_dir = os.path.dirname(new_array_path)
-                        os.makedirs(new_array_dir, exist_ok=True)
+                        create_dir_with_ownership(new_array_dir, new_cache_path)
                         shutil.copy2(new_cache_path, new_plexcached)
                         # Verify size match
                         src_size = os.path.getsize(new_cache_path)
@@ -2659,7 +2661,7 @@ class PlexCacheApp:
                             import shutil
                             try:
                                 array_direct_dir = os.path.dirname(array_direct_path)
-                                os.makedirs(array_direct_dir, exist_ok=True)
+                                create_dir_with_ownership(array_direct_dir, cache_path)
                                 shutil.copy2(cache_path, array_direct_path)
                                 logging.debug(f"Copied upgraded file to array: {array_direct_path}")
                                 # Verify copy succeeded using array-direct path
@@ -2695,7 +2697,7 @@ class PlexCacheApp:
                                     # If we copy to /mnt/user/, Unraid's cache policy may put the file
                                     # back on cache (if shareUseCache=yes), causing data loss
                                     array_direct_dir = os.path.dirname(array_direct_path)
-                                    os.makedirs(array_direct_dir, exist_ok=True)
+                                    create_dir_with_ownership(array_direct_dir, cache_path)
                                     shutil.copy2(cache_path, array_direct_path)
                                     logging.info(f"[EVICTION] Created array copy before eviction: {os.path.basename(array_direct_path)}")
                                     # Verify copy succeeded using array-direct path

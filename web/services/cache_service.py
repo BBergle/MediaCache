@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 
 from web.config import DATA_DIR, CONFIG_DIR, SETTINGS_FILE
-from core.system_utils import get_disk_usage, detect_zfs, get_array_direct_path, parse_size_bytes, format_bytes, translate_container_to_host_path, translate_host_to_container_path, remove_from_exclude_file, remove_from_timestamps_file
+from core.system_utils import get_disk_usage, detect_zfs, get_array_direct_path, parse_size_bytes, format_bytes, translate_container_to_host_path, translate_host_to_container_path, remove_from_exclude_file, remove_from_timestamps_file, create_dir_with_ownership
 from core.file_operations import get_media_identity, find_matching_plexcached, save_json_atomically, SUBTITLE_EXTENSIONS, is_video_file
 
 
@@ -1715,7 +1715,7 @@ class CacheService:
                     # delete the "original" cache file.
                     array_direct_path = get_array_direct_path(array_path)
                     array_direct_dir = os.path.dirname(array_direct_path)
-                    os.makedirs(array_direct_dir, exist_ok=True)
+                    create_dir_with_ownership(array_direct_dir, cache_path)
                     shutil.copy2(cache_path, array_direct_path)
                     # Verify copy succeeded on array
                     if os.path.exists(array_direct_path):
@@ -2072,7 +2072,7 @@ class CacheService:
                 if not os.path.isfile(new_plexcached):
                     try:
                         new_array_dir = os.path.dirname(new_array_path)
-                        os.makedirs(new_array_dir, exist_ok=True)
+                        create_dir_with_ownership(new_array_dir, new_cache_path)
                         shutil.copy2(new_cache_path, new_plexcached)
                         src_size = os.path.getsize(new_cache_path)
                         dst_size = os.path.getsize(new_plexcached)

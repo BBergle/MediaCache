@@ -109,6 +109,91 @@ def get_array_direct_path(user_share_path: str) -> str:
     return user_share_path
 
 
+def create_dir_with_ownership(
+    path: str,
+    src_file_for_permissions: Optional[str] = None,
+    permissions: int = 0o777,
+) -> None:
+    """Create ``path`` (and any missing parents) with correct ownership/permissions.
+
+    The container runs as root so it can move files of any ownership, but raw
+    ``os.makedirs()`` then leaves new directories owned by ``root:root`` with a
+    umask-derived mode (typically 0755). On Unraid that blocks Sonarr/Radarr from
+    writing into newly created library folders. This helper chowns/chmods every
+    newly created directory level so they match PUID/PGID (or the source file's
+    owner when PUID/PGID are unset), the same way file copies are handled.
+
+    Owner resolution: PUID/PGID environment variables take precedence; otherwise
+    the owner of ``src_file_for_permissions`` is used (when it exists). chown/chmod
+    are Linux-only and best-effort — failures (e.g. filesystem without ownership
+    support) are logged at DEBUG and never raised. No-op if ``path`` already exists.
+
+    Args:
+        path: Directory path to create.
+        src_file_for_permissions: File whose owner is used when PUID/PGID are unset.
+        permissions: Mode applied to newly created directories (default 0o777).
+    """
+    if os.path.exists(path):
+        return
+
+    # Non-Linux (Windows dev/tests): just create the tree; no POSIX ownership.
+    if not hasattr(os, "chown"):
+        os.makedirs(path, exist_ok=True)
+        return
+
+    # Resolve target ownership: PUID/PGID env override, else source file's owner.
+    target_uid: Optional[int] = None
+    target_gid: Optional[int] = None
+    for env_name, setter in (("PUID", "uid"), ("PGID", "gid")):
+        env_val = os.environ.get(env_name)
+        if env_val:
+            try:
+                if setter == "uid":
+                    target_uid = int(env_val)
+                else:
+                    target_gid = int(env_val)
+            except ValueError:
+                pass  # Invalid env value — fall back to source ownership below.
+
+    if (target_uid is None or target_gid is None) and src_file_for_permissions:
+        try:
+            stat_info = os.stat(src_file_for_permissions)
+            if target_uid is None:
+                target_uid = stat_info.st_uid
+            if target_gid is None:
+                target_gid = stat_info.st_gid
+        except OSError:
+            pass  # Source missing — leave any unresolved id as None (skip chown).
+
+    # Track every directory level we are about to create so we can chown each one,
+    # not just the leaf (os.makedirs only returns after creating the whole chain).
+    dirs_to_create = []
+    current = path
+    while current and not os.path.exists(current):
+        dirs_to_create.append(current)
+        parent = os.path.dirname(current)
+        if parent == current:  # Reached filesystem root.
+            break
+        current = parent
+    dirs_to_create.reverse()  # Closest existing ancestor downward.
+
+    original_umask = os.umask(0)
+    try:
+        os.makedirs(path, exist_ok=True)
+        for dir_path in dirs_to_create:
+            if target_uid is not None and target_gid is not None:
+                try:
+                    os.chown(dir_path, target_uid, target_gid)
+                except (PermissionError, OSError) as e:
+                    logging.debug(f"Could not set directory ownership for {dir_path}: {e}")
+            try:
+                os.chmod(dir_path, permissions)
+            except (PermissionError, OSError) as e:
+                logging.debug(f"Could not set directory permissions for {dir_path}: {e}")
+    finally:
+        os.umask(original_umask)
+
+
 def parse_size_bytes(size_str: str) -> int:
     """Parse a human-readable size string and return bytes.
 
@@ -934,53 +1019,14 @@ class FileUtils:
 
         If PUID/PGID environment variables are set, those values are used for ownership.
         Otherwise, the source file's ownership is used.
+
+        Thin instance wrapper around the module-level create_dir_with_ownership()
+        so the same logic is shared with callers that have no FileUtils instance
+        (e.g. the web service layer).
         """
         logging.debug(f"Creating directory with permissions: {path}")
-
-        if not os.path.exists(path):
-            if self.is_linux:
-                # Get the permissions of the source file
-                stat_info = os.stat(src_file_for_permissions)
-                src_uid = stat_info.st_uid
-                src_gid = stat_info.st_gid
-
-                # Use PUID/PGID if set, otherwise use source ownership
-                target_uid = self.puid if self.puid is not None else src_uid
-                target_gid = self.pgid if self.pgid is not None else src_gid
-
-                # Find the first existing ancestor directory
-                # We need to track which directories we create so we can chown them all
-                dirs_to_create = []
-                current = path
-                while current and not os.path.exists(current):
-                    dirs_to_create.append(current)
-                    parent = os.path.dirname(current)
-                    if parent == current:  # Reached root
-                        break
-                    current = parent
-
-                # Reverse so we create from closest existing ancestor downward
-                dirs_to_create.reverse()
-
-                original_umask = os.umask(0)
-                os.makedirs(path, exist_ok=True)
-
-                # Set ownership and permissions on ALL newly created directories
-                for dir_path in dirs_to_create:
-                    try:
-                        os.chown(dir_path, target_uid, target_gid)
-                    except (PermissionError, OSError) as e:
-                        logging.debug(f"Could not set directory ownership for {dir_path}: {e}")
-
-                    try:
-                        os.chmod(dir_path, self.permissions)
-                    except (PermissionError, OSError) as e:
-                        logging.debug(f"Could not set directory permissions for {dir_path}: {e}")
-
-                os.umask(original_umask)
-                logging.debug(f"Directory created with permissions (Linux): {path} ({len(dirs_to_create)} level(s), uid={target_uid}, gid={target_gid})")
-            else:  # Windows platform
-                os.makedirs(path, exist_ok=True)
-                logging.debug(f"Directory created (Windows): {path}")
-        else:
-            logging.debug(f"Directory already exists: {path}") 
+        if os.path.exists(path):
+            logging.debug(f"Directory already exists: {path}")
+            return
+        create_dir_with_ownership(path, src_file_for_permissions, permissions=self.permissions)
+        logging.debug(f"Directory created with permissions: {path}")

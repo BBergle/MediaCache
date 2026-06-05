@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Any, Tuple
 
 from web.config import DATA_DIR, CONFIG_DIR, SETTINGS_FILE
-from core.system_utils import get_array_direct_path, format_bytes, translate_container_to_host_path, translate_host_to_container_path, remove_from_exclude_file, remove_from_timestamps_file
+from core.system_utils import get_array_direct_path, format_bytes, translate_container_to_host_path, translate_host_to_container_path, remove_from_exclude_file, remove_from_timestamps_file, create_dir_with_ownership
 from core.file_operations import PLEXCACHED_EXTENSION, VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS, MEDIA_EXTENSIONS
 
 
@@ -1555,7 +1555,7 @@ class MaintenanceService:
 
                     else:
                         array_dir = os.path.dirname(array_path)
-                        os.makedirs(array_dir, exist_ok=True)
+                        create_dir_with_ownership(array_dir, cache_path)
 
                         worker_cb = aggregator.make_worker_callback() if aggregator else None
                         self._copy_with_progress(cache_path, array_path, worker_cb)
@@ -1644,7 +1644,7 @@ class MaintenanceService:
                     else:
                         # No backup/duplicate - copy to array first
                         array_dir = os.path.dirname(array_path)
-                        os.makedirs(array_dir, exist_ok=True)
+                        create_dir_with_ownership(array_dir, cache_path)
 
                         # Copy file to array with progress
                         self._copy_with_progress(cache_path, array_path, bytes_progress_callback)
@@ -1791,7 +1791,7 @@ class MaintenanceService:
                         return (cache_path, True, None)
 
                     array_dir = os.path.dirname(array_path)
-                    os.makedirs(array_dir, exist_ok=True)
+                    create_dir_with_ownership(array_dir, cache_path)
 
                     cache_size = os.path.getsize(cache_path) if os.path.exists(cache_path) else 0
                     logging.info(f"Copying {os.path.basename(cache_path)} ({cache_size / (1024**3):.2f} GB) to array...")
@@ -1871,7 +1871,7 @@ class MaintenanceService:
                     else:
                         # Need to create backup - copy file to array
                         array_dir = os.path.dirname(array_path)
-                        os.makedirs(array_dir, exist_ok=True)
+                        create_dir_with_ownership(array_dir, cache_path)
 
                         cache_size = os.path.getsize(cache_path) if os.path.exists(cache_path) else 0
                         logging.info(f"Copying {os.path.basename(cache_path)} ({cache_size / (1024**3):.2f} GB) to array...")
@@ -2010,7 +2010,7 @@ class MaintenanceService:
                             return (cache_path, False, f"{os.path.basename(cache_path)}: Not found on array")
 
                     cache_dir = os.path.dirname(cache_path)
-                    os.makedirs(cache_dir, exist_ok=True)
+                    create_dir_with_ownership(cache_dir, source)
 
                     src_size = os.path.getsize(source)
                     worker_cb = aggregator.make_worker_callback() if aggregator else None
@@ -2084,7 +2084,7 @@ class MaintenanceService:
 
             try:
                 cache_dir = os.path.dirname(cache_path)
-                os.makedirs(cache_dir, exist_ok=True)
+                create_dir_with_ownership(cache_dir, source)
 
                 src_size = os.path.getsize(source)
                 logging.info(f"Caching pinned {os.path.basename(cache_path)} ({src_size / (1024**3):.2f} GB)...")

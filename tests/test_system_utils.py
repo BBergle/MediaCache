@@ -9,7 +9,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # conftest.py handles fcntl/apscheduler mocking and path setup
 from core.system_utils import (
@@ -18,6 +18,7 @@ from core.system_utils import (
     translate_host_to_container_path,
     remove_from_exclude_file,
     remove_from_timestamps_file,
+    create_dir_with_ownership,
 )
 
 
@@ -262,3 +263,79 @@ class TestRemoveFromTimestampsFile:
         assert len(data) == 2
         assert "/mnt/cache/a.mkv" in data
         assert "/mnt/cache/c.mkv" in data
+
+
+# ============================================================================
+# TestCreateDirWithOwnership
+# ============================================================================
+
+class TestCreateDirWithOwnership:
+    """Tests for create_dir_with_ownership().
+
+    Guards the fix for #178: directories created while running as root must be
+    chowned to PUID/PGID so they don't end up root:root and block Sonarr/Radarr.
+    """
+
+    def test_creates_nested_tree(self, tmp_path, monkeypatch):
+        """Creates the full directory chain when it doesn't exist."""
+        monkeypatch.delenv("PUID", raising=False)
+        monkeypatch.delenv("PGID", raising=False)
+        target = tmp_path / "a" / "b" / "c"
+
+        create_dir_with_ownership(str(target))
+
+        assert target.is_dir()
+
+    def test_noop_when_exists(self, tmp_path):
+        """Existing directory is left untouched and no chown is attempted."""
+        existing = tmp_path / "already"
+        existing.mkdir()
+
+        with patch("core.system_utils.os.chown", create=True) as mock_chown:
+            create_dir_with_ownership(str(existing), str(existing))
+
+        mock_chown.assert_not_called()
+
+    def test_chowns_each_created_level_to_puid_pgid(self, tmp_path, monkeypatch):
+        """PUID/PGID env values are applied to every newly created level."""
+        monkeypatch.setenv("PUID", "99")
+        monkeypatch.setenv("PGID", "100")
+        src = tmp_path / "src.mkv"
+        src.write_text("data")
+
+        # tmp_path/dest exists already; only show/season are newly created.
+        dest_root = tmp_path / "dest"
+        dest_root.mkdir()
+        target = dest_root / "Show" / "Season 01"
+
+        with patch("core.system_utils.os.chown", create=True) as mock_chown, \
+                patch("core.system_utils.os.chmod"):
+            create_dir_with_ownership(str(target), str(src))
+
+        assert target.is_dir()
+        chowned = {call.args[0] for call in mock_chown.call_args_list}
+        assert str(target) in chowned
+        assert str(dest_root / "Show") in chowned
+        # The pre-existing ancestor must NOT be re-chowned.
+        assert str(dest_root) not in chowned
+        # Every chown targets the configured PUID/PGID.
+        for call in mock_chown.call_args_list:
+            assert call.args[1:] == (99, 100)
+
+    def test_invalid_puid_falls_back_to_source_owner(self, tmp_path, monkeypatch):
+        """A non-numeric PUID is ignored; the source file's owner is used."""
+        monkeypatch.setenv("PUID", "notanumber")
+        monkeypatch.delenv("PGID", raising=False)
+        src = tmp_path / "src.mkv"
+        src.write_text("data")
+        src_stat = os.stat(str(src))
+        target = tmp_path / "dest" / "Show"
+
+        with patch("core.system_utils.os.chown", create=True) as mock_chown, \
+                patch("core.system_utils.os.chmod"):
+            create_dir_with_ownership(str(target), str(src))
+
+        assert target.is_dir()
+        assert mock_chown.call_args_list, "chown should be attempted"
+        for call in mock_chown.call_args_list:
+            assert call.args[1:] == (src_stat.st_uid, src_stat.st_gid)
