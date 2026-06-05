@@ -38,7 +38,7 @@
                     <td title="{{ file.path }}">{{ file.filename }}</td>
                     <td class="text-muted">{{ file.size_display }}</td>
                     <td>
-                        <span class="priority-badge {{ 'high' if file.priority_score >= 70 else 'medium' if file.priority_score >= 40 else 'low' }}">
+                        <span class="priority-badge {{ 'high' if file.priority_score >= 90 else 'medium' if file.priority_score >= 70 else 'low' }}">
                             {{ file.priority_score }}
                         </span>
                     </td>

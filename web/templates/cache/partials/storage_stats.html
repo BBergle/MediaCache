@@ -325,7 +325,7 @@
                             </td>
                             {% if data.config.eviction_enabled %}
                             <td>
-                                <span class="priority-badge {{ 'high' if file.priority_score >= 70 else 'medium' if file.priority_score >= 40 else 'low' }}">
+                                <span class="priority-badge {{ 'high' if file.priority_score >= 90 else 'medium' if file.priority_score >= 70 else 'low' }}">
                                     {{ file.priority_score }}
                                 </span>
                             </td>
@@ -391,7 +391,7 @@
                             </td>
                             {% if data.config.eviction_enabled %}
                             <td>
-                                <span class="priority-badge {{ 'high' if file.priority_score >= 70 else 'medium' if file.priority_score >= 40 else 'low' }}">
+                                <span class="priority-badge {{ 'high' if file.priority_score >= 90 else 'medium' if file.priority_score >= 70 else 'low' }}">
                                     {{ file.priority_score }}
                                 </span>
                             </td>
@@ -467,7 +467,7 @@
                             </td>
                             {% if data.config.eviction_enabled %}
                             <td>
-                                <span class="priority-badge {{ 'high' if file.priority_score >= 70 else 'medium' if file.priority_score >= 40 else 'low' }}">
+                                <span class="priority-badge {{ 'high' if file.priority_score >= 90 else 'medium' if file.priority_score >= 70 else 'low' }}">
                                     {{ file.priority_score }}
                                 </span>
                             </td>
@@ -546,7 +546,7 @@
                             </td>
                             {% if data.config.eviction_enabled %}
                             <td>
-                                <span class="priority-badge {{ 'high' if item.file.priority_score >= 70 else 'medium' if item.file.priority_score >= 40 else 'low' }}">
+                                <span class="priority-badge {{ 'high' if item.file.priority_score >= 90 else 'medium' if item.file.priority_score >= 70 else 'low' }}">
                                     {{ item.file.priority_score }}
                                 </span>
                             </td>
