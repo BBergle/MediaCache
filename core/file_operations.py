@@ -115,6 +115,31 @@ def is_directory_level_file(filepath: str, parent_video: str) -> bool:
     return not os.path.basename(filepath).startswith(video_base)
 
 
+def name_matches_video_stem(name: str, stem: str) -> bool:
+    """Check if a sibling filename belongs to a video by its stem (boundary-aware).
+
+    A sidecar belongs to a video when its name is the video stem followed by a
+    separator and the rest (e.g. ``<stem>.en.srt``, ``<stem>-fanart.jpg``,
+    ``<stem>.nfo``). A bare ``str.startswith()`` is not enough — it would match
+    ``"Movie 10.en.srt"`` against the stem ``"Movie 1"``. We require the character
+    immediately after the stem to be a non-alphanumeric boundary so that two
+    movies sharing a prefix in a flat directory don't steal each other's
+    subtitles.
+
+    Args:
+        name: The sibling file's basename.
+        stem: A video file's stem (basename without extension).
+
+    Returns:
+        True if ``name`` is a sidecar of the video identified by ``stem``.
+    """
+    if not name.startswith(stem):
+        return False
+    if len(name) == len(stem):
+        return True
+    return not name[len(stem)].isalnum()
+
+
 def is_season_like_folder(folder_name: str) -> bool:
     """Check if a folder name looks like a TV season directory.
 
@@ -2839,11 +2864,18 @@ class SiblingFileFinder:
         Discovers all non-video, non-hidden files in the same directory as each video.
         This includes subtitles, artwork, NFOs, and any other sidecar files.
 
-        When multiple videos share a directory (e.g., 4K + 1080p versions), siblings
-        are assigned by name-prefix matching: a file named "Movie - [1080P]-FGT-fanart.jpg"
-        is assigned to "Movie - [1080P]-FGT.mkv", not to "Movie - [2160P]-REMUX.mkv".
-        Siblings that don't match any video's stem are assigned to the first video
-        in the directory.
+        Whether a sibling is shared by the folder or owned by one video is decided
+        by how many videos *physically* exist in the directory, not how many are
+        being cached:
+
+        - One physical video (a per-movie folder) → every sibling belongs to it,
+          including subtitles named without the video's quality suffix.
+        - Multiple physical videos (4K + 1080p versions, or a flat library folder
+          holding many movies) → each sibling is assigned to its owning video by
+          boundary-aware name-prefix matching. A sibling owned by a video that
+          isn't being cached is skipped, so caching one movie does not drag in
+          every other movie's subtitles (#182). Siblings that match no video
+          (e.g. a shared "poster.jpg") go to the first cached video.
 
         Args:
             media_files: List of media file paths.
@@ -2874,40 +2906,53 @@ class SiblingFileFinder:
             if not os.path.exists(directory_path):
                 continue
 
-            # Get all non-video siblings in this directory once
-            all_siblings = self._find_sibling_files(directory_path, videos[0])
-            # _find_sibling_files excludes the passed video, so re-add filtering for all videos
-            video_basenames = {os.path.basename(v) for v in videos}
-            all_siblings = [s for s in all_siblings if os.path.basename(s) not in video_basenames]
+            # Scan the directory once: count ALL physical videos present (not just
+            # the ones being cached) and collect non-video sibling files.
+            video_stems_in_dir, all_siblings = self._scan_directory(directory_path)
 
-            if len(videos) == 1:
-                # Single video in directory — all siblings belong to it (fast path)
-                result[videos[0]] = all_siblings
+            if len(video_stems_in_dir) <= 1:
+                # Per-movie folder — the only video here is the one we're caching,
+                # so every sibling belongs to it (fast path). Subtitles named
+                # without the video's quality suffix (e.g. "English.srt") are
+                # correctly grabbed here.
+                result[videos[0]] = list(all_siblings)
                 for sib in all_siblings:
                     logging.debug(f"Sibling found: {sib}")
             else:
-                # Multiple videos — assign siblings by name-prefix matching
-                video_stems = {v: os.path.splitext(os.path.basename(v))[0] for v in videos}
-                unmatched = []
+                # Flat/shared folder — multiple movies live together. Assign each
+                # sibling to its owning video by boundary-aware name-prefix match.
+                # A sidecar owned by a video that ISN'T being cached is skipped, so
+                # one movie no longer drags in every other movie's subtitles (#182).
+                cached_stem_to_path = {
+                    os.path.splitext(os.path.basename(v))[0]: v for v in videos
+                }
+                # Longest stem first so a more specific video wins over a shorter
+                # prefix sibling (e.g. "Star.Trek.V…" beats "Star.Trek").
+                sorted_stems = sorted(video_stems_in_dir, key=len, reverse=True)
 
                 for sib_path in all_siblings:
                     sib_name = os.path.basename(sib_path)
-                    matched_video = None
-                    for video, stem in video_stems.items():
-                        if sib_name.startswith(stem):
-                            matched_video = video
-                            break
-                    if matched_video:
-                        result[matched_video].append(sib_path)
-                        logging.debug(f"Sibling found: {sib_path} → {os.path.basename(matched_video)}")
+                    owner_stem = next(
+                        (s for s in sorted_stems if name_matches_video_stem(sib_name, s)),
+                        None,
+                    )
+                    if owner_stem is None:
+                        if is_subtitle_file(sib_path):
+                            # A subtitle is owned by exactly one video, never shared.
+                            # If no video here owns it, the accompanying video isn't
+                            # being cached, so don't attach it to an unrelated movie (#182).
+                            logging.debug(f"Skipping orphan subtitle (no owning video being cached): {sib_path}")
+                            continue
+                        # Non-subtitle directory-level shared asset (poster.jpg,
+                        # fanart.jpg). Assign to the first cached video.
+                        result[videos[0]].append(sib_path)
+                        logging.debug(f"Sibling found (shared, assigned to {os.path.basename(videos[0])}): {sib_path}")
+                    elif owner_stem in cached_stem_to_path:
+                        owner = cached_stem_to_path[owner_stem]
+                        result[owner].append(sib_path)
+                        logging.debug(f"Sibling found: {sib_path} → {os.path.basename(owner)}")
                     else:
-                        unmatched.append(sib_path)
-
-                # Assign unmatched siblings (e.g., generic "poster.jpg") to first video
-                if unmatched:
-                    result[videos[0]].extend(unmatched)
-                    for sib in unmatched:
-                        logging.debug(f"Sibling found (unmatched, assigned to {os.path.basename(videos[0])}): {sib}")
+                        logging.debug(f"Skipping sibling owned by non-cached video '{owner_stem}': {sib_path}")
 
             # TV show root scan: if any video is in a Season-like folder,
             # also discover show-root assets (poster.jpg, fanart.jpg, etc.)
@@ -2960,6 +3005,50 @@ class SiblingFileFinder:
         for subs in grouped.values():
             all_files.extend(subs)
         return all_files
+
+    def _scan_directory(self, directory_path: str) -> Tuple[Set[str], List[str]]:
+        """Scan a directory once, partitioning entries into video stems and siblings.
+
+        Counts *all* physical videos in the directory (including ``.plexcached``
+        backups of previously-cached videos), not just the ones being cached.
+        This lets the caller tell a per-movie folder (one physical video) from a
+        flat/shared folder (many physical videos) and assign sidecars to the
+        right owner.
+
+        Args:
+            directory_path: Directory to scan.
+
+        Returns:
+            (video_stems, sibling_paths) where video_stems is the set of distinct
+            video stems physically present, and sibling_paths are full paths to
+            non-video, non-hidden, non-.plexcached files.
+        """
+        video_stems: Set[str] = set()
+        sibling_paths: List[str] = []
+        try:
+            for entry in os.scandir(directory_path):
+                if not entry.is_file():
+                    continue
+                name = entry.name
+                if name.startswith('.'):
+                    continue
+                if name.endswith(PLEXCACHED_EXTENSION):
+                    # Array backup of a cached file — never a sibling. If it backs
+                    # a video, its stem still counts as a physical video present.
+                    underlying = name[:-len(PLEXCACHED_EXTENSION)]
+                    if is_video_file(underlying):
+                        video_stems.add(os.path.splitext(underlying)[0])
+                    continue
+                if is_video_file(name):
+                    video_stems.add(os.path.splitext(name)[0])
+                else:
+                    sibling_paths.append(entry.path)
+        except PermissionError as e:
+            logging.error(f"Cannot access directory {directory_path}. Permission denied. {type(e).__name__}: {e}")
+        except OSError as e:
+            logging.error(f"Cannot access directory {directory_path}. {type(e).__name__}: {e}")
+
+        return video_stems, sibling_paths
 
     def _find_sibling_files(self, directory_path: str, file: str) -> List[str]:
         """Find all non-video, non-hidden sibling files in a directory.

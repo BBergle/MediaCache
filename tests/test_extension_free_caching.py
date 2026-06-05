@@ -23,6 +23,7 @@ from core.file_operations import (
     WatchlistTracker,
     is_video_file,
     is_directory_level_file,
+    name_matches_video_stem,
     is_season_like_folder,
     _get_file_category,
     find_matching_plexcached,
@@ -240,6 +241,117 @@ class TestSiblingFileFinder:
         assert sub_4k in result[video_4k]
         assert sub_4k not in result[video_1080]
         assert sub_1080 not in result[video_4k]
+
+    def test_flat_folder_does_not_grab_other_movies_subtitles(self, temp_dir):
+        """A flat library folder: caching one movie must not drag in other movies'
+        subtitles (#182). Seeded from the actual issue screenshots."""
+        cached = create_test_file(
+            os.path.join(temp_dir, "Deadwood - The Movie (2019) 1080p.x265rf22FAST.10bit.mp4"), "v"
+        )
+        cached_sub = create_test_file(
+            os.path.join(temp_dir, "Deadwood - The Movie (2019) 1080p.x265rf22FAST.10bit.en.srt"), "s"
+        )
+        # Other movies that physically share the flat folder but are NOT being cached.
+        other_movies = [
+            "The Revenant 2015 1080p BluRay x264 DTS-JYK",
+            "Bombshell.2019.1080p.WEBRip.x264.AAC5.1-[YTS.MX]",
+            "12 Years A Slave 2013 1080p",
+            "The.Last.of.the.Mohicans.DC.1992.1080p.BrRip.x264.YIFY",
+            "Poor.Things.2023.1080p.WEBRip.x265.10bit.AAC5.1-[YTS.MX]",
+        ]
+        other_subs = []
+        for stem in other_movies:
+            create_test_file(os.path.join(temp_dir, stem + ".mkv"), "v")
+            other_subs.append(create_test_file(os.path.join(temp_dir, stem + ".srt"), "s"))
+
+        finder = SiblingFileFinder()
+        result = finder.get_media_siblings_grouped([cached])
+
+        # The cached movie keeps only its own subtitle...
+        assert cached_sub in result[cached]
+        # ...and none of the unrelated movies' subtitles ride along.
+        for sub in other_subs:
+            assert sub not in result[cached]
+
+    def test_flat_folder_subtitles_only_excludes_orphans(self, temp_dir):
+        """Subtitles-only mode in a flat folder: only the cached movie's SRT."""
+        cached = create_test_file(os.path.join(temp_dir, "Toy.Story.1995.PROPER.1080p.BluRay.x265-RARBG.mkv"), "v")
+        cached_sub = create_test_file(os.path.join(temp_dir, "Toy.Story.1995.PROPER.1080p.BluRay.x265-RARBG.srt"), "s")
+        create_test_file(os.path.join(temp_dir, "The.Pianist.2002.1080p.BluRay.H264.AAC-RARBG.mkv"), "v")
+        orphan_sub = create_test_file(os.path.join(temp_dir, "The.Pianist.2002.1080p.BluRay.H264.AAC-RARBG.srt"), "s")
+
+        finder = SiblingFileFinder()
+        result = finder.get_media_subtitles_grouped([cached])
+
+        assert cached_sub in result[cached]
+        assert orphan_sub not in result[cached]
+
+    def test_single_movie_folder_keeps_non_prefixed_subtitle(self, temp_dir):
+        """Standard per-movie folder: a subtitle without the video's quality suffix
+        (e.g. 'English.srt') is still cached — the fix must not regress this."""
+        video = create_test_file(os.path.join(temp_dir, "Movie (2012) [Bluray-1080p].mkv"), "v")
+        bare_sub = create_test_file(os.path.join(temp_dir, "English.srt"), "s")
+        named_sub = create_test_file(os.path.join(temp_dir, "Movie (2012).en.srt"), "s")
+
+        finder = SiblingFileFinder()
+        result = finder.get_media_siblings_grouped([video])
+
+        assert bare_sub in result[video]
+        assert named_sub in result[video]
+
+    def test_flat_folder_counts_plexcached_video_as_owner(self, temp_dir):
+        """A previously-cached movie's .plexcached backup still counts as a physical
+        video, so its subtitle is not grabbed by the movie being cached now."""
+        cached = create_test_file(os.path.join(temp_dir, "Movie A (2020).mkv"), "v")
+        # Movie B's video lives only as an array backup (it was cached earlier).
+        create_test_file(os.path.join(temp_dir, "Movie B (2021).mkv.plexcached"), "v")
+        orphan_sub = create_test_file(os.path.join(temp_dir, "Movie B (2021).en.srt"), "s")
+
+        finder = SiblingFileFinder()
+        result = finder.get_media_siblings_grouped([cached])
+
+        assert orphan_sub not in result[cached]
+
+    def test_flat_folder_orphan_subtitle_is_skipped(self, temp_dir):
+        """In a flat folder, a subtitle that matches no cached video must not be
+        handed to an unrelated movie — even if its own video isn't name-matchable."""
+        cached = create_test_file(os.path.join(temp_dir, "Movie A (2020).mkv"), "v")
+        # A second movie shares the folder, plus a generically-named orphan sub
+        # whose owning video can't be identified by name.
+        create_test_file(os.path.join(temp_dir, "Movie B (2021).mkv"), "v")
+        orphan_sub = create_test_file(os.path.join(temp_dir, "English.srt"), "s")
+
+        finder = SiblingFileFinder()
+        result = finder.get_media_siblings_grouped([cached])
+
+        assert orphan_sub not in result[cached]
+
+    def test_flat_folder_shared_artwork_still_assigned(self, temp_dir):
+        """A non-subtitle shared asset (poster.jpg) with no name match is still
+        assigned to the first cached video, even in a multi-video folder."""
+        cached = create_test_file(os.path.join(temp_dir, "Movie A (2020).mkv"), "v")
+        create_test_file(os.path.join(temp_dir, "Movie B (2021).mkv"), "v")
+        poster = create_test_file(os.path.join(temp_dir, "poster.jpg"), "img")
+
+        finder = SiblingFileFinder()
+        result = finder.get_media_siblings_grouped([cached])
+
+        assert poster in result[cached]
+
+
+class TestNameMatchesVideoStem:
+    def test_exact_stem_with_extension(self):
+        assert name_matches_video_stem("Movie (2012).en.srt", "Movie (2012)")
+
+    def test_dash_separated_sidecar(self):
+        assert name_matches_video_stem("Movie - [1080P]-FGT-fanart.jpg", "Movie - [1080P]-FGT")
+
+    def test_rejects_alphanumeric_boundary(self):
+        # "Movie 10..." must not match the stem "Movie 1" (#96-style collision).
+        assert not name_matches_video_stem("Movie 10.en.srt", "Movie 1")
+
+    def test_non_matching_prefix(self):
+        assert not name_matches_video_stem("The Revenant 2015.srt", "Deadwood - The Movie (2019)")
 
 
 # ============================================================
