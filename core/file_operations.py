@@ -49,16 +49,20 @@ MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | SUBTITLE_EXTENSIONS
 ARTICLE_SUFFIX_RE = re.compile(r'^(.*?),\s+(The|A|An)(\s*\(\d{4}\))?\s*$', re.IGNORECASE)
 
 
-def save_json_atomically(filepath: str, data, label: str = "data") -> None:
+def save_json_atomically(filepath: str, data, label: str = "data") -> bool:
     """Save JSON data to file atomically (write-to-temp-then-rename).
 
     Creates a temp file in the same directory, writes data, then atomically
-    replaces the target file. This prevents corruption from interrupted writes.
+    replaces the target file. This prevents corruption from interrupted writes
+    and ensures concurrent readers never observe a truncated/partial file.
 
     Args:
         filepath: Target file path.
         data: JSON-serializable data to write.
         label: Human-readable label for error messages.
+
+    Returns:
+        True if the file was written and replaced successfully, False otherwise.
     """
     try:
         dir_name = os.path.dirname(filepath) or '.'
@@ -73,8 +77,10 @@ def save_json_atomically(filepath: str, data, label: str = "data") -> None:
             except OSError:
                 pass
             raise
+        return True
     except IOError as e:
         logging.error(f"Could not save {label} file: {type(e).__name__}: {e}")
+        return False
 
 
 def is_subtitle_file(filepath: str) -> bool:

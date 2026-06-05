@@ -124,8 +124,18 @@ class FileActivity:
     run_id: Optional[str] = None
     run_source: str = "legacy"  # "scheduled" | "web" | "cli" | "maintenance" | "legacy"
 
-    def to_dict(self) -> dict:
-        fmt = get_time_format()
+    def to_dict(self, time_format: Optional[str] = None) -> dict:
+        """Serialize for the dashboard/API.
+
+        Args:
+            time_format: "12h" or "24h". When None, read once from settings.
+                When serializing a LIST, the caller should read the format once
+                and pass it to every entry. Calling get_time_format() per entry
+                re-reads the settings file each time, so a concurrent settings
+                write can make one entry fall back to the "24h" default and drop
+                its AM/PM suffix while its siblings keep theirs.
+        """
+        fmt = time_format or get_time_format()
         if fmt == "12h":
             time_display = self.timestamp.strftime("%-I:%M:%S %p")
         else:

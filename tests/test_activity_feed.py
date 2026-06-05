@@ -471,3 +471,33 @@ class TestLastRunSummaryAtomicWrite:
         keyword = call_args[1]
         label = keyword.get("label") if "label" in keyword else (positional[2] if len(positional) > 2 else None)
         assert label == "run summaries", f"Expected label 'run summaries', got {label!r}"
+
+
+# ============================================================================
+# save_json_atomically success/failure reporting
+# ============================================================================
+
+class TestSaveJsonAtomicallyReturn:
+    """save_json_atomically() must report success so callers (e.g. the settings
+    writer) can preserve their bool contract."""
+
+    def test_returns_true_on_success(self, tmp_path):
+        from core.file_operations import save_json_atomically
+
+        target = tmp_path / "out.json"
+        ok = save_json_atomically(str(target), {"a": 1}, label="test")
+
+        assert ok is True
+        assert json.loads(target.read_text()) == {"a": 1}
+
+    def test_returns_false_on_write_failure(self, tmp_path):
+        from core.file_operations import save_json_atomically
+
+        target = tmp_path / "out.json"
+        # Simulate a disk/IO failure during the atomic replace.
+        with patch('core.file_operations.os.replace', side_effect=IOError("disk full")):
+            ok = save_json_atomically(str(target), {"a": 1}, label="test")
+
+        assert ok is False
+        # Original target must not be left in a partial state (temp is cleaned up).
+        assert not target.exists()
