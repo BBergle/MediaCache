@@ -689,7 +689,12 @@ class OperationRunner:
         Reloads from disk to include entries written by MaintenanceRunner.
         """
         activities = load_activity()
-        return [a.to_dict() for a in activities]
+        # Read the time format ONCE for the whole render. Calling get_time_format()
+        # inside each to_dict() re-reads the settings file per entry, so a concurrent
+        # settings write could make one row fall back to the 24h default and drop its
+        # AM/PM while its siblings keep theirs.
+        time_format = get_time_format()
+        return [a.to_dict(time_format=time_format) for a in activities]
 
     def _parse_size(self, size_str: str) -> int:
         """Parse a size string like '1.5 GB' into bytes."""

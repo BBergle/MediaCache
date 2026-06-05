@@ -70,6 +70,37 @@ class TestFileActivity:
 
         assert "PM" in d['time_display']
 
+    def test_to_dict_explicit_time_format_skips_settings_read(self):
+        """Passing time_format must override settings and not read them.
+
+        Guards the render-consistency fix: when serializing a list, the caller
+        reads the format once and passes it, so a concurrent settings write
+        can't make one entry fall back to the 24h default mid-render.
+        """
+        fa = FileActivity(
+            timestamp=datetime(2026, 1, 15, 14, 30, 5),
+            action="Cached",
+            filename="movie.mkv",
+        )
+        with patch('core.activity.get_time_format') as mock_get_fmt:
+            d = fa.to_dict(time_format='24h')
+
+        mock_get_fmt.assert_not_called()
+        assert d['time_display'] == "14:30:05"
+
+    @pytest.mark.skipif(sys.platform == 'win32', reason="%-I strftime is Linux-only")
+    def test_to_dict_explicit_12h_overrides_24h_settings(self):
+        """An explicit 12h arg wins even when settings say 24h."""
+        fa = FileActivity(
+            timestamp=datetime(2026, 1, 15, 14, 30, 5),
+            action="Cached",
+            filename="movie.mkv",
+        )
+        with patch('core.activity.get_time_format', return_value='24h'):
+            d = fa.to_dict(time_format='12h')
+
+        assert "PM" in d['time_display']
+
     def test_zero_size_dash_display(self):
         with patch('core.activity.get_time_format', return_value='24h'):
             fa = FileActivity(

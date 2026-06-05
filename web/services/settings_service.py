@@ -97,10 +97,17 @@ class SettingsService:
             return {}
 
     def _save_raw(self, settings: Dict[str, Any]) -> bool:
-        """Save raw settings to file"""
+        """Save raw settings to file atomically (write-temp-then-replace).
+
+        An in-place truncating write (open 'w') lets concurrent readers — e.g.
+        get_time_format() during a dashboard render — observe an empty/partial
+        file and silently fall back to defaults. The atomic replace prevents
+        that: readers always see either the old or the new complete file.
+        """
+        from core.file_operations import save_json_atomically
         try:
-            with open(self.settings_file, 'w', encoding='utf-8') as f:
-                json.dump(settings, f, indent=2)
+            if not save_json_atomically(str(self.settings_file), settings, label="settings"):
+                return False
             # Restrict permissions — settings contain secrets (Plex token, password hashes)
             try:
                 os.chmod(self.settings_file, 0o600)
@@ -108,7 +115,7 @@ class SettingsService:
                 pass  # Non-fatal (Windows, Docker with different uid)
             self._cached_settings = None  # Invalidate cache
             return True
-        except IOError:
+        except (IOError, OSError):
             return False
 
     def _sanitize_path(self, path: Optional[str]) -> Optional[str]:
