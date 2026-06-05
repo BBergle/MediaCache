@@ -200,21 +200,37 @@ class MaintenanceService:
         self._cache_dirs: List[str] = []
         self._array_dirs: List[str] = []
         self._settings: Dict = {}
+        self._settings_mtime: Optional[float] = None
 
     def _load_settings(self) -> Dict:
-        """Load settings from plexcache_settings.json"""
-        if self._settings:
+        """Load settings from plexcache_settings.json.
+
+        Reloads automatically when the file's modification time changes so this
+        long-lived singleton never serves a stale snapshot. Previously the first
+        load was memoized for the life of the web process; if settings were
+        edited afterwards (e.g. path mappings gaining a cache_path) the audit
+        kept scanning the old/empty cache path and flagged every tracked file as
+        stale until a container restart. See StudioNirin/PlexCache-D#176.
+        """
+        try:
+            mtime = self.settings_file.stat().st_mtime
+        except OSError:
+            # File missing or unreadable — keep serving the last good snapshot.
             return self._settings
 
-        if not self.settings_file.exists():
-            return {}
+        if self._settings and mtime == self._settings_mtime:
+            return self._settings
 
         try:
             with open(self.settings_file, 'r', encoding='utf-8') as f:
                 self._settings = json.load(f)
+            self._settings_mtime = mtime
+            # Settings changed on disk — paths derived in _get_paths() are stale.
+            self._cache_dirs = []
+            self._array_dirs = []
             return self._settings
         except (json.JSONDecodeError, IOError):
-            return {}
+            return self._settings
 
     def _translate_host_to_container_path(self, path: str) -> str:
         """Translate host cache path to container path."""
@@ -257,10 +273,13 @@ class MaintenanceService:
 
     def _get_paths(self) -> tuple:
         """Get cache and array directory paths from settings"""
+        # Load settings first: _load_settings() clears the cached dirs below when
+        # the file changes, so this short-circuit can't return stale paths for
+        # the life of the singleton (StudioNirin/PlexCache-D#176).
+        settings = self._load_settings()
         if self._cache_dirs and self._array_dirs:
             return self._cache_dirs, self._array_dirs
 
-        settings = self._load_settings()
         cache_dirs = []
         array_dirs = []
 
