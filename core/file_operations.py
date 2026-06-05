@@ -16,7 +16,7 @@ from typing import List, Set, Optional, Tuple, Dict, TYPE_CHECKING, Callable
 import re
 
 from core.logging_config import get_console_lock
-from core.system_utils import resolve_user0_to_disk, get_disk_free_space_bytes, get_disk_number_from_path, get_array_direct_path, format_bytes
+from core.system_utils import resolve_user0_to_disk, get_disk_free_space_bytes, get_disk_number_from_path, get_array_direct_path, format_bytes, create_dir_with_ownership
 
 if TYPE_CHECKING:
     from core.config import PathMapping
@@ -2364,10 +2364,10 @@ class PlexcachedMigration:
                 self._active_files[thread_id] = (filename, file_size)
                 self._print_progress()
 
-            # Ensure directory exists
+            # Ensure directory exists with PUID/PGID ownership (running as root,
+            # a raw makedirs would leave new array folders root:root).
             array_dir = os.path.dirname(plexcached_file)
-            if not os.path.exists(array_dir):
-                os.makedirs(array_dir, exist_ok=True)
+            create_dir_with_ownership(array_dir, cache_file)
 
             # Copy cache file to array as .plexcached (preserving ownership on Linux)
             if self.is_unraid:
@@ -3109,7 +3109,7 @@ class FileFilter:
                 os.remove(symlink_path)
             parent_dir = os.path.dirname(symlink_path)
             if parent_dir and not os.path.isdir(parent_dir):
-                os.makedirs(parent_dir, exist_ok=True)
+                create_dir_with_ownership(parent_dir, target_path)
             os.symlink(target_path, symlink_path)
             logging.debug(f"Created symlink: {symlink_path} -> {target_path}")
             return True
@@ -5342,7 +5342,10 @@ class FileMover:
                     display_src = self._translate_to_host_path(cache_file) if self.file_utils.is_docker else None
                     array_direct_file = get_array_direct_path(array_file)
                     array_direct_dir = os.path.dirname(array_direct_file)
-                    os.makedirs(array_direct_dir, exist_ok=True)
+                    # Create with PUID/PGID ownership — running as root, a raw
+                    # makedirs would leave new array folders root:root and block
+                    # Sonarr/Radarr from writing into them.
+                    self.file_utils.create_directory_with_permissions(array_direct_dir, cache_file)
 
                     def combined_stop_check():
                         if self._stop_requested:
@@ -5373,7 +5376,9 @@ class FileMover:
                 # CRITICAL: Copy to /mnt/user0/ (array direct), NOT /mnt/user/ (FUSE)
                 array_direct_file = get_array_direct_path(array_file)
                 array_direct_dir = os.path.dirname(array_direct_file)
-                os.makedirs(array_direct_dir, exist_ok=True)
+                # Create with PUID/PGID ownership (see note above) so new array
+                # folders aren't left root:root when running as root.
+                self.file_utils.create_directory_with_permissions(array_direct_dir, cache_file)
 
                 def combined_stop_check():
                     if self._stop_requested:
@@ -5530,7 +5535,7 @@ class FileMover:
             # Ensure parent directory exists
             parent_dir = os.path.dirname(symlink_path)
             if parent_dir and not os.path.isdir(parent_dir):
-                os.makedirs(parent_dir, exist_ok=True)
+                create_dir_with_ownership(parent_dir, target_path)
 
             os.symlink(target_path, symlink_path)
             logging.debug(f"Created symlink: {symlink_path} -> {target_path}")

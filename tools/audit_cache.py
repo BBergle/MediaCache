@@ -17,7 +17,7 @@ PROJECT_ROOT_INIT = os.path.dirname(SCRIPT_DIR_INIT) if os.path.basename(SCRIPT_
 if PROJECT_ROOT_INIT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT_INIT)
 
-from core.system_utils import get_array_direct_path
+from core.system_utils import get_array_direct_path, create_dir_with_ownership
 from core.file_operations import VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS, MEDIA_EXTENSIONS
 
 # Get script directory and resolve project root
@@ -426,8 +426,9 @@ def sync_to_array(dry_run=True):
             print(f"    -> {array_path}")
         else:
             try:
-                # Create destination directory if needed
-                os.makedirs(array_dir, exist_ok=True)
+                # Create destination directory if needed (honor PUID/PGID so new
+                # array folders aren't left root:root)
+                create_dir_with_ownership(array_dir, cache_path)
 
                 # Use rsync to copy file (preserves permissions, shows progress)
                 cmd = ['rsync', '-avh', '--progress', cache_path, array_path]
