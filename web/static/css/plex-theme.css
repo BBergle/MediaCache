@@ -2824,12 +2824,6 @@ footer .version {
     th, td {
         padding: 0.625rem 0.75rem;
     }
-
-    /* Hide checkbox column on mobile for better spacing */
-    table th:first-child,
-    table td:first-child {
-        display: none;
-    }
 }
 
 /* Desktop theme toggle position */
