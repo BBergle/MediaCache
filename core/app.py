@@ -190,6 +190,19 @@ class PlexCacheApp:
             # Set debug mode early so all debug messages show
             self._set_debug_mode()
 
+            # Pin a stable Plex device identity before any Plex connection so the
+            # server sees one known "PlexCache-D" device instead of re-flagging it
+            # as new on each run/container recreation (issue #190).
+            try:
+                from core.plex_api import ensure_plex_client_identity, PLEXCACHE_CLIENT_ID_KEY
+                client_id = ensure_plex_client_identity(str(self.config_file))
+                if client_id:
+                    # Keep the in-memory config in sync so a later config save
+                    # (e.g. new-user discovery) doesn't drop the persisted id.
+                    self.config_manager.settings_data[PLEXCACHE_CLIENT_ID_KEY] = client_id
+            except Exception as e:
+                logging.warning(f"Could not set stable Plex client identity (non-fatal): {e}")
+
             # Log startup diagnostics after log level is configured
             if self.verbose:
                 self._log_startup_diagnostics()

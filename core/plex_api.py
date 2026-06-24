@@ -25,6 +25,89 @@ from plexapi.exceptions import NotFound
 import requests
 
 
+# Stable Plex device identity (shared with the OAuth flow in core/setup.py).
+PLEXCACHE_CLIENT_ID_KEY = 'plexcache_client_id'
+PLEXCACHE_PRODUCT_NAME = 'PlexCache-D'
+
+
+def apply_plex_client_identity(client_id: str) -> None:
+    """Make every plexapi connection present a stable PlexCache-D device identity.
+
+    By default plexapi derives ``X-Plex-Client-Identifier`` from the host's MAC
+    (``hex(uuid.getnode())``) and the device name from the container hostname.
+    When that value isn't recognized — a recreated container with a new MAC, or
+    after Plex ages the headless device out — Plex registers PlexCache as a brand
+    new device and fires a "New Device" security notification (issue #190).
+
+    Reusing the already-persisted ``plexcache_client_id`` (the same id minted for
+    the OAuth login) pins the identifier across container recreations and runs, so
+    Plex consistently sees one known device. Sets the product/name/version too so
+    the device reads "PlexCache-D" at the app's own version instead of "PlexAPI"
+    at the plexapi library version.
+
+    Must be called before any ``PlexServer``/``MyPlexAccount`` is constructed.
+    """
+    import plexapi
+    from core import __version__ as version
+
+    plexapi.X_PLEX_IDENTIFIER = client_id
+    plexapi.X_PLEX_PRODUCT = PLEXCACHE_PRODUCT_NAME
+    plexapi.X_PLEX_DEVICE_NAME = PLEXCACHE_PRODUCT_NAME
+    plexapi.X_PLEX_VERSION = version
+
+    # reset_base_headers() rebuilds from the X_PLEX_* globals and returns a fresh
+    # dict. Mutate the existing BASE_HEADERS in place rather than reassigning, so
+    # modules that bound it via ``from plexapi import BASE_HEADERS`` see the change.
+    new_headers = plexapi.reset_base_headers()
+    plexapi.BASE_HEADERS.clear()
+    plexapi.BASE_HEADERS.update(new_headers)
+    logging.debug(
+        f"Plex client identity set: id={client_id} "
+        f"product={PLEXCACHE_PRODUCT_NAME} version={version}"
+    )
+
+
+def ensure_plex_client_identity(settings_file: str) -> Optional[str]:
+    """Load (or create and persist) the stable client id, then apply it to plexapi.
+
+    Reads ``plexcache_client_id`` directly from the settings file so the on-disk
+    value is preserved verbatim and only the missing key is added (a one-time
+    write for installs configured by manual token rather than OAuth). The identity
+    is applied to plexapi even if persistence fails, so a run is never blocked.
+
+    Returns the client id that was applied, or ``None`` when there are no usable
+    settings to pin against (no Plex connections happen in that state anyway):
+      - the settings file does not exist yet (pre-setup), or
+      - the settings file exists but cannot be parsed — in which case the file is
+        left untouched rather than clobbered with a stub.
+    """
+    if not os.path.exists(settings_file):
+        return None
+
+    try:
+        with open(settings_file, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+    except (json.JSONDecodeError, IOError, OSError) as e:
+        logging.warning(f"Could not read settings for Plex client identity: {e}")
+        return None
+    if not isinstance(raw, dict):
+        return None
+
+    client_id = raw.get(PLEXCACHE_CLIENT_ID_KEY)
+    if not client_id:
+        import uuid
+        client_id = str(uuid.uuid4())
+        raw[PLEXCACHE_CLIENT_ID_KEY] = client_id
+        try:
+            from core.file_operations import save_json_atomically
+            save_json_atomically(settings_file, raw, label="settings")
+        except Exception as e:
+            logging.warning(f"Could not persist {PLEXCACHE_CLIENT_ID_KEY}: {e}")
+
+    apply_plex_client_identity(client_id)
+    return client_id
+
+
 @dataclass
 class OnDeckItem:
     """Represents an OnDeck item with metadata.
