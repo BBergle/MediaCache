@@ -125,6 +125,15 @@ async def lifespan(app: FastAPI):
     (STATIC_DIR / "css").mkdir(exist_ok=True)
     (STATIC_DIR / "js").mkdir(exist_ok=True)
 
+    # Pin a stable Plex device identity before any Plex connection so the server
+    # sees one known "PlexCache-D" device instead of re-flagging it as new on
+    # each run/container recreation (issue #190).
+    try:
+        from core.plex_api import ensure_plex_client_identity
+        ensure_plex_client_identity(str(SETTINGS_FILE))
+    except Exception as e:
+        logging.warning("Could not set stable Plex client identity (non-fatal): %s", e)
+
     # Prefetch Plex data in background (libraries, users)
     # This prevents lag on first Settings page load
     settings_service = get_settings_service()
