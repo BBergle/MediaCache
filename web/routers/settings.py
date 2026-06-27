@@ -706,8 +706,15 @@ async def update_library_paths(request: Request, section_id: int):
         if m.get("section_id") == section_id
     ]
 
-    # Parse form fields — each mapping's fields are suffixed with its position
+    # Parse form fields — each mapping's fields are suffixed with its position.
+    # A mapping flagged delete_<pos>=1 is dropped (removed from the list) instead
+    # of updated, so secondary mappings can be deleted from the UI.
+    indices_to_delete = []
     for pos, idx in enumerate(lib_indices):
+        if form.get(f"delete_{pos}") == "1":
+            indices_to_delete.append(idx)
+            continue
+
         name = form.get(f"name_{pos}", "")
         plex_path = form.get(f"plex_path_{pos}", "")
         real_path = form.get(f"real_path_{pos}", "")
@@ -729,6 +736,10 @@ async def update_library_paths(request: Request, section_id: int):
             "section_id": existing.get("section_id"),
             # Clear auto_fill flag — user has reviewed paths
         })
+
+    # Remove deleted mappings (highest index first so earlier indices stay valid).
+    for idx in sorted(indices_to_delete, reverse=True):
+        del all_mappings[idx]
 
     raw["path_mappings"] = all_mappings
     settings_service._rebuild_valid_sections(raw)

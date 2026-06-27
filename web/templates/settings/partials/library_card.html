@@ -86,7 +86,18 @@
                           hx-swap="outerHTML">
                     {% for mapping in card.mappings %}
                     {% set unrecognized = mapping.auto_fill_recognized is defined and not mapping.auto_fill_recognized %}
-                    <div style="padding: 0.75rem; background: var(--plex-bg-darker); border: 1px solid {% if unrecognized %}var(--plex-warning, #e67e22){% else %}var(--plex-orange){% endif %}; border-radius: var(--plex-radius-sm); margin-bottom: 0.5rem;">
+                    <div id="lib-edit-map-{{ card.library.id }}-{{ loop.index0 }}"
+                         style="padding: 0.75rem; background: var(--plex-bg-darker); border: 1px solid {% if unrecognized %}var(--plex-warning, #e67e22){% else %}var(--plex-orange){% endif %}; border-radius: var(--plex-radius-sm); margin-bottom: 0.5rem;">
+                            <input type="hidden" name="delete_{{ loop.index0 }}" value="" id="lib-del-{{ card.library.id }}-{{ loop.index0 }}">
+                            {% if card.mappings|length > 1 %}
+                            <div class="flex items-center justify-between mb-1">
+                                <strong style="font-size: 0.9rem;">{{ mapping.name }}</strong>
+                                <button type="button" class="btn btn-sm btn-danger"
+                                        onclick="removeLibraryMapping({{ card.library.id }}, {{ loop.index0 }}, '{{ mapping.name|replace("'", "") }}')">
+                                    <i data-lucide="trash-2" style="width: 13px; height: 13px;"></i> Remove
+                                </button>
+                            </div>
+                            {% endif %}
                             {% if unrecognized %}
                             <div style="margin-bottom: 0.5rem; padding: 0.35rem 0.5rem; background: rgba(230, 126, 34, 0.1); border-radius: var(--plex-radius-sm); font-size: 0.8rem; color: var(--plex-warning, #e67e22);">
                                 <i data-lucide="alert-triangle" style="width: 13px; height: 13px; vertical-align: middle;"></i>
