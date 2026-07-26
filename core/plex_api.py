@@ -301,7 +301,7 @@ class PlexManager:
 
     def __init__(self, plex_url: str, plex_token: str, retry_limit: int = 3, delay: int = 5,
                  token_cache_file: Optional[str] = None, rss_cache_file: Optional[str] = None,
-                 plex_db_path: str = ""):
+                 plex_db_path: str = "", watchlist_enabled: bool = True):
         self.plex_url = plex_url
         self.plex_token = plex_token
         self.retry_limit = retry_limit
@@ -310,6 +310,7 @@ class PlexManager:
         self._token_cache = UserTokenCache(cache_file=token_cache_file, cache_expiry_hours=24)
         self._rss_cache_file = rss_cache_file  # Path to RSS cache file
         self._plex_db_path = plex_db_path  # Path to Plex SQLite DB (fallback for tokenless shared users)
+        self.watchlist_enabled = watchlist_enabled  # Controls watchlist-specific warnings on plex.tv failure
         self._user_tokens: Dict[str, str] = {}  # username -> token (populated at startup)
         self._token_lock = threading.Lock()  # Protects _user_tokens dict access
         self._user_id_to_name: Dict[str, str] = {}  # user_id (str) -> username (for RSS author lookup)
@@ -418,7 +419,13 @@ class PlexManager:
         """
         try:
             self._rate_limited_api_call()
-            account = self.plex.myPlexAccount()
+            # Retry transient network errors (DNS blips, connection resets). This is
+            # the first plex.tv call of a run, and a single failure here previously
+            # marked plex.tv unreachable for the whole run.
+            account = _retry_plextv_call(
+                lambda: self.plex.myPlexAccount(),
+                "main account lookup"
+            )
             actual_main_username = account.title
 
             # Update main account token with actual username from plex.tv
@@ -432,9 +439,13 @@ class PlexManager:
         except Exception as e:
             _log_api_error("load user tokens", e)
             self._plex_tv_reachable = False
-            self._watchlist_data_complete = False
             logging.warning("[PLEX API] plex.tv unreachable - using cached user data only")
-            logging.warning("[PLEX API] Watchlist data will be incomplete - array restore will be skipped")
+            # Only a watchlist run depends on plex.tv data being complete. With
+            # watchlist disabled there is nothing incomplete to guard against, so
+            # don't flag it and don't block array restore.
+            if self.watchlist_enabled:
+                self._watchlist_data_complete = False
+                logging.warning("[PLEX API] Watchlist data will be incomplete - array restore will be skipped")
             return None
 
     def _discover_new_users(self, account: 'MyPlexAccount', settings_usernames: Set[str],
