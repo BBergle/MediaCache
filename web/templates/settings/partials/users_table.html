@@ -34,7 +34,7 @@
                 </span>
                 <span class="user-col-group">
                     <span class="toggle-col">
-                        <label class="toggle-switch">
+                        <label class="toggle-switch" {% if user.is_admin %}title="The admin account is always included as an OnDeck source"{% endif %}>
                             <input type="checkbox" name="include_ondeck_{{ user.title }}" value="on"
                                    {% if not user.skip_ondeck %}checked{% endif %}
                                    {% if user.is_admin %}disabled checked{% endif %}>
@@ -42,7 +42,7 @@
                         </label>
                     </span>
                     <span class="toggle-col" style="position: relative;">
-                        <label class="toggle-switch" {% if not user.is_local %}title="Remote users use RSS feed"{% endif %}>
+                        <label class="toggle-switch" {% if user.is_admin %}title="The admin account is always included. To turn watchlist caching off for everyone, use Settings &gt; Cache &gt; Enable Watchlist Caching"{% elif not user.is_local %}title="Remote users use RSS feed"{% endif %}>
                             <input type="checkbox" name="include_watchlist_{{ user.title }}" value="on"
                                    {% if not user.skip_watchlist %}checked{% endif %}
                                    {% if user.is_admin %}disabled checked{% endif %}>
@@ -109,7 +109,7 @@
         {% endfor %}
     </div>
 </div>
-<div class="form-hint mt-1">Toggle sources OFF to exclude a user from caching. Monitoring overrides replace the global OnDeck/Watchlist days for that user (leave blank for global default).</div>
+<div class="form-hint mt-1">Toggle sources OFF to exclude a user from caching. Monitoring overrides replace the global OnDeck/Watchlist days for that user (leave blank for global default). The admin account's toggles are locked on &mdash; to disable watchlist caching for everyone, use <a href="/settings/cache#setting-watchlist_toggle">Settings &rsaquo; Cache &rsaquo; Enable Watchlist Caching</a>.</div>
 {% else %}
 <div class="no-libraries">
     <i data-lucide="users"></i>
