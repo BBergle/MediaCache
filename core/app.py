@@ -536,7 +536,8 @@ class PlexCacheApp:
             delay=self.config_manager.performance.delay,
             token_cache_file=token_cache_file,
             rss_cache_file=rss_cache_file,
-            plex_db_path=self.config_manager.plex.plex_db_path
+            plex_db_path=self.config_manager.plex.plex_db_path,
+            watchlist_enabled=self.config_manager.cache.watchlist_toggle
         )
 
     def _init_path_modifier(self) -> None:
@@ -1242,12 +1243,16 @@ class PlexCacheApp:
 
         # Check for files that should be moved back to array (no longer needed in cache)
         # Only check if watched_move is enabled - otherwise files stay on cache indefinitely
-        # Skip if OnDeck or watchlist data is incomplete to prevent accidental moves
+        # Skip if OnDeck or watchlist data is incomplete to prevent accidental moves.
+        # The watchlist guard only applies when watchlist caching is enabled - with it
+        # off, no cached file is held by the watchlist, so incomplete plex.tv data
+        # can't cause a wrong move.
         if self.config_manager.cache.watched_move:
             if not self.plex_manager.is_ondeck_data_complete():
                 logging.warning("Skipping array restore - OnDeck data incomplete (Plex server unreachable)")
                 logging.warning("Files will remain on cache until next successful run")
-            elif not self.plex_manager.is_watchlist_data_complete():
+            elif (self.config_manager.cache.watchlist_toggle
+                    and not self.plex_manager.is_watchlist_data_complete()):
                 logging.warning("Skipping array restore - watchlist data incomplete (plex.tv unreachable)")
                 logging.warning("Files will remain on cache until next successful run")
             else:
