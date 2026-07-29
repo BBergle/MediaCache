@@ -15,6 +15,7 @@ from email.utils import parsedate_to_datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Generator, Tuple, Dict, Set
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from plexapi.server import PlexServer
 
@@ -131,6 +132,53 @@ PLEX_API_DELAY = 1.0
 # RSS feed retry and cache settings
 RSS_MAX_RETRIES = 3
 RSS_TIMEOUT = 15  # seconds
+
+# Age at which cached RSS data stops being treated as fresh. The cache is a
+# safety net for a brief plex.tv hiccup, not a substitute for the feed - past
+# this the user is told their remote watchlist data is going stale.
+RSS_CACHE_STALE_HOURS = 24
+
+# Hosts we're willing to attach X-Plex-Token to. remote_watchlist_rss_url is
+# user-supplied, so the token must never ride along to an arbitrary domain.
+_PLEX_TOKEN_HOSTS = ("plex.tv", "plex.direct")
+
+# Plex serves watchlist RSS from rss.plex.tv/<uuid>. In July 2026 that host
+# started returning 401 without a token and 404 with one, while the same feed
+# stayed reachable via discover.provider.plex.tv/rss/<uuid> (which 302s to a
+# presigned S3 object). Plex's own UI still hands out rss.plex.tv URLs, so we
+# keep using the configured URL and only fall back when it refuses us.
+_RSS_PRIMARY_HOST = "rss.plex.tv"
+_RSS_FALLBACK_TEMPLATE = "https://discover.provider.plex.tv/rss/{feed_id}"
+
+# Status codes that mean "this URL will not work" rather than "try again".
+_RSS_NO_RETRY_STATUS = (401, 403, 404)
+
+
+def _should_send_plex_token(url: str) -> bool:
+    """True if `url` points at a Plex-controlled host that may receive the token."""
+    try:
+        hostname = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return any(hostname == h or hostname.endswith("." + h) for h in _PLEX_TOKEN_HOSTS)
+
+
+def _derive_rss_fallback_url(url: str) -> Optional[str]:
+    """Map a legacy rss.plex.tv feed URL to its discover.provider equivalent.
+
+    Returns None when `url` isn't an rss.plex.tv feed URL, so a custom or
+    already-migrated URL is never rewritten.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    if (parsed.hostname or "").lower() != _RSS_PRIMARY_HOST:
+        return None
+    feed_id = parsed.path.strip("/")
+    if not feed_id or "/" in feed_id:
+        return None
+    return _RSS_FALLBACK_TEMPLATE.format(feed_id=feed_id)
 
 # plex.tv API retry settings for transient network errors
 PLEXTV_MAX_RETRIES = 3
@@ -1193,43 +1241,111 @@ class PlexManager:
                 cache_time = datetime.fromisoformat(cache_data['timestamp'])
                 cache_age = datetime.now() - cache_time
                 cache_age_hours = cache_age.total_seconds() / 3600
-                logging.warning(f"Using cached RSS data ({len(items)} items, {cache_age_hours:.1f} hours old)")
+                if cache_age_hours >= RSS_CACHE_STALE_HOURS:
+                    # Still returned - stale data beats losing every remote
+                    # watchlist item - but the user needs to know it's stale.
+                    logging.warning(
+                        f"Using cached RSS data ({len(items)} items) but it is "
+                        f"{cache_age_hours:.1f} hours old - the Plex RSS feed has been "
+                        f"unreachable for over {RSS_CACHE_STALE_HOURS}h. Remote watchlist "
+                        f"changes are not being picked up; check the feed URL in Settings."
+                    )
+                else:
+                    logging.info(f"Using cached RSS data ({len(items)} items, {cache_age_hours:.1f} hours old)")
                 return items
         except Exception as e:
             logging.debug(f"Failed to load RSS cache: {e}")
         return []
 
+    def _request_rss(self, url: str) -> str:
+        """GET an RSS feed, adding the Plex token only for Plex-controlled hosts.
+
+        Plex redirects feed requests to a presigned S3 object. The redirect is
+        followed manually so the token isn't forwarded to the storage host,
+        which carries its own signed credentials.
+
+        Raises:
+            requests.HTTPError / requests.RequestException on failure.
+        """
+        headers = {}
+        if _should_send_plex_token(url) and self.plex_token:
+            headers["X-Plex-Token"] = self.plex_token
+
+        resp = requests.get(url, timeout=RSS_TIMEOUT, headers=headers, allow_redirects=False)
+
+        if resp.is_redirect or resp.is_permanent_redirect:
+            location = resp.headers.get("Location")
+            if location:
+                # No Plex headers here - the presigned URL authenticates itself.
+                resp = requests.get(location, timeout=RSS_TIMEOUT, allow_redirects=True)
+
+        resp.raise_for_status()
+        return resp.text
+
+    def _fetch_rss_from(self, url: str, label: str) -> Optional[List[Tuple[str, str, Optional[datetime], str, str]]]:
+        """Try one RSS URL, retrying only transient failures.
+
+        Returns parsed items, or None if the URL is unusable. Auth/not-found
+        responses return immediately - retrying them just burns time on a
+        deterministic answer.
+        """
+        for attempt in range(RSS_MAX_RETRIES):
+            try:
+                items = self._parse_rss_response(self._request_rss(url))
+                if attempt or label != "primary":
+                    logging.debug(f"RSS fetch succeeded from {label} URL")
+                return items
+            except requests.HTTPError as e:
+                status = e.response.status_code if e.response is not None else None
+                if status in _RSS_NO_RETRY_STATUS:
+                    logging.debug(f"RSS {label} URL returned {status} - not retrying")
+                    return None
+                last_error = e
+            except (requests.RequestException, ET.ParseError) as e:
+                last_error = e
+
+            if attempt < RSS_MAX_RETRIES - 1:
+                wait_time = 2 ** attempt  # 1s, 2s
+                logging.debug(
+                    f"RSS {label} fetch attempt {attempt + 1}/{RSS_MAX_RETRIES} "
+                    f"failed: {last_error}. Retrying in {wait_time}s..."
+                )
+                time.sleep(wait_time)
+
+        logging.debug(f"RSS {label} URL failed after {RSS_MAX_RETRIES} attempts: {last_error}")
+        return None
+
     def _fetch_rss_titles(self, url: str) -> List[Tuple[str, str, Optional[datetime], str, str]]:
         """Fetch titles, categories, pubDate, author ID, and GUID from a Plex RSS feed.
 
-        Retries up to RSS_MAX_RETRIES times with exponential backoff.
-        Falls back to cached data if all retries fail.
+        Tries the configured URL first. If Plex refuses it outright, retries via
+        the discover.provider mirror for the same feed before giving up. Falls
+        back to cached data when neither responds.
 
         Returns list of tuples: (title, category, pub_date, author_id, guid)
         """
-        # Retry loop with exponential backoff
-        last_error = None
-        for attempt in range(RSS_MAX_RETRIES):
-            try:
-                resp = requests.get(url, timeout=RSS_TIMEOUT)
-                resp.raise_for_status()
-                items = self._parse_rss_response(resp.text)
-                self._save_rss_cache(url, items)  # Cache successful result
-                return items
-            except (requests.RequestException, ET.ParseError) as e:
-                last_error = e
-                if attempt < RSS_MAX_RETRIES - 1:
-                    wait_time = 2 ** attempt  # 1s, 2s, 4s
-                    logging.warning(f"RSS fetch attempt {attempt + 1}/{RSS_MAX_RETRIES} failed: {e}. Retrying in {wait_time}s...")
-                    time.sleep(wait_time)
+        items = self._fetch_rss_from(url, "primary")
 
-        # All retries failed - try cache
-        logging.error(f"Failed to fetch RSS feed after {RSS_MAX_RETRIES} attempts: {last_error}")
+        if items is None:
+            fallback_url = _derive_rss_fallback_url(url)
+            if fallback_url:
+                items = self._fetch_rss_from(fallback_url, "fallback")
+                if items is not None:
+                    logging.info(
+                        "RSS: primary feed URL unavailable, served from Plex's "
+                        "discover endpoint instead"
+                    )
+
+        if items is not None:
+            self._save_rss_cache(url, items)
+            return items
+
+        # Neither URL worked - fall back to the last good copy.
         cached_items = self._load_rss_cache()
         if cached_items:
             return cached_items
 
-        logging.error("No cached RSS data available - remote watchlist items will be missing!")
+        logging.error("RSS feed unreachable and no cached data available - remote watchlist items will be missing")
         return []
 
     def _process_watchlist_show(self, file, watchlist_episodes: int, username: str,
