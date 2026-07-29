@@ -28,13 +28,32 @@
             {% if card.mappings %}
                 {% for mapping in card.mappings %}
                 {% set unrecognized = mapping.auto_fill_recognized is defined and not mapping.auto_fill_recognized %}
+                {% set share_warn = share_warning(mapping) %}
                 <div class="library-mapping-view" id="lib-mapping-view-{{ card.library.id }}-{{ loop.index0 }}"
                      style="font-size: 0.85rem; margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; background: var(--plex-bg-darker); border-radius: var(--plex-radius-sm);
-                     {% if unrecognized %}border: 1px solid var(--plex-warning, #e67e22);{% endif %}">
+                     {% if unrecognized or share_warn %}border: 1px solid var(--plex-warning, #e67e22);{% endif %}">
                     {% if unrecognized %}
                     <div style="margin-bottom: 0.5rem; padding: 0.35rem 0.5rem; background: rgba(230, 126, 34, 0.1); border-radius: var(--plex-radius-sm); font-size: 0.8rem; color: var(--plex-warning, #e67e22);">
                         <i data-lucide="alert-triangle" style="width: 13px; height: 13px; vertical-align: middle;"></i>
                         Plex path prefix <code>{{ mapping.plex_path.split('/')[1] }}/</code> is not a recognized Docker mapping &mdash; Real Path and Cache Path likely need manual correction via Edit Paths.
+                    </div>
+                    {% endif %}
+                    {% if share_warn %}
+                    <div class="share-mismatch-warning">
+                        <i data-lucide="alert-triangle" class="share-mismatch-warning__icon"></i>
+                        <div>
+                            <strong>{% if share_warn.kind == 'share_mismatch' %}Cache path is in a different share{% else %}Cache path is not on an Unraid share{% endif %}</strong>
+                            <div class="share-mismatch-warning__body">
+                                {% if share_warn.kind == 'share_mismatch' %}
+                                Media lives in <code>{{ share_warn.real_share }}</code> but the cache path points into <code>{{ share_warn.cache_share }}</code>.
+                                Unraid merges a share's pool and array tiers under the same <code>/mnt/user/</code> path, so caching only works when both are the
+                                <em>same</em> share. As configured, cached files land where Plex isn't looking and show as missing.
+                                {% else %}
+                                <code>{{ share_warn.real_share }}</code> is an Unraid share, but the cache path isn't under <code>/mnt/</code>.
+                                It should be the pool tier of that share, for example <code>/mnt/&lt;pool&gt;/{{ share_warn.real_share }}/...</code>.
+                                {% endif %}
+                            </div>
+                        </div>
                     </div>
                     {% endif %}
                     {% if mapping.name != card.library.title %}

@@ -55,6 +55,116 @@ def resolve_user0_to_disk(user0_path: str) -> Optional[str]:
     return None
 
 
+# ============================================================================
+# Share Alignment Validation
+# ============================================================================
+
+# Unraid mount points that aggregate shares rather than being a share root
+# themselves. Everything else under /mnt/ is treated as a pool name.
+_SHARE_AGGREGATE_MOUNTS = ("user", "user0")
+
+
+def extract_unraid_share(path: str) -> Optional[str]:
+    """Return the Unraid share name a path belongs to, or None if undeterminable.
+
+    Every Unraid path is `/mnt/<mount>/<share>/...` where `<mount>` is `user`,
+    `user0`, `diskN`, or a pool name. The share name is the segment after it.
+
+        /mnt/user/Movies/Action/       -> "Movies"
+        /mnt/user0/data/media/movies/  -> "data"
+        /mnt/disk3/data/media/         -> "data"
+        /mnt/cache_downloads/Movies/   -> "Movies"
+
+    Returns None for paths that aren't under /mnt/ or have no segment past the
+    mount point, so callers can skip validation rather than guess.
+    """
+    if not path:
+        return None
+    normalized = posixpath.normpath(path.strip())
+    if not normalized.startswith("/mnt/"):
+        return None
+    parts = [p for p in normalized[len("/mnt/"):].split("/") if p]
+    if len(parts) < 2:
+        return None  # bare mount point, no share segment
+    return parts[1]
+
+
+def check_cache_share_alignment(
+    real_path: str,
+    cache_path: str,
+    host_cache_path: Optional[str] = None,
+) -> Optional[dict]:
+    """Check that a mapping's cache destination is the same Unraid share as its media.
+
+    Unraid presents a share's pool tier and array tier merged under
+    /mnt/user/<share>/. Caching only works when both tiers belong to the *same*
+    share: a file moves between them and the /mnt/user/ path Plex reads never
+    changes. Point the cache at a different share and the cached copy lands
+    somewhere Plex isn't looking, leaving only the .plexcached stub behind
+    (issues #189, #196).
+
+    The host-side cache path is preferred when set, because under Docker
+    `cache_path` is a container path whose prefix may be remapped.
+
+    Args:
+        real_path: Where the media lives (container path).
+        cache_path: Where cached copies go (container path).
+        host_cache_path: Host-side equivalent of cache_path, when Docker remaps it.
+
+    Returns:
+        None when the paths agree or can't be compared. Otherwise a dict with
+        `kind` ("share_mismatch" or "cache_not_absolute"), the share names
+        involved, and a human-readable `message`.
+    """
+    if not real_path or not cache_path:
+        return None
+
+    effective_cache = (host_cache_path or "").strip() or cache_path
+
+    # Anchor on the media path. If it isn't an Unraid-style share path, this
+    # install doesn't follow the layout these checks reason about — stay quiet
+    # rather than guess. This is advisory and must not cry wolf.
+    real_share = extract_unraid_share(real_path)
+    if not real_share:
+        return None
+
+    # The media is on an Unraid share, so its cache tier has to live under /mnt/
+    # too. A path like "/movies/" is a container-relative fragment: it resolves
+    # to no share, and it also breaks the mover exclude file, which needs real
+    # host paths.
+    if not posixpath.normpath(effective_cache.strip()).startswith("/mnt/"):
+        label = "Host Cache Path" if (host_cache_path or "").strip() else "Cache Path"
+        return {
+            "kind": "cache_not_under_mnt",
+            "real_share": real_share,
+            "cache_share": None,
+            "message": (
+                f"{label} '{effective_cache}' is not under /mnt/. Media is on the "
+                f"'{real_share}' share, so the cache path should be that share's pool "
+                f"tier, for example '/mnt/<pool>/{real_share}/...'."
+            ),
+        }
+
+    cache_share = extract_unraid_share(effective_cache)
+    if not cache_share:
+        return None  # bare mount point, nothing to compare
+
+    if real_share == cache_share:
+        return None
+
+    return {
+        "kind": "share_mismatch",
+        "real_share": real_share,
+        "cache_share": cache_share,
+        "message": (
+            f"Media is in the '{real_share}' share but the cache path points into "
+            f"'{cache_share}'. Cached files would land in a different share than Plex "
+            f"reads from, so they would appear missing. The cache path should be the "
+            f"pool tier of '{real_share}'."
+        ),
+    }
+
+
 # ZFS-backed path prefixes that should NOT be converted to /mnt/user0/.
 # For ZFS pool-only shares (shareUseCache=only), files never appear at /mnt/user0/
 # because that path only shows standard array disks. Using /mnt/user/ is safe for

@@ -1869,3 +1869,44 @@ footer {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+/* ==========================================================================
+   Share Alignment Warning (Libraries tab)
+   Flags a path mapping whose cache destination isn't the same Unraid share as
+   its media — the misconfiguration behind files appearing missing in Plex.
+   ========================================================================== */
+
+.share-mismatch-warning {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+    margin-bottom: 0.5rem;
+    padding: 0.5rem 0.65rem;
+    background: color-mix(in srgb, var(--plex-warning) 12%, transparent);
+    border-left: 3px solid var(--plex-warning);
+    border-radius: var(--plex-radius-sm);
+    font-size: 0.8rem;
+    color: var(--plex-warning);
+}
+
+.share-mismatch-warning__icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+}
+
+.share-mismatch-warning__body {
+    margin-top: 0.2rem;
+    color: var(--plex-text);
+    opacity: 0.85;
+    line-height: 1.45;
+}
+
+.share-mismatch-warning code {
+    padding: 0.05rem 0.3rem;
+    background: color-mix(in srgb, var(--plex-warning) 18%, transparent);
+    border-radius: 3px;
+    color: var(--plex-warning);
+    font-size: 0.95em;
+}
