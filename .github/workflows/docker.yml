@@ -8,6 +8,14 @@ on:
   release:
     types: [published]
 
+# Two merges landing seconds apart each start a build, and whichever finishes
+# last wins the :dev tag — which can leave it pointing at the older commit.
+# Superseding runs on the same ref cancels the stale one so :dev always tracks
+# the newest push. Releases are keyed by their own ref and aren't affected.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -104,8 +112,13 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile
-          push: true
           provenance: false
+          sbom: false
+          # Publish Docker v2 manifests rather than OCI. Unraid's update check
+          # requests only Docker media types, so an OCI-only manifest returns 404
+          # and the container reports "not available" instead of an update status.
+          # provenance: false alone isn't enough — buildx still emits OCI types.
+          outputs: type=image,oci-mediatypes=false,push=true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
