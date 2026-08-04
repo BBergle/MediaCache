@@ -448,6 +448,110 @@ def remove_from_timestamps_file(timestamps_file_path, cache_path: str) -> None:
         logging.warning(f"Could not update timestamps file: {e}")
 
 
+def cleanup_empty_parent_folders(file_path: str, boundary_dir: str) -> int:
+    """Remove folders left empty after a file was moved or deleted.
+
+    This is the canonical implementation — use it everywhere instead of writing
+    another rmdir walk. Implements the File and Folder Management Policy:
+    PlexCache only removes folders it emptied itself, walking up from the
+    removed file's parent and stopping at the first non-empty folder or at
+    `boundary_dir`.
+
+    Args:
+        file_path: Path to the file that was just removed. It does not need to
+            still exist — only its parent chain is inspected.
+        boundary_dir: Directory to stop at (typically the cache root or the
+            mapping's cache_path). Never removed, and nothing above it is
+            touched. A `file_path` outside this boundary is a no-op.
+
+    Returns:
+        Number of folders removed.
+    """
+    if not file_path or not boundary_dir:
+        return 0
+
+    folders_removed = 0
+    current_dir = os.path.dirname(file_path)
+    boundary = os.path.normpath(boundary_dir)
+
+    while current_dir:
+        normalized_current = os.path.normpath(current_dir)
+
+        # Never remove the boundary itself, and never climb above it. The
+        # separator guard stops "/mnt/cache_downloads" from being treated as
+        # living inside "/mnt/cache".
+        if normalized_current == boundary:
+            break
+        if not normalized_current.startswith(boundary.rstrip(os.sep) + os.sep):
+            break
+
+        try:
+            if not os.path.exists(current_dir):
+                break
+
+            if os.listdir(current_dir):
+                logging.debug(f"Folder not empty, stopping cleanup: {current_dir}")
+                break
+
+            os.rmdir(current_dir)
+            logging.debug(f"Removed empty folder (PlexCache cleanup): {current_dir}")
+            folders_removed += 1
+
+            current_dir = os.path.dirname(current_dir)
+
+        except OSError as e:
+            logging.debug(f"Could not remove folder {current_dir}: {type(e).__name__}: {e}")
+            break
+
+    return folders_removed
+
+
+def resolve_cache_boundary(cache_path: str, path_mappings: list, fallback_dir: str = "") -> Optional[str]:
+    """Find the cache root that `cache_path` lives under.
+
+    Empty-folder cleanup must never climb past the cache root it started in, and
+    multi-path setups can spread mappings across separate pools (`/mnt/cache`,
+    `/mnt/ssd_cache`, ...), so a single global cache_dir is not a safe boundary
+    for every file.
+
+    Args:
+        cache_path: The cache file whose boundary is being resolved.
+        path_mappings: Settings path_mappings list (dicts with `cache_path`).
+        fallback_dir: Legacy single cache_dir, used when no mapping matches.
+
+    Returns:
+        The longest matching enabled mapping cache_path, else `fallback_dir` if
+        it contains the file, else None (caller should skip cleanup).
+    """
+    if not cache_path:
+        return None
+
+    normalized = os.path.normpath(cache_path)
+    best = None
+
+    for mapping in path_mappings or []:
+        if not mapping.get('enabled', True):
+            continue
+        prefix = (mapping.get('cache_path') or '').rstrip('/\\')
+        if not prefix:
+            continue
+        normalized_prefix = os.path.normpath(prefix)
+        if normalized.startswith(normalized_prefix.rstrip(os.sep) + os.sep):
+            # Longest match wins so nested mappings pick the deepest root.
+            if best is None or len(normalized_prefix) > len(best):
+                best = normalized_prefix
+
+    if best:
+        return best
+
+    if fallback_dir:
+        normalized_fallback = os.path.normpath(fallback_dir)
+        if normalized.startswith(normalized_fallback.rstrip(os.sep) + os.sep):
+            return normalized_fallback
+
+    return None
+
+
 def get_disk_free_space_bytes(path: str) -> int:
     """Get free space in bytes for the filesystem containing the given path.
 

@@ -26,7 +26,7 @@ except ImportError:
 from core import __version__
 from core.config import ConfigManager
 from core.logging_config import LoggingManager, reset_warning_error_flag
-from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock, get_disk_usage, get_array_direct_path, detect_zfs, set_zfs_prefixes, format_bytes, create_dir_with_ownership
+from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock, get_disk_usage, get_array_direct_path, detect_zfs, set_zfs_prefixes, format_bytes, create_dir_with_ownership, cleanup_empty_parent_folders, resolve_cache_boundary
 from core.plex_api import PlexManager, OnDeckItem
 from core.file_operations import MultiPathModifier, SiblingFileFinder, FileFilter, FileMover, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration, get_media_identity, find_matching_plexcached, is_directory_level_file
 from core.pinned_media import PinnedMediaTracker, resolve_pins_to_paths
@@ -2758,6 +2758,9 @@ class PlexCacheApp:
                         continue
                     os.remove(cache_path)
                     logging.debug(f"Deleted cache file: {os.path.basename(cache_path)}")
+                    # Remove folders this eviction emptied (issue #196) — the
+                    # same policy _move_to_array() follows.
+                    self._cleanup_empty_folders_for(cache_path)
                 else:
                     logging.debug(f"Cache file already gone: {os.path.basename(cache_path)}")
 
@@ -2775,6 +2778,29 @@ class PlexCacheApp:
 
         logging.info(f"[EVICTION] Smart eviction complete: freed {bytes_freed/1e9:.2f}GB from {files_evicted} files")
         return (files_evicted, bytes_freed)
+
+    def _cleanup_empty_folders_for(self, cache_path: str) -> int:
+        """Remove folders left empty by removing `cache_path` from cache.
+
+        Honours the `cleanup_empty_folders` setting. The boundary comes from the
+        owning path mapping, so a file on a secondary pool is bounded by its own
+        mapping rather than the primary cache_dir.
+        """
+        if not self.config_manager.cache.cleanup_empty_folders:
+            return 0
+
+        mappings = [
+            {'cache_path': m.cache_path, 'enabled': getattr(m, 'enabled', True)}
+            for m in (self.config_manager.paths.path_mappings or [])
+        ]
+        boundary = resolve_cache_boundary(
+            cache_path, mappings, self.config_manager.paths.cache_dir
+        )
+        if not boundary:
+            logging.debug(f"No cache boundary for {cache_path}, skipping folder cleanup")
+            return 0
+
+        return cleanup_empty_parent_folders(cache_path, boundary)
 
     def _get_fifo_eviction_candidates(self, cached_files: List[str], target_bytes: int) -> List[str]:
         """Get files to evict using FIFO (oldest first) strategy.
