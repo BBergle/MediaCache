@@ -506,6 +506,55 @@ def cleanup_empty_parent_folders(file_path: str, boundary_dir: str) -> int:
     return folders_removed
 
 
+def sweep_empty_folders(cache_dirs: List[str],
+                        should_skip_dir: Optional[Callable[[str], bool]] = None) -> int:
+    """Remove every empty folder under `cache_dirs`.
+
+    The canonical full sweep — use it instead of writing another os.walk/rmdir
+    pass. Unlike `cleanup_empty_parent_folders()`, which walks up from one
+    removed file, this scans whole trees. That makes it the tool for clearing a
+    historical backlog, not for per-file cleanup during a run.
+
+    The `cache_dirs` roots are never removed: os.walk only ever yields them as
+    `root`, never inside a `dirs` list.
+
+    Args:
+        cache_dirs: Cache roots to scan (typically enabled mapping cache_paths).
+        should_skip_dir: Optional predicate taking a bare directory *name*.
+            Return True to leave it alone. Dot-directories (.Trash,
+            .Recycle.Bin) are always skipped regardless.
+
+    Returns:
+        Number of folders removed.
+    """
+    removed = 0
+
+    for cache_dir in cache_dirs or []:
+        if not cache_dir or not os.path.exists(cache_dir):
+            continue
+
+        # topdown=False so children are visited before parents — a folder whose
+        # only contents were empty folders becomes empty in the same pass.
+        for root, dirs, _files in os.walk(cache_dir, topdown=False):
+            for name in dirs:
+                if name.startswith('.'):
+                    continue
+                if should_skip_dir and should_skip_dir(name):
+                    continue
+
+                dir_path = os.path.join(root, name)
+                try:
+                    if os.listdir(dir_path):
+                        continue
+                    os.rmdir(dir_path)
+                    logging.debug(f"Removed empty folder (PlexCache sweep): {dir_path}")
+                    removed += 1
+                except OSError as e:
+                    logging.debug(f"Could not remove folder {dir_path}: {type(e).__name__}: {e}")
+
+    return removed
+
+
 def resolve_cache_boundary(cache_path: str, path_mappings: list, fallback_dir: str = "") -> Optional[str]:
     """Find the cache root that `cache_path` lives under.
 
