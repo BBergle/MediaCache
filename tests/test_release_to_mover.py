@@ -187,13 +187,29 @@ class TestPartitionReleaseCandidates:
 
         real_stat = os.stat
 
-        class _Stat:
-            st_nlink = 2
+        class _MultiLinked:
+            """Real stat_result with st_nlink overridden.
+
+            Everything else delegates, because os.path.isfile() also goes
+            through os.stat() and reads st_mode on POSIX. A stub carrying only
+            st_nlink passes on Windows (Python 3.12+ uses a fast-path
+            nt._path_isfile that skips os.stat) and fails on Linux.
+            """
+
+            def __init__(self, real):
+                self._real = real
+                self.st_nlink = 2
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        def fake_stat(path, *args, **kwargs):
+            result = real_stat(path, *args, **kwargs)
+            return _MultiLinked(result) if path == cache_path else result
 
         with patch.object(app, "_share_has_array_side", return_value=True), \
              patch("core.app.find_matching_plexcached", return_value=None), \
-             patch("core.app.os.stat",
-                   side_effect=lambda p, *a, **k: _Stat() if p == cache_path else real_stat(p)):
+             patch("core.app.os.stat", side_effect=fake_stat):
             to_release, to_relocate = app._partition_release_candidates([array_path])
 
         assert to_release == []
