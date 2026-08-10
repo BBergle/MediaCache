@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Any, Tuple
 
 from web.config import DATA_DIR, CONFIG_DIR, SETTINGS_FILE
-from core.system_utils import get_array_direct_path, format_bytes, translate_container_to_host_path, translate_host_to_container_path, remove_from_exclude_file, remove_from_timestamps_file, create_dir_with_ownership
+from core.system_utils import get_array_direct_path, format_bytes, translate_container_to_host_path, translate_host_to_container_path, remove_from_exclude_file, remove_from_timestamps_file, create_dir_with_ownership, sweep_empty_folders
 from core.file_operations import PLEXCACHED_EXTENSION, VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS, MEDIA_EXTENSIONS
 
 
@@ -2354,24 +2354,15 @@ class MaintenanceService:
             )
 
     def _cleanup_empty_directories(self):
-        """Remove empty directories from cache paths"""
+        """Remove empty directories from cache paths.
+
+        Thin wrapper over the canonical `sweep_empty_folders()`.
+        """
         settings = self._load_settings()
         if not settings.get('cleanup_empty_folders', True):
             return
         cache_dirs, _ = self._get_paths()
-        for cache_dir in cache_dirs:
-            if os.path.exists(cache_dir):
-                for root, dirs, files in os.walk(cache_dir, topdown=False):
-                    for d in dirs:
-                        # Don't delete excluded directories
-                        if self._should_skip_directory(d):
-                            continue
-                        dir_path = os.path.join(root, d)
-                        try:
-                            if not os.listdir(dir_path):
-                                os.rmdir(dir_path)
-                        except OSError:
-                            pass
+        sweep_empty_folders(cache_dirs, self._should_skip_directory)
 
     def _remove_from_exclude_file(self, cache_path: str):
         """Remove a path from the exclude file"""

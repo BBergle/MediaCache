@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 
 from web.config import DATA_DIR, CONFIG_DIR, SETTINGS_FILE
-from core.system_utils import get_disk_usage, detect_zfs, get_array_direct_path, parse_size_bytes, format_bytes, translate_container_to_host_path, translate_host_to_container_path, remove_from_exclude_file, remove_from_timestamps_file, create_dir_with_ownership
+from core.system_utils import get_disk_usage, detect_zfs, get_array_direct_path, parse_size_bytes, format_bytes, translate_container_to_host_path, translate_host_to_container_path, remove_from_exclude_file, remove_from_timestamps_file, create_dir_with_ownership, cleanup_empty_parent_folders, resolve_cache_boundary
 from core.file_operations import get_media_identity, find_matching_plexcached, save_json_atomically, SUBTITLE_EXTENSIONS, is_video_file
 
 
@@ -1742,10 +1742,16 @@ class CacheService:
             if os.path.exists(cache_path):
                 os.remove(cache_path)
 
-            # Step 3: Remove from exclude file
+            # Step 3: Remove folders this eviction just emptied (issue #196).
+            # Same File and Folder Management Policy the normal move-to-array
+            # path follows — without it, manual evictions leave the show/season
+            # and movie folders behind on the cache drive.
+            self._cleanup_empty_folders(cache_path, settings)
+
+            # Step 4: Remove from exclude file
             self._remove_from_exclude_file(cache_path)
 
-            # Step 4: Remove from timestamps
+            # Step 5: Remove from timestamps
             self._remove_from_timestamps(cache_path)
 
             result["success"] = True
@@ -2110,6 +2116,29 @@ class CacheService:
     def _remove_from_timestamps(self, cache_path: str):
         """Remove a path from the timestamps file"""
         remove_from_timestamps_file(self.timestamps_file, cache_path)
+
+    def _cleanup_empty_folders(self, cache_path: str, settings: Optional[Dict] = None) -> int:
+        """Remove folders left empty by removing `cache_path`.
+
+        Honours the `cleanup_empty_folders` setting and resolves the boundary
+        from path_mappings, so a file on a secondary pool is bounded by its own
+        mapping rather than the primary cache_dir.
+        """
+        if settings is None:
+            settings = self._load_settings()
+        if not settings.get('cleanup_empty_folders', True):
+            return 0
+
+        boundary = resolve_cache_boundary(
+            cache_path,
+            settings.get('path_mappings', []),
+            settings.get('cache_dir', ''),
+        )
+        if not boundary:
+            logger.debug(f"No cache boundary for {cache_path}, skipping folder cleanup")
+            return 0
+
+        return cleanup_empty_parent_folders(cache_path, boundary)
 
     def _get_pinned_cache_paths(self) -> set:
         """Return the current set of pinned cache-form paths.

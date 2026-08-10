@@ -3,6 +3,7 @@ Main PlexCache application.
 Orchestrates all components and provides the main business logic.
 """
 
+import json
 import signal
 import sys
 import threading
@@ -26,14 +27,18 @@ except ImportError:
 from core import __version__
 from core.config import ConfigManager
 from core.logging_config import LoggingManager, reset_warning_error_flag
-from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock, get_disk_usage, get_array_direct_path, detect_zfs, set_zfs_prefixes, format_bytes, create_dir_with_ownership
+from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock, get_disk_usage, get_array_direct_path, detect_zfs, set_zfs_prefixes, format_bytes, create_dir_with_ownership, cleanup_empty_parent_folders, resolve_cache_boundary, sweep_empty_folders
 from core.plex_api import PlexManager, OnDeckItem
-from core.file_operations import MultiPathModifier, SiblingFileFinder, FileFilter, FileMover, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration, get_media_identity, find_matching_plexcached, is_directory_level_file
+from core.file_operations import MultiPathModifier, SiblingFileFinder, FileFilter, FileMover, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration, get_media_identity, find_matching_plexcached, is_directory_level_file, save_json_atomically
 from core.pinned_media import PinnedMediaTracker, resolve_pins_to_paths
 
 
 class PlexCacheApp:
     """Main PlexCache application class."""
+
+    # One-time data migrations, keyed by name in data/migrations.json.
+    _MIGRATIONS_FILENAME = "migrations.json"
+    _EMPTY_FOLDER_BACKFILL_KEY = "empty_folder_backfill"  # issue #196
 
     def __init__(self, config_file: str, dry_run: bool = False,
                  quiet: bool = False, verbose: bool = False,
@@ -213,6 +218,9 @@ class PlexCacheApp:
             # Initialize components that depend on config
             logging.debug("Initializing components...")
             self._initialize_components()
+
+            # One-time sweep for folders emptied by pre-fix evictions (issue #196)
+            self._backfill_empty_folder_cleanup()
 
             # Warn if .plexcached backups are disabled
             if not self.config_manager.cache.create_plexcached_backups:
@@ -2758,6 +2766,9 @@ class PlexCacheApp:
                         continue
                     os.remove(cache_path)
                     logging.debug(f"Deleted cache file: {os.path.basename(cache_path)}")
+                    # Remove folders this eviction emptied (issue #196) — the
+                    # same policy _move_to_array() follows.
+                    self._cleanup_empty_folders_for(cache_path)
                 else:
                     logging.debug(f"Cache file already gone: {os.path.basename(cache_path)}")
 
@@ -2775,6 +2786,87 @@ class PlexCacheApp:
 
         logging.info(f"[EVICTION] Smart eviction complete: freed {bytes_freed/1e9:.2f}GB from {files_evicted} files")
         return (files_evicted, bytes_freed)
+
+    def _backfill_empty_folder_cleanup(self) -> None:
+        """One-time sweep for empty folders left by pre-fix evictions (issue #196).
+
+        Eviction used to delete the cache file without removing the folders it
+        emptied, so installs upgrading from an earlier version carry a backlog
+        that the per-file cleanup can never reach — it only ever sees folders it
+        empties itself. Sweep the cache trees once, record a marker, never again.
+
+        Skipped on dry runs and when `cleanup_empty_folders` is off. Failures are
+        non-fatal: this is housekeeping, not part of the caching contract.
+        """
+        if self.dry_run:
+            return
+        if not self.config_manager.cache.cleanup_empty_folders:
+            return
+
+        migrations_file = self.config_manager.get_data_folder() / self._MIGRATIONS_FILENAME
+        migrations = {}
+        try:
+            if migrations_file.exists():
+                with open(migrations_file, 'r', encoding='utf-8') as f:
+                    migrations = json.load(f)
+        except (IOError, json.JSONDecodeError) as e:
+            logging.debug(f"Could not read migrations file, treating as unmigrated: {e}")
+
+        if migrations.get(self._EMPTY_FOLDER_BACKFILL_KEY):
+            return
+
+        cache_dirs = [
+            m.cache_path.rstrip('/\\')
+            for m in (self.config_manager.paths.path_mappings or [])
+            if m.enabled and m.cacheable and m.cache_path
+        ]
+        if not cache_dirs and self.config_manager.paths.cache_dir:
+            cache_dirs = [self.config_manager.paths.cache_dir.rstrip('/\\')]
+
+        excluded = set(self.config_manager.cache.excluded_folders or [])
+
+        try:
+            removed = sweep_empty_folders(cache_dirs, lambda name: name in excluded)
+        except OSError as e:
+            logging.warning(f"Empty-folder backfill failed (non-fatal): {e}")
+            return
+
+        if removed:
+            logging.info(f"[CLEANUP] Removed {removed} empty folder(s) left by earlier evictions")
+        else:
+            logging.debug("Empty-folder backfill found nothing to remove")
+
+        # Record the marker even when nothing was removed — the backlog is
+        # cleared either way, and a clean install shouldn't re-sweep every run.
+        migrations[self._EMPTY_FOLDER_BACKFILL_KEY] = datetime.now().isoformat()
+        try:
+            migrations_file.parent.mkdir(parents=True, exist_ok=True)
+            save_json_atomically(str(migrations_file), migrations, label="migrations")
+        except (IOError, OSError) as e:
+            logging.warning(f"Could not record empty-folder backfill marker: {e}")
+
+    def _cleanup_empty_folders_for(self, cache_path: str) -> int:
+        """Remove folders left empty by removing `cache_path` from cache.
+
+        Honours the `cleanup_empty_folders` setting. The boundary comes from the
+        owning path mapping, so a file on a secondary pool is bounded by its own
+        mapping rather than the primary cache_dir.
+        """
+        if not self.config_manager.cache.cleanup_empty_folders:
+            return 0
+
+        mappings = [
+            {'cache_path': m.cache_path, 'enabled': getattr(m, 'enabled', True)}
+            for m in (self.config_manager.paths.path_mappings or [])
+        ]
+        boundary = resolve_cache_boundary(
+            cache_path, mappings, self.config_manager.paths.cache_dir
+        )
+        if not boundary:
+            logging.debug(f"No cache boundary for {cache_path}, skipping folder cleanup")
+            return 0
+
+        return cleanup_empty_parent_folders(cache_path, boundary)
 
     def _get_fifo_eviction_candidates(self, cached_files: List[str], target_bytes: int) -> List[str]:
         """Get files to evict using FIFO (oldest first) strategy.

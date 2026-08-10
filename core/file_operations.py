@@ -16,7 +16,7 @@ from typing import List, Set, Optional, Tuple, Dict, TYPE_CHECKING, Callable
 import re
 
 from core.logging_config import get_console_lock
-from core.system_utils import resolve_user0_to_disk, get_disk_free_space_bytes, get_disk_number_from_path, get_array_direct_path, format_bytes, create_dir_with_ownership
+from core.system_utils import resolve_user0_to_disk, get_disk_free_space_bytes, get_disk_number_from_path, get_array_direct_path, format_bytes, create_dir_with_ownership, cleanup_empty_parent_folders, resolve_cache_boundary
 
 if TYPE_CHECKING:
     from core.config import PathMapping
@@ -5562,10 +5562,10 @@ class FileMover:
     def _cleanup_empty_parent_folders(self, file_path: str) -> int:
         """Clean up empty parent folders after a file is removed.
 
-        Implements the File and Folder Management Policy: PlexCache only removes
-        folders that it emptied by moving files out. This method walks up the
-        directory tree from the deleted file's parent, removing empty folders
-        until it hits the cache_dir boundary or a non-empty folder.
+        Thin wrapper over the canonical `cleanup_empty_parent_folders()`. The
+        boundary is the mapping's cache_path when one covers this file, so
+        multi-pool setups (`/mnt/cache` plus `/mnt/ssd_cache`) clean up
+        correctly instead of no-opping on everything outside `self.cache_dir`.
 
         Args:
             file_path: Path to the file that was just deleted
@@ -5573,44 +5573,18 @@ class FileMover:
         Returns:
             Number of folders removed
         """
-        folders_removed = 0
-        current_dir = os.path.dirname(file_path)
+        # Legacy FilePathModifier has no `mappings`, so fall back to cache_dir.
+        mappings = [
+            {'cache_path': m.cache_path, 'enabled': getattr(m, 'enabled', True)}
+            for m in (getattr(self.path_modifier, 'mappings', None) or [])
+        ]
+        boundary = resolve_cache_boundary(file_path, mappings, self.cache_dir)
 
-        # Normalize paths for comparison
-        cache_boundary = os.path.normpath(self.cache_dir)
+        if not boundary:
+            logging.debug(f"No cache boundary for {file_path}, skipping folder cleanup")
+            return 0
 
-        while current_dir:
-            normalized_current = os.path.normpath(current_dir)
-
-            # Stop if we've reached or passed the cache boundary
-            # We should never delete the cache_dir itself or anything above it
-            if normalized_current == cache_boundary or not normalized_current.startswith(cache_boundary):
-                break
-
-            try:
-                # Check if directory is empty
-                if not os.path.exists(current_dir):
-                    break
-
-                contents = os.listdir(current_dir)
-                if contents:
-                    # Folder not empty, stop climbing
-                    logging.debug(f"Folder not empty, stopping cleanup: {current_dir}")
-                    break
-
-                # Folder is empty, remove it
-                os.rmdir(current_dir)
-                logging.debug(f"Removed empty folder (PlexCache cleanup): {current_dir}")
-                folders_removed += 1
-
-                # Move up to parent
-                current_dir = os.path.dirname(current_dir)
-
-            except OSError as e:
-                logging.debug(f"Could not remove folder {current_dir}: {type(e).__name__}: {e}")
-                break
-
-        return folders_removed
+        return cleanup_empty_parent_folders(file_path, boundary)
 
     def _create_symlink(self, symlink_path: str, target_path: str) -> bool:
         """Create a symlink at symlink_path pointing to target_path.
