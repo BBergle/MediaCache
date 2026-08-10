@@ -491,6 +491,39 @@ class MaintenanceService:
                 pass
         return timestamp_files
 
+    def get_released_files(self) -> Set[str]:
+        """Get cache paths PlexCache released to the Unraid mover.
+
+        A released file is deliberately absent from the exclude list: PlexCache
+        handed relocation to the mover and stopped protecting it, without
+        moving any bytes. So it is neither an unprotected file that needs
+        fixing nor — once the mover finally takes it — a stale timestamp entry.
+        Treating it as either turns the feature working correctly into a
+        recurring health warning.
+
+        Sidecars inherit their parent's released state, so associated_files are
+        expanded out.
+        """
+        released: Set[str] = set()
+        if not self.timestamps_file.exists():
+            return released
+        try:
+            with open(self.timestamps_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return released
+
+        if not isinstance(data, dict):
+            return released
+
+        for path, entry in data.items():
+            if isinstance(entry, dict) and "released_at" in entry:
+                released.add(path)
+                associated = entry.get("associated_files", [])
+                if isinstance(associated, list):
+                    released.update(associated)
+        return released
+
     def _cache_to_array_path(self, cache_file: str) -> Optional[str]:
         """Convert a cache file path to its corresponding array path"""
         cache_dirs, array_dirs = self._get_paths()
@@ -597,6 +630,7 @@ class MaintenanceService:
         cache_files = self.get_cache_files()
         exclude_files = self.get_exclude_files()
         timestamp_files = self.get_timestamp_files()
+        released_files = self.get_released_files()
         scan_duration = time.monotonic() - phase_start
 
         results = AuditResults(
@@ -641,8 +675,11 @@ class MaintenanceService:
                     size_display=format_bytes(dup_size)
                 ))
 
-            # Unprotected: on cache but not in exclude list
-            if cache_path in exclude_files:
+            # Unprotected: on cache but not in exclude list. Released files are
+            # unprotected on purpose — flagging them would recommend
+            # sync_to_array (the exact array write release avoids) and let the
+            # bulk "Add to Exclude" action silently re-protect them.
+            if cache_path in exclude_files or cache_path in released_files:
                 continue
 
             filename = os.path.basename(cache_path)
@@ -715,8 +752,12 @@ class MaintenanceService:
             except Exception as e:
                 logging.warning(f"Upgrade check during audit failed (non-fatal): {e}")
 
-        # Find stale timestamp entries (in timestamps but not on cache)
-        results.stale_timestamp_entries = sorted(list(timestamp_files - cache_files))
+        # Find stale timestamp entries (in timestamps but not on cache).
+        # A released entry whose file is gone means the Unraid mover did its
+        # job — that is the feature succeeding, not tracking debris.
+        results.stale_timestamp_entries = sorted(
+            list(timestamp_files - cache_files - released_files)
+        )
 
         # Flag pinned files that are on cache but missing from the exclude
         # list — the Unraid mover would move them back on the next run,

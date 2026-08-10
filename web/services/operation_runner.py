@@ -108,6 +108,16 @@ class WebLogHandler(logging.Handler):
             pass
 
 
+# Real-time completion lines emitted by core: "  [Action] filename (size)".
+# The producers are FileMover._move_to_cache / _move_to_array and
+# PlexCacheApp._release_files; keep this in step with them.
+# "Released" hands a file back to the Unraid mover without moving bytes, so it
+# is captured as activity but never counted toward restored bytes.
+ACTION_ENTRY_PATTERN = re.compile(
+    r'^  \[(Cached|Restored|Moved|Released)\]\s+(.+?)(?:\s+\(([^)]+)\))?$'
+)
+
+
 class OperationRunner:
     """Service for running PlexCache operations"""
 
@@ -137,7 +147,7 @@ class OperationRunner:
         self._file_entry = re.compile(r'^  (.+)$')  # Indented file entries (legacy)
         self._results_pattern = re.compile(r'Moved to cache:\s*(\d+)|Moved to array:\s*(\d+)')
         # New pattern for real-time completion logs: "  [Action] filename (size)"
-        self._action_entry = re.compile(r'^  \[(Cached|Restored|Moved)\]\s+(.+?)(?:\s+\(([^)]+)\))?$')
+        self._action_entry = ACTION_ENTRY_PATTERN
         # Copy-start log: "  [Copying] filename (size)" — used to derive active files for external runs
         self._copying_entry = re.compile(r'^  \[Copying\]\s+(.+?)(?:\s+\(([^)]+)\))?$')
         # Tracker data for user lookups (loaded on operation start)

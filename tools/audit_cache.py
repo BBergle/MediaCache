@@ -167,6 +167,33 @@ def get_timestamp_files():
             timestamp_files = set(data.keys())
     return timestamp_files
 
+def get_released_files():
+    """Get cache files PlexCache released to the Unraid mover.
+
+    These are absent from the exclude list on purpose — PlexCache stopped
+    protecting them so the mover can reclaim them on its own schedule, without
+    anything being copied to the array. Re-adding them to the exclude list
+    would undo that.
+    """
+    released = set()
+    if not os.path.exists(TIMESTAMPS_FILE):
+        return released
+    try:
+        with open(TIMESTAMPS_FILE, 'r') as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return released
+    if not isinstance(data, dict):
+        return released
+    for path, entry in data.items():
+        if isinstance(entry, dict) and "released_at" in entry:
+            released.add(path)
+            associated = entry.get("associated_files", [])
+            if isinstance(associated, list):
+                released.update(associated)
+    return released
+
+
 def get_orphaned_plexcached_files():
     """Find .plexcached files on array that have no corresponding cache file.
 
@@ -372,7 +399,14 @@ def add_to_exclude(dry_run=True):
     """
     cache_files = get_cache_files()
     exclude_files = get_exclude_files()
-    orphaned = cache_files - exclude_files
+    released_files = get_released_files()
+    # Released files are unprotected by design — re-protecting them here would
+    # silently undo the release and set up a release/re-protect oscillation.
+    orphaned = cache_files - exclude_files - released_files
+
+    if released_files & cache_files:
+        held = len(released_files & cache_files)
+        print(f"Skipping {held} file(s) released to the Unraid mover.")
 
     if not orphaned:
         print("No orphaned files to add to exclude list.")
