@@ -257,7 +257,7 @@
                 <div class="breakdown-bar">
                     <div class="breakdown-fill ondeck" style="width: {{ data.breakdown.ondeck.percent }}%"></div>
                 </div>
-                <div class="breakdown-percent">{{ data.breakdown.ondeck.percent }}% of cache</div>
+                <div class="breakdown-percent">{{ data.breakdown.ondeck.percent }}% of PlexCache data</div>
             </a>
             <a href="/cache?source=watchlist" class="breakdown-card breakdown-watchlist">
                 <div class="breakdown-header">
@@ -272,7 +272,7 @@
                 <div class="breakdown-bar">
                     <div class="breakdown-fill watchlist" style="width: {{ data.breakdown.watchlist.percent }}%"></div>
                 </div>
-                <div class="breakdown-percent">{{ data.breakdown.watchlist.percent }}% of cache</div>
+                <div class="breakdown-percent">{{ data.breakdown.watchlist.percent }}% of PlexCache data</div>
             </a>
             {% if data.breakdown.other.count > 0 %}
             <a href="/cache?source=other" class="breakdown-card breakdown-other">
@@ -288,7 +288,7 @@
                 <div class="breakdown-bar">
                     <div class="breakdown-fill other" style="width: {{ data.breakdown.other.percent }}%"></div>
                 </div>
-                <div class="breakdown-percent">{{ data.breakdown.other.percent }}% of cache</div>
+                <div class="breakdown-percent">{{ data.breakdown.other.percent }}% of PlexCache data</div>
             </a>
             {% endif %}
         </div>
