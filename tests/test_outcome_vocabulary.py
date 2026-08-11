@@ -204,13 +204,42 @@ class TestReservedProtectedSentence:
     def test_only_pin_backed_outcomes_use_the_word(self):
         for key, outcome in OUTCOMES.items():
             if "protected from eviction" in outcome.tooltip:
-                assert key in ("held", "arriving"), (
+                assert key in ("held", "held_mover_gap"), (
                     f"{key} claims eviction protection but is not pin-backed"
                 )
 
-    def test_both_pin_backed_outcomes_carry_it_verbatim(self):
-        for key in ("held", "arriving"):
+    def test_on_cache_pinned_states_carry_it_verbatim(self):
+        for key in ("held", "held_mover_gap"):
             assert OUTCOMES[key].tooltip.startswith(self.SENTENCE)
+
+    def test_arriving_makes_no_eviction_claim(self):
+        # Nothing is on cache to evict, so the sentence would be vacuous.
+        assert "protected from eviction" not in OUTCOMES["arriving"].tooltip
+
+    def test_pinned_tooltips_also_name_the_move_back_guarantee(self):
+        # A pin short-circuits the watched move-back too
+        # (core/file_operations.py:3814), so "eviction" alone undersells it.
+        for key in ("held", "held_mover_gap"):
+            assert "move it back" in OUTCOMES[key].tooltip
+
+    def test_only_held_claims_mover_protection(self):
+        # Pinning writes no exclude line, so mover protection is not a pin's to
+        # promise until a run has added one.
+        assert "mover is told to skip it" in OUTCOMES["held"].tooltip
+        assert "could still relocate it" in OUTCOMES["held_mover_gap"].tooltip
+
+    def test_no_two_outcomes_share_a_label_unless_they_share_a_badge(self):
+        # At group level only the label survives — the badge colour and icon
+        # that distinguished two same-labelled states are gone.
+        seen = {}
+        for key, o in OUTCOMES.items():
+            if o.label in seen:
+                other = seen[o.label]
+                assert o.badge == OUTCOMES[other].badge, (
+                    f"{key} and {other} render the same label {o.label!r} with "
+                    f"different badges — indistinguishable in a group header"
+                )
+            seen.setdefault(o.label, key)
 
     def test_transient_states_never_claim_protection(self):
         # OnDeck/Watchlist only add +15 to the priority score; they exempt nothing.

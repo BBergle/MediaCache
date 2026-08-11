@@ -44,8 +44,9 @@
    tests/test_outcome_vocabulary.py asserts every enum member appears here. #}
 {% macro ra_status_badge(row) %}
 {% if   row.outcome == 'held'              %}<span class="badge badge-pinned" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="pin"></i> Stays on cache</span>
+{% elif row.outcome == 'held_mover_gap'    %}<span class="badge badge-pinned" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="pin"></i> Stays on cache</span>
 {% elif row.outcome == 'arriving'          %}<span class="badge badge-pinned" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="arrow-down-to-line"></i> Pinned, not on cache yet</span>
-{% elif row.outcome == 'held_by_setting'   %}<span class="badge badge-info" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="sliders-horizontal"></i> Stays on cache</span>
+{% elif row.outcome == 'held_by_setting'   %}<span class="badge badge-info" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="sliders-horizontal"></i> Not moved back</span>
 {% elif row.outcome == 'returns_when_done' %}<span class="badge badge-info" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="clock"></i> Returns when watched</span>
     {% for p in row.protected_by %}{% if p != 'Pinned' %}<span class="badge badge-info badge-sm">{{ p }}</span>{% endif %}{% endfor %}
 {% elif row.outcome == 'moves_back'        %}<span class="badge badge-muted" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="arrow-down"></i> Moves to array</span>
@@ -249,6 +250,7 @@
                            "Protected" for groups where nothing was protected. #}
                         <td>
                             {% if   item.outcome_lead == 'held'              %}<span class="badge badge-pinned" title="{{ item.outcome_tooltip }}"><i data-lucide="pin"></i> {{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'held_mover_gap'    %}<span class="badge badge-pinned" title="{{ item.outcome_tooltip }}"><i data-lucide="pin"></i> {{ item.outcome_label }}</span>
                             {% elif item.outcome_lead == 'arriving'          %}<span class="badge badge-pinned" title="{{ item.outcome_tooltip }}"><i data-lucide="arrow-down-to-line"></i> {{ item.outcome_label }}</span>
                             {% elif item.outcome_lead == 'held_by_setting'   %}<span class="badge badge-info" title="{{ item.outcome_tooltip }}"><i data-lucide="sliders-horizontal"></i> {{ item.outcome_label }}</span>
                             {% elif item.outcome_lead == 'returns_when_done' %}<span class="badge badge-info" title="{{ item.outcome_tooltip }}"><i data-lucide="clock"></i> {{ item.outcome_label }}</span>

@@ -210,7 +210,11 @@ class RecentlyAddedService:
         if is_pinned and location != "cache":
             return "arriving"
         if is_pinned:
-            return "held"
+            # Pinning writes no exclude-file line, so a file pinned while
+            # already on cache is exempt from PlexCache eviction while the
+            # Unraid mover can still relocate it. Distinguish the two rather
+            # than promising mover protection the pin hasn't bought yet.
+            return "held" if is_mover_protected else "held_mover_gap"
         if location == "array":
             return "stays_on_array"
         # On cache, not pinned. Exclude-file membership is the mechanically

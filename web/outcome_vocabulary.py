@@ -30,10 +30,21 @@ class Outcome:
     tooltip: str
 
 
-# Reserved sentence. The word "Protected" is deliberately confined to states
-# where a pin genuinely exempts the file from eviction — it is not used for
-# OnDeck/Watchlist, which only add +15 to the priority score
-# (core/file_operations.py) rather than exempting anything.
+# Reserved sentence. The word "Protected" is confined to states where a pin
+# genuinely exempts the file from eviction — never for OnDeck/Watchlist, which
+# only add +15 to the priority score (core/file_operations.py) rather than
+# exempting anything.
+#
+# Two things this sentence must NOT be trimmed back to:
+#   * "only from eviction" would be too narrow. A pin also short-circuits the
+#     watched move-back to array (core/file_operations.py:3814), and therefore
+#     also blocks release-to-mover, so the move-back clause belongs in every
+#     copy of this text.
+#   * eviction exemption is NOT the same as mover exemption. Pinning writes no
+#     exclude-file line (PinnedService.toggle_pin never touches it), so a file
+#     pinned while already on cache is exempt from PlexCache eviction while the
+#     Unraid mover can still relocate it, until a run adds the exclude entry.
+#     That gap is its own outcome (`held_mover_gap`) rather than a footnote.
 _PROTECTED_SENTENCE = "Pinned — protected from eviction."
 
 # Ordered weakest-first. `stays_on_array` is deliberately outside the ranking
@@ -65,27 +76,50 @@ OUTCOMES: Dict[str, Outcome] = {o.key: o for o in (
     Outcome(
         key="returns_when_done", label="Returns when watched", badge="badge-info",
         icon="clock", tier=4,
-        tooltip=("Held on cache while it's on OnDeck or a Watchlist. PlexCache "
-                 "moves it back once it drops off, after the retention hold. An "
-                 "active playback session or a hard link delays that further."),
+        tooltip=("On OnDeck or a Watchlist, so PlexCache defers moving it back "
+                 "to the array — that's a deferral, not an eviction exemption; "
+                 "it can still be evicted if the pool runs short. Once it drops "
+                 "off, the retention hold, an active playback session or a hard "
+                 "link can each delay the move further."),
     ),
+    # Deliberately NOT labelled "Stays on cache": watched_move only governs the
+    # move-back to array. Eviction is a separate path with no watched_move
+    # awareness, so this file can still be evicted, and a "stays" promise would
+    # be false. It also collided with `held`'s label at group level, where the
+    # badge colour that distinguished them is gone.
     Outcome(
-        key="held_by_setting", label="Stays on cache", badge="badge-info",
+        key="held_by_setting", label="Not moved back", badge="badge-info",
         icon="sliders-horizontal", tier=5,
         tooltip=("Move Watched to Array is off in Settings → Cache, so PlexCache "
-                 "never moves anything back. This stays on the cache pool."),
+                 "never moves anything back to the array. Eviction is separate — "
+                 "if the cache pool runs short this can still be evicted."),
     ),
     Outcome(
         key="arriving", label="Pinned, not on cache yet", badge="badge-pinned",
         icon="arrow-down-to-line", tier=6,
-        tooltip=(_PROTECTED_SENTENCE + " It isn't on the cache pool yet — the "
-                 "next PlexCache run copies it across."),
+        # No eviction claim: there is nothing on cache to evict, so the reserved
+        # sentence would be vacuous here. The copy promise is hedged because
+        # _apply_cache_limit has no pin awareness and can skip a pinned file
+        # when the pool is full.
+        tooltip=("Pinned. PlexCache copies it to cache on the next run, then "
+                 "keeps it there. If the pool has no room that run, it waits and "
+                 "retries — Cache Pinned Now copies it immediately, ignoring "
+                 "your cache limits."),
+    ),
+    Outcome(
+        key="held_mover_gap", label="Stays on cache", badge="badge-pinned",
+        icon="pin", tier=7,
+        tooltip=(_PROTECTED_SENTENCE + " PlexCache won't move it back to the "
+                 "array either. It isn't in the Unraid mover's exclude list yet, "
+                 "so the mover could still relocate it — the next PlexCache run "
+                 "fixes that."),
     ),
     Outcome(
         key="held", label="Stays on cache", badge="badge-pinned",
-        icon="pin", tier=7,
-        tooltip=(_PROTECTED_SENTENCE + " PlexCache also keeps it out of the "
-                 "Unraid mover's reach and never moves it back, until you unpin."),
+        icon="pin", tier=8,
+        tooltip=(_PROTECTED_SENTENCE + " PlexCache won't move it back to the "
+                 "array, and the Unraid mover is told to skip it. Both hold "
+                 "until you unpin."),
     ),
     Outcome(
         key="stays_on_array", label="Not on cache", badge="badge-muted",

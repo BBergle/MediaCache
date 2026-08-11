@@ -393,13 +393,29 @@ class TestPinResolution:
         svc = _service(["/mnt/cache/tv/Show/S01E01.mkv"])
         # The show pin (rk 5000) resolves down to this episode's Plex path.
         rows = _enrich(svc, [item],
-                       pin_path_map={"/data/tv/Show/S01E01.mkv": ("5000", "show", "Show")})
+                       pin_path_map={"/data/tv/Show/S01E01.mkv": ("5000", "show", "Show")},
+                       exclude=["/mnt/cache/tv/Show/S01E01.mkv"])
 
         assert rows[0].is_pinned is True
         assert rows[0].outcome == "held"
         assert rows[0].pin_scope == "show"
         assert rows[0].pin_holder_key == "5000"
         assert rows[0].pin_holder_title == "Show"
+
+    def test_pinned_file_missing_from_the_exclude_list_is_flagged(self):
+        # Pinning writes no exclude line, so a file pinned while already on
+        # cache is exempt from PlexCache eviction while the Unraid mover can
+        # still relocate it. Claiming plain "held" would promise mover
+        # protection the pin has not bought.
+        item = _item("42", "Dune", "movie", "/data/movies/Dune.mkv")
+        svc = _service(["/mnt/cache/movies/Dune.mkv"])
+        rows = _enrich(svc, [item],
+                       pin_path_map={"/data/movies/Dune.mkv": ("42", "movie", "Dune")},
+                       exclude=[])
+
+        assert rows[0].is_pinned is True
+        assert rows[0].is_mover_protected is False
+        assert rows[0].outcome == "held_mover_gap"
 
     def test_direct_movie_pin_reports_itself_as_the_holder(self):
         item = _item("42", "Dune", "movie", "/data/movies/Dune.mkv")
