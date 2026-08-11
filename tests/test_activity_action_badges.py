@@ -210,14 +210,16 @@ class TestSharedSourceBadges:
         for key in ("ondeck", "watchlist", "stale_ondeck", "stale_watchlist", "other"):
             assert f"'{key}':" in macro_src, f"no tooltip for {key}"
 
-    def test_transient_sources_disclaim_eviction_protection(self, macro_src):
+    def test_transient_sources_make_no_protection_claim(self, macro_src):
         # OnDeck/Watchlist add +15 to the priority score; only a pin exempts.
-        # The badge must not read as a protection guarantee.
+        # The badge needn't spell that out, but it must not claim otherwise —
+        # "keeps it on cache for now" is a statement of the current reason, not
+        # a guarantee. The disclaimer lives on the outcome badge instead.
         tips = macro_src[macro_src.index("SOURCE_TOOLTIPS = {"):]
         tips = tips[:tips.index("} %}")]
         for key in ("ondeck", "watchlist"):
             line = [l for l in tips.splitlines() if f"'{key}':" in l][0]
-            assert "Not eviction protection" in line, f"{key} implies protection it lacks"
+            assert "protect" not in line.lower(), f"{key} makes a protection claim"
 
     def test_lapsed_badges_say_what_happens_next(self, macro_src):
         tips = macro_src[macro_src.index("SOURCE_TOOLTIPS = {"):]
