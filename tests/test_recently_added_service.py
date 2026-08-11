@@ -290,6 +290,108 @@ class TestScanAssociatedFiles:
         svc = RecentlyAddedService()
         assert svc._scan_associated_files("/nope/does/not/exist/Movie.mkv") == []
 
+    def test_local_extras_are_not_associated_files(self, tmp_path):
+        """Plex stores extras beside the feature. Each is its own media item."""
+        d = tmp_path / "Movies"
+        d.mkdir()
+        video = d / "Dune.mkv"
+        video.write_bytes(b"x")
+        (d / "Dune-trailer.mkv").write_bytes(b"x")
+        (d / "Dune-behindthescenes.mkv").write_bytes(b"x")
+        (d / "Dune.en.srt").write_bytes(b"sub")
+        (d / "Dune.nfo").write_bytes(b"nfo")
+
+        svc = RecentlyAddedService()
+        names = {f["filename"] for f in svc._scan_associated_files(str(video))}
+        # Exact set, so an over-broad filter fails here too.
+        assert names == {"Dune.en.srt", "Dune.nfo"}
+
+    def test_plexcached_backups_are_not_associated_files(self, tmp_path):
+        """splitext() leaves the real extension behind, so the naive stem test
+        accepted these: splitext("Dune.mkv.plexcached")[0] is "Dune.mkv", which
+        startswith("Dune."). Both the video and the subtitle backup slipped
+        through. Do not simplify the .plexcached clause away."""
+        d = tmp_path / "Movies"
+        d.mkdir()
+        video = d / "Dune.mkv"
+        video.write_bytes(b"x")
+        (d / "Dune.en.srt").write_bytes(b"sub")
+        (d / "Dune.mkv.plexcached").write_bytes(b"x")
+        (d / "Dune.en.srt.plexcached").write_bytes(b"x")
+
+        assert os.path.splitext("Dune.mkv.plexcached")[0] == "Dune.mkv"
+        svc = RecentlyAddedService()
+        names = {f["filename"] for f in svc._scan_associated_files(str(video))}
+        assert names == {"Dune.en.srt"}
+
+    def test_exotic_sidecars_survive_the_video_filter(self, tmp_path):
+        """Guard against the exclusion being too broad. VIDEO_EXTENSIONS and
+        SUBTITLE_EXTENSIONS are disjoint and must stay that way."""
+        d = tmp_path / "Movies"
+        d.mkdir()
+        video = d / "Dune.mkv"
+        video.write_bytes(b"x")
+        keep = ["Dune.idx", "Dune.sub", "Dune.sup", "Dune.en.ass",
+                "Dune.bif", "Dune.edl", "Dune-clearlogo.png"]
+        for n in keep:
+            (d / n).write_bytes(b"x")
+
+        svc = RecentlyAddedService()
+        names = {f["filename"] for f in svc._scan_associated_files(str(video))}
+        assert names == set(keep)
+
+    def test_space_separated_sidecar_is_claimed(self, tmp_path):
+        """The shared stem rule accepts any non-alphanumeric boundary, so the
+        common "<stem> poster.jpg" naming is picked up. The hand-rolled test
+        this replaced only allowed "." and "-" and dropped it."""
+        d = tmp_path / "Movies"
+        d.mkdir()
+        video = d / "Dune (2021).mkv"
+        video.write_bytes(b"x")
+        (d / "Dune (2021) poster.jpg").write_bytes(b"img")
+
+        svc = RecentlyAddedService()
+        names = {f["filename"] for f in svc._scan_associated_files(str(video))}
+        assert names == {"Dune (2021) poster.jpg"}
+
+    def test_prefix_sharing_movies_do_not_steal_sidecars(self, tmp_path):
+        """Boundary-awareness comes from the shared helper: "Movie 10.en.srt"
+        must not be claimed by the stem "Movie 1"."""
+        d = tmp_path / "Movies"
+        d.mkdir()
+        video = d / "Movie 1.mkv"
+        video.write_bytes(b"x")
+        (d / "Movie 1.en.srt").write_bytes(b"sub")
+        (d / "Movie 10.mkv").write_bytes(b"x")
+        (d / "Movie 10.en.srt").write_bytes(b"sub")
+
+        svc = RecentlyAddedService()
+        names = {f["filename"] for f in svc._scan_associated_files(str(video))}
+        assert names == {"Movie 1.en.srt"}
+
+    def test_is_a_subset_of_what_the_core_pipeline_attaches(self, tmp_path):
+        """Cross-module invariant: this display scan must never list a file the
+        caching pipeline would not treat as a sidecar. Subset, not equality —
+        the scan additionally requires the stem prefix, so it legitimately
+        drops directory-level artwork that _find_sibling_files returns."""
+        from core.file_operations import SiblingFileFinder
+
+        d = tmp_path / "Movies"
+        d.mkdir()
+        video = d / "Dune.mkv"
+        video.write_bytes(b"x")
+        for n in ["Dune-trailer.mkv", "Dune.en.srt", "Dune.nfo",
+                  "Dune-poster.jpg", "Dune.mkv.plexcached", "poster.jpg"]:
+            (d / n).write_bytes(b"x")
+
+        svc = RecentlyAddedService()
+        scanned = {f["filename"] for f in svc._scan_associated_files(str(video))}
+        pipeline = {
+            os.path.basename(p)
+            for p in SiblingFileFinder()._find_sibling_files(str(d), str(video))
+        }
+        assert scanned <= pipeline, f"listed non-sidecars: {scanned - pipeline}"
+
     def test_enrich_only_scans_cache_resident_items(self):
         svc = _service(on_disk={"/mnt/cache/movies/Movie.mkv"})
         svc._scan_associated_files = lambda p: [{"filename": "Movie.en.srt", "size": "1 KB"}]

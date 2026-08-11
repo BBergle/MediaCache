@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from web.config import DATA_DIR, SETTINGS_FILE
+from core.file_operations import is_sidecar_candidate, name_matches_video_stem
 from core.system_utils import get_array_direct_path, format_bytes, format_cache_age
 from core.media_grouping import format_season_range, group_ordered, stable_group_id
 from web.outcome_vocabulary import OUTCOMES, Outcome, outcome_tooltip
@@ -503,10 +504,15 @@ class RecentlyAddedService:
     def _scan_associated_files(self, video_cache_path: Optional[str]) -> List[Dict[str, str]]:
         """Find subtitle/sidecar files sharing a cache-resident video's basename.
 
-        Scans the video's directory for siblings whose stem matches the video's
-        stem (exact, or with a ``.``/``-`` suffix — catches ``Movie.en.srt``,
-        ``Movie.nfo``, ``Movie-poster.jpg``). Cache-only: array/unknown items
-        are never probed. Returns ``[{filename, size}]`` sorted by name.
+        Two shared rules, in order: :func:`is_sidecar_candidate` decides what
+        can be a sidecar at all (excludes other videos — Plex local extras land
+        beside the feature as ``<stem>-trailer.mkv`` — plus ``.plexcached``
+        array backups and dotfiles), then :func:`name_matches_video_stem`
+        decides whether it belongs to *this* video, boundary-aware so
+        ``Movie 10.en.srt`` is not claimed by ``Movie 1``.
+
+        Cache-only: array/unknown items are never probed. Returns
+        ``[{filename, size}]`` sorted by name, for display only.
         """
         if not video_cache_path:
             return []
@@ -521,15 +527,16 @@ class RecentlyAddedService:
                 for entry in it:
                     if entry.name == video_name:
                         continue
+                    # Name-only checks first: neither needs a stat, so an
+                    # excluded entry costs no syscall.
+                    if not is_sidecar_candidate(entry.name):
+                        continue
                     try:
                         if not entry.is_file():
                             continue
                     except OSError:
                         continue
-                    entry_stem = os.path.splitext(entry.name)[0]
-                    if (entry_stem == stem
-                            or entry_stem.startswith(stem + ".")
-                            or entry_stem.startswith(stem + "-")):
+                    if name_matches_video_stem(entry.name, stem):
                         try:
                             size = entry.stat().st_size
                         except OSError:
