@@ -405,3 +405,32 @@ class TestWidget:
             r = client.get("/recently-added/widget")
         assert r.status_code == 200
         assert "No Plex." in r.text
+
+
+class TestMissingAddedAt:
+    """`added_display` is Optional. The full page guarded it with `or '—'`; the
+    widget did not, so a row with no Plex `addedAt` rendered the literal string
+    "None" in the Added column."""
+
+    def test_widget_row_renders_a_dash_not_none(self, client):
+        rows = [_row(rating_key="1", title="Dune", added_display=None)]
+        p_svc, p_set, _ = _patch(_result(rows), settings={"recently_added_days": 7})
+        with p_svc, p_set:
+            r = client.get("/recently-added/widget")
+        assert r.status_code == 200
+        assert ">None<" not in r.text
+
+    def test_widget_group_renders_a_dash_not_none(self, client):
+        rows = [_episode(str(i), "Sugar (2024)", 1, i, added_display=None) for i in (1, 2)]
+        p_svc, p_set, _ = _patch(_result(rows), settings={"recently_added_days": 7})
+        with p_svc, p_set:
+            r = client.get("/recently-added/widget")
+        assert r.status_code == 200
+        assert ">None<" not in r.text
+
+    def test_full_page_still_guards_it(self, client):
+        rows = [_row(rating_key="1", title="Dune", added_display=None)]
+        p_svc, p_set, _ = _patch(_result(rows))
+        with p_svc, p_set:
+            r = client.get("/recently-added/list")
+        assert ">None<" not in r.text

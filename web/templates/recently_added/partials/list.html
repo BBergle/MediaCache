@@ -289,8 +289,11 @@
             </tbody>
             {% if groups %}
             <tfoot>
-                <tr>
-                    <td colspan="7" style="padding: 0.75rem 0.85rem; background: rgba(0,0,0,0.15); border-top: 1px solid var(--plex-border);">
+                {# Shared totals styling — an inline rgba() here couldn't be
+                   overridden by the light theme, so it rendered darker than
+                   every other table footer in the app. #}
+                <tr class="totals-row">
+                    <td colspan="7" style="padding: 0.75rem 0.85rem;">
                         <span class="text-muted"><strong>{{ summary.total }}</strong> items · <strong>{{ summary.total_size_display }}</strong> total · <strong>{{ summary.on_cache }}</strong> on cache · <strong>{{ summary.on_array }}</strong> on array</span>
                         {% if capped %}
                         <span class="text-muted" style="display: block; margin-top: 0.35rem; font-size: 0.78rem;">

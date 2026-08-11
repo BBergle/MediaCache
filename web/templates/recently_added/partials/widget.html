@@ -56,7 +56,7 @@
                 <span class="ra-w-sub">{% if item.season_display %}{{ item.season_display }} · {% endif %}{{ item.episode_count }} eps</span>
             </span>
             <span class="ra-w-size">{% if item.total_size_display %}<span class="ra-size-chip">{{ item.total_size_display }}</span>{% endif %}</span>
-            <span class="ra-w-age">{{ item.added_display }}</span>
+            <span class="ra-w-age">{{ item.added_display or "—" }}</span>
         </div>
         <div class="ra-w-detail" style="display: none;">
             {% for ep in item.episodes %}
@@ -77,7 +77,7 @@
                 {% if row.media_type == 'episode' and row.episode_info %}{{ row.episode_info.show }} · S{{ '%02d'|format(row.episode_info.season or 0) }}E{{ '%02d'|format(row.episode_info.episode or 0) }}{% else %}{{ row.title }}{% endif %}
             </span>
             <span class="ra-w-size">{% if row.size_display %}<span class="ra-size-chip">{{ row.size_display }}</span>{% endif %}</span>
-            <span class="ra-w-age">{{ row.added_display }}</span>
+            <span class="ra-w-age">{{ row.added_display or "—" }}</span>
         </div>
         <div class="ra-w-detail" style="display: none;">
             {{ ra_w_detail(row.filename or row.title, row.size_display) }}
