@@ -248,7 +248,7 @@ class TestOrphanCleanup:
         tracker.add_pin("999", "movie", "Gone")
 
         with caplog.at_level(logging.WARNING):
-            resolved, orphaned = resolve_pins_to_paths(server, tracker, "highest")
+            resolved, orphaned = resolve_pins_to_paths(server, tracker, "highest", prune=True)
 
         assert resolved == []
         assert orphaned == ["999"]
@@ -263,12 +263,67 @@ class TestOrphanCleanup:
         tracker.add_pin("100", "movie", "Alive")
         tracker.add_pin("999", "movie", "Gone")
 
-        resolved, orphaned = resolve_pins_to_paths(server, tracker, "highest")
+        resolved, orphaned = resolve_pins_to_paths(server, tracker, "highest", prune=True)
 
         assert [p for p, _, _ in resolved] == ["/plex/Alive.mkv"]
         assert orphaned == ["999"]
         assert tracker.is_pinned("100") is True
         assert tracker.is_pinned("999") is False
+
+
+class TestPruneIsOptIn:
+    """Read-only callers must never delete a pin.
+
+    The resolver runs on plain page renders (Cached Files, Recently Added, the
+    dashboard widget). A rating_key can be transiently absent from Plex — the
+    window Sonarr/Radarr's "Empty Trash after every scan" opens mid-upgrade —
+    and pruning there silently and permanently drops the user's pin.
+    """
+
+    def test_default_reports_orphans_without_removing_them(self, tracker):
+        server = FakePlexServer({})
+        tracker.add_pin("999", "movie", "Gone")
+
+        resolved, orphaned = resolve_pins_to_paths(server, tracker, "highest")
+
+        assert resolved == []
+        # Still reported, so the caller can surface it...
+        assert orphaned == ["999"]
+        # ...but the pin survives.
+        assert tracker.is_pinned("999") is True
+        assert tracker.get_pin("999") is not None
+
+    def test_default_does_not_warn_about_removal(self, tracker, caplog):
+        server = FakePlexServer({})
+        tracker.add_pin("999", "movie", "Gone")
+
+        with caplog.at_level(logging.WARNING):
+            resolve_pins_to_paths(server, tracker, "highest")
+
+        # No WARNING claiming a removal that did not happen.
+        assert not any("removing pin" in r.message for r in caplog.records)
+
+    def test_repeated_read_only_resolves_never_erode_the_tracker(self, tracker):
+        # Simulates a dashboard left open across many widget refreshes while the
+        # item is missing from Plex.
+        server = FakePlexServer({})
+        tracker.add_pin("999", "movie", "Gone")
+
+        for _ in range(10):
+            resolve_pins_to_paths(server, tracker, "highest")
+
+        assert tracker.is_pinned("999") is True
+
+    def test_resolvable_pins_are_unaffected_by_the_flag(self, tracker):
+        movie = FakeMovie("Alive", [FakeMedia("1080", "/plex/Alive.mkv")])
+        server = FakePlexServer({100: movie})
+        tracker.add_pin("100", "movie", "Alive")
+
+        for prune in (False, True):
+            resolved, orphaned = resolve_pins_to_paths(server, tracker, "highest", prune=prune)
+            assert [p for p, _, _ in resolved] == ["/plex/Alive.mkv"]
+            assert orphaned == []
+            assert tracker.is_pinned("100") is True
 
     def test_empty_tracker_returns_empty(self, tracker):
         server = FakePlexServer({})
@@ -428,7 +483,9 @@ class TestFetchItemRetryOnTimeout:
                 raise FakeNotFound("gone")
 
         tracker.add_pin("999", "movie", "DeletedMovie")
-        resolved, orphaned = resolve_pins_to_paths(ServerWithMissingItem(), tracker, "highest")
+        resolved, orphaned = resolve_pins_to_paths(
+            ServerWithMissingItem(), tracker, "highest", prune=True
+        )
 
         assert calls["n"] == 1  # no retry for NotFound
         assert orphaned == ["999"]

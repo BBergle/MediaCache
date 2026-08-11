@@ -1360,6 +1360,10 @@ class PlexCacheApp:
                 self.plex_manager.plex,
                 self.pinned_tracker,
                 preference=preference,
+                # The one caller that prunes. Read-only render paths pass the
+                # default (False) so loading a page can't delete a pin whose
+                # item is only transiently missing from Plex.
+                prune=True,
             )
         except Exception as e:
             logging.error(

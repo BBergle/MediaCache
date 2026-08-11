@@ -84,6 +84,9 @@
             {% for af in row.associated_files %}
             {{ ra_w_detail(af.filename, af.size) }}
             {% endfor %}
+            {% for ov in row.other_versions %}
+            {{ ra_w_detail(ov.filename, ov.size) }}
+            {% endfor %}
         </div>
     </div>
     {% endif %}

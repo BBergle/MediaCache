@@ -391,10 +391,18 @@ class ConfigManager:
         self.exit_if_active_session = False
         self._path_settings_migrated = False
         
-    def load_config(self) -> None:
-        """Load configuration from file and validate."""
+    def load_config(self, persist_updates: bool = True) -> None:
+        """Load configuration from file and validate.
+
+        Args:
+            persist_updates: When True (the CLI/run path), write back any
+                migrations and normalizations this load performed, and ensure
+                the data folder exists. Pass False from read-only callers such
+                as a web GET handler: a page render must not rewrite the user's
+                settings file or migrate tracking files as a side effect.
+        """
         logging.debug(f"Loading configuration from: {self.config_file}")
-        
+
         if not self.config_file.exists():
             logging.error(f"Settings file not found: {self.config_file}")
             raise FileNotFoundError(f"Settings file not found: {self.config_file}")
@@ -416,10 +424,11 @@ class ConfigManager:
         self._process_first_start()
         self._load_all_configs()
         self._validate_values()
-        self._save_updated_config()
 
-        # Ensure data folder exists and migrate tracking files if needed
-        self.ensure_data_folder()
+        if persist_updates:
+            self._save_updated_config()
+            # Ensure data folder exists and migrate tracking files if needed
+            self.ensure_data_folder()
 
         logging.debug("Configuration loaded and validated successfully")
     

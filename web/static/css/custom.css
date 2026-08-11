@@ -1839,6 +1839,14 @@ footer {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+/* Indeterminate outcome (pin state unknown / unmapped path). A dashed outline
+   reads as "not established" rather than as a settled state, without inventing
+   a new colour outside the token set. */
+.ra-badge-dashed {
+    border: 1px dashed var(--plex-border);
+    background: transparent;
+}
+
 /* Season/episode-count qualifier on a grouped show line. Inline (not a second
    line) so grouped and ungrouped rows keep the same row height. */
 .ra-w-sub {

@@ -229,18 +229,27 @@ def resolve_pins_to_paths(
     plex_server: Any,
     tracker: "PinnedMediaTracker",
     preference: str = "highest",
+    prune: bool = False,
 ) -> Tuple[List[Tuple[str, str, str]], List[str]]:
     """Resolve every pin in the tracker to its file paths.
 
-    Orphan cleanup: pins whose ``rating_key`` is no longer reachable in Plex
-    (item deleted, library removed) are removed from the tracker and returned
-    in the ``orphaned`` list for caller-side logging/reporting.
+    Orphan handling: pins whose ``rating_key`` is no longer reachable in Plex
+    (item deleted, library removed) are reported in the ``orphaned`` list, and
+    removed from the tracker only when ``prune`` is True.
 
     Args:
         plex_server: A connected plexapi ``PlexServer`` instance. Lazily
             references plexapi so unit tests can pass a mock.
         tracker: The ``PinnedMediaTracker`` instance.
         preference: Value from ``pinned_preferred_resolution``.
+        prune: Whether to delete unresolvable pins from the tracker. Defaults
+            to False so read-only callers never mutate user state: this
+            resolver runs on plain page renders (Cached Files, Recently Added,
+            the dashboard widget), and a rating_key can be transiently absent —
+            the window Sonarr/Radarr's "Empty Trash after every scan" opens
+            mid-upgrade — which would silently and permanently drop the pin.
+            Pass True only from the CLI/scheduled run, where the removal is
+            logged and reported.
 
     Returns:
         ``(resolved, orphaned)`` where:
@@ -248,7 +257,8 @@ def resolve_pins_to_paths(
         - ``resolved`` is a list of ``(plex_file_path, rating_key, pin_type)``
           tuples. Paths are still in Plex form — the caller is responsible for
           running them through the path modifier to get real paths.
-        - ``orphaned`` is a list of rating_key strings that were removed.
+        - ``orphaned`` is a list of rating_key strings that could not be
+          resolved (removed from the tracker only when ``prune`` is True).
     """
     # Lazy import so tests that don't need plexapi can still import this module.
     # Fall back to Exception when plexapi is missing OR when it's been mocked
@@ -298,11 +308,18 @@ def resolve_pins_to_paths(
                     )
                     time.sleep(_PIN_FETCH_RETRY_WAIT)
             except (NotFound, ValueError) as e:
-                logging.warning(
-                    f"Pinned item no longer in Plex: '{title}' "
-                    f"(rating_key={rk}) — removing pin. ({type(e).__name__}: {e})"
-                )
-                tracker.remove_pin(rk)
+                if prune:
+                    logging.warning(
+                        f"Pinned item no longer in Plex: '{title}' "
+                        f"(rating_key={rk}) — removing pin. ({type(e).__name__}: {e})"
+                    )
+                    tracker.remove_pin(rk)
+                else:
+                    logging.debug(
+                        f"Pinned item not resolvable right now: '{title}' "
+                        f"(rating_key={rk}) — leaving pin in place. "
+                        f"({type(e).__name__}: {e})"
+                    )
                 orphaned.append(rk)
                 item = None
                 last_transient_err = None

@@ -744,6 +744,62 @@ class PinnedService:
         """
         return set(self.resolve_all_to_cache_path_map().keys())
 
+    def resolve_all_to_plex_path_map(
+        self, plex: Optional[Any] = None
+    ) -> Optional[Dict[str, Tuple[str, str, str]]]:
+        """Return ``{plex_path: (rating_key, pin_type, title)}`` for every pin.
+
+        Keyed on the **Plex** path, not the cache path, for two reasons:
+
+        * Callers that already hold Plex paths (Recently Added works from
+          ``part.file``) can join with zero conversions. The two converters in
+          this codebase disagree — ``PinnedService._plex_to_cache`` walks
+          ``path_mappings`` in raw settings order and ignores ``cacheable``,
+          while ``MultiPathModifier`` sorts longest-prefix-first and honours it
+          (``core/file_operations.py``) — so a cache-path join silently misses
+          on overlapping prefixes, and can't match rows whose cache path is None.
+        * It is upgrade-resilient by construction: both sides re-read the
+          current ``part.file`` from the same server in the same request. For
+          that reason the result must **not** be memoised — a TTL cache is
+          exactly what would break resilience to a Sonarr/Radarr file swap.
+
+        Returns:
+            ``{}`` when the tracker holds no pins — definitively nothing pinned.
+            ``None`` when pins exist but could not be resolved (no connection,
+            resolver error). Callers must render that as *indeterminate*, never
+            as "not pinned": showing a live Pin button on an actually-pinned row
+            means one click unpins it and starts a background eviction.
+
+        Never prunes: ``resolve_pins_to_paths`` is called with the default
+        ``prune=False`` so a render cannot delete a pin.
+        """
+        if not self._tracker.list_pins():
+            return {}
+
+        server = plex if plex is not None else self._get_plex_server()
+        if server is None:
+            return None
+
+        try:
+            resolved, _orphaned = resolve_pins_to_paths(
+                server, self._tracker, self._get_preference()
+            )
+        except Exception as e:
+            logger.warning(
+                f"PinnedService.resolve_all_to_plex_path_map failed: {e}"
+            )
+            return None
+
+        titles = {
+            str(p.get("rating_key")): p.get("title", "")
+            for p in self._tracker.list_pins()
+        }
+        path_map: Dict[str, Tuple[str, str, str]] = {}
+        for plex_path, rk, pin_type in resolved:
+            if plex_path not in path_map:
+                path_map[plex_path] = (rk, pin_type, titles.get(str(rk), ""))
+        return path_map
+
     def resolve_all_to_cache_path_map(self) -> Dict[str, Tuple[str, str]]:
         """Return ``{cache_path: (rating_key, pin_type)}`` for every pin.
 

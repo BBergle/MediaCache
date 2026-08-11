@@ -174,7 +174,9 @@ class TestGetRecentlyAddedMedia:
 
         assert items == []
 
-    def test_emits_one_item_per_file_part(self):
+    def test_multi_part_version_is_one_item_covering_both_files(self):
+        # cd1/cd2 are parts of ONE version: both are cached together, so they
+        # belong to a single item whose size is their sum.
         api = _api([_section(1, "Movies", [
             _movie(1, "Multi", added_days_ago=1, parts=[
                 _part("/data/movies/Multi-cd1.mkv", 500),
@@ -183,9 +185,60 @@ class TestGetRecentlyAddedMedia:
         ])])
         items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
 
-        assert {i.file_path for i in items} == {
+        assert len(items) == 1
+        assert items[0].file_path == "/data/movies/Multi-cd1.mkv"
+        assert items[0].size == 1100
+        assert [f["file_path"] for f in items[0].version_files] == [
             "/data/movies/Multi-cd1.mkv", "/data/movies/Multi-cd2.mkv",
-        }
+        ]
+        assert all(f["is_preferred"] for f in items[0].version_files)
+
+    def test_multi_version_item_emits_one_row_for_the_preferred_version(self):
+        # 4K + 1080p of one movie share a ratingKey. PlexCache only ever caches
+        # and pins the preferred version, so a second row would put two pin
+        # controls on one ratingKey — the second reading "Pin" but unpinning.
+        movie = SimpleNamespace(
+            type='movie', ratingKey=7, title="Dune",
+            addedAt=datetime.now() - timedelta(days=1),
+            media=[
+                SimpleNamespace(videoResolution='1080', parts=[_part("/data/movies/Dune-1080p.mkv", 8)]),
+                SimpleNamespace(videoResolution='4k', parts=[_part("/data/movies/Dune-4K.mkv", 40)]),
+            ],
+        )
+        api = _api([_section(1, "Movies", [movie])])
+        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
+
+        assert len(items) == 1
+        assert items[0].file_path == "/data/movies/Dune-4K.mkv"
+        assert items[0].size == 40
+        # The 1080p file is still disclosed, flagged as not the managed version.
+        assert len(items[0].version_files) == 2
+        others = [f for f in items[0].version_files if not f["is_preferred"]]
+        assert [f["file_path"] for f in others] == ["/data/movies/Dune-1080p.mkv"]
+        assert others[0]["label"] == "1080p"
+
+    def test_version_preference_selects_the_row(self):
+        movie = SimpleNamespace(
+            type='movie', ratingKey=7, title="Dune",
+            addedAt=datetime.now() - timedelta(days=1),
+            media=[
+                SimpleNamespace(videoResolution='1080', parts=[_part("/data/movies/Dune-1080p.mkv", 8)]),
+                SimpleNamespace(videoResolution='4k', parts=[_part("/data/movies/Dune-4K.mkv", 40)]),
+            ],
+        )
+        api = _api([_section(1, "Movies", [movie])])
+        items = api.get_recently_added_media(
+            valid_sections=[1], days_to_monitor=7, version_preference="lowest"
+        )
+        assert items[0].file_path == "/data/movies/Dune-1080p.mkv"
+
+    def test_item_with_no_media_is_skipped(self):
+        blank = SimpleNamespace(
+            type='movie', ratingKey=8, title="Blank",
+            addedAt=datetime.now(), media=[],
+        )
+        api = _api([_section(1, "Movies", [blank])])
+        assert api.get_recently_added_media(valid_sections=[1], days_to_monitor=7) == []
 
     def test_returns_empty_when_sections_unavailable(self):
         api = PlexManager.__new__(PlexManager)

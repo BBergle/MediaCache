@@ -46,7 +46,19 @@ from web.services.recently_added_service import RecentlyAddedRow, RecentlyAddedS
 def _row(rating_key="1", title="Dune", media_type="movie", library_title="Movies",
          size=28_000_000_000, size_display="28.00 GB", location="cache",
          state="on_cache_not_pinned", is_pinned=False, protected_by=None,
-         pin_type="movie", episode_info=None, associated_files=None, filename=None):
+         pin_type="movie", episode_info=None, associated_files=None, filename=None,
+         outcome=None, added_display="2 hr ago", pin_scope="", pin_holder_key="",
+         pin_holder_title=""):
+    # Rows are normally built by _enrich, which derives `outcome`. These are
+    # constructed directly, so map the legacy `state` onto a sensible outcome
+    # unless the test names one explicitly.
+    if outcome is None:
+        outcome = {
+            "pinned": "held",
+            "protected": "returns_when_done",
+            "on_cache_not_pinned": "moves_back",
+            "on_array": "stays_on_array",
+        }.get(state, "unmapped")
     return RecentlyAddedRow(
         rating_key=rating_key,
         title=title,
@@ -56,9 +68,13 @@ def _row(rating_key="1", title="Dune", media_type="movie", library_title="Movies
         size=size,
         size_display=size_display,
         added_at=datetime.now(),
-        added_display="2 hr ago",
+        added_display=added_display,
         location=location,
         state=state,
+        outcome=outcome,
+        pin_scope=pin_scope,
+        pin_holder_key=pin_holder_key,
+        pin_holder_title=pin_holder_title,
         is_pinned=is_pinned,
         is_ondeck="OnDeck" in (protected_by or []),
         is_watchlist="Watchlist" in (protected_by or []),
@@ -155,11 +171,14 @@ class TestList:
             r = client.get("/recently-added/list", headers={"HX-Request": "true"})
 
         assert r.status_code == 200
-        # State badges
-        assert "Not pinned" in r.text          # on_cache_not_pinned
-        assert "Not cached" in r.text          # on_array
-        assert "Pinned" in r.text              # pinned
-        assert "Protected" in r.text and "OnDeck" in r.text
+        # Outcome badges — named by what happens next, not by a state noun.
+        assert "Moves to array" in r.text          # on cache, no longer held
+        assert "Not on cache" in r.text            # on array
+        assert "Stays on cache" in r.text          # pinned
+        assert "Returns when watched" in r.text and "OnDeck" in r.text
+        # "Protected" survives only as the reserved tooltip sentence on pinned
+        # states — never as a badge for transient OnDeck/Watchlist membership.
+        assert "Pinned — protected from eviction." in r.text
         # Pin button (macro) wires to the existing toggle endpoint
         assert "/api/pinned/toggle" in r.text
         # Array row shows byte-cost note

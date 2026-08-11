@@ -91,6 +91,11 @@ templates.env.globals["share_warning"] = _share_warning
 from web.settings_search_index import get_search_index
 templates.env.globals["settings_search_index_json"] = json.dumps(get_search_index())
 
+# Outcome vocabulary for Recently Added. Same reason as above for living outside
+# web/services/ — see web/outcome_vocabulary.py.
+from web.outcome_vocabulary import outcome_tooltip as _outcome_tooltip
+templates.env.globals["outcome_tooltip"] = _outcome_tooltip
+
 
 def get_time_format() -> str:
     """Read time_format from settings JSON. Returns '12h' or '24h' (default)."""

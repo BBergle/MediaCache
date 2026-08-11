@@ -65,7 +65,12 @@ def _service(on_disk):
     return svc
 
 
-def _enrich(svc, items, pinned=None, ondeck=None, watchlist=None, timestamps=None):
+def _enrich(svc, items, pinned=None, ondeck=None, watchlist=None, timestamps=None,
+            pin_path_map=..., exclude=None, released=None, watched_move=True):
+    # Default the pin map to "resolved, nothing pinned" so existing tests keep
+    # exercising the normal path rather than the indeterminate one.
+    if pin_path_map is ...:
+        pin_path_map = {}
     return svc._enrich(
         items,
         FakePathModifier(),
@@ -73,6 +78,10 @@ def _enrich(svc, items, pinned=None, ondeck=None, watchlist=None, timestamps=Non
         ondeck_keys=set(ondeck or []),
         watchlist_keys=set(watchlist or []),
         timestamps_keys=set(timestamps or []),
+        pin_path_map=pin_path_map,
+        exclude_paths=set(exclude) if exclude is not None else None,
+        released_paths=set(released) if released is not None else None,
+        watched_move=watched_move,
     )
 
 
@@ -367,3 +376,107 @@ class TestSummary:
         assert summary["on_cache"] == 2            # A + B physically on cache
         assert summary["on_cache_not_pinned"] == 1  # only A is actionable
         assert summary["on_array"] == 1            # C
+
+
+class TestPinResolution:
+    """Pin state must come from the resolved pin map, not raw key membership.
+
+    `pinned_media.json` holds only the scope's key, so an episode of a pinned
+    SHOW never appears there. Keying on the episode's own rating_key made every
+    such episode render "Not pinned" with a live Pin button, while /cache showed
+    the identical files as Pinned.
+    """
+
+    def test_show_pin_covers_its_episodes(self):
+        item = _item("9001", "Ep", "episode", "/data/tv/Show/S01E01.mkv",
+                     episode_info={"show": "Show", "season": 1, "episode": 1})
+        svc = _service(["/mnt/cache/tv/Show/S01E01.mkv"])
+        # The show pin (rk 5000) resolves down to this episode's Plex path.
+        rows = _enrich(svc, [item],
+                       pin_path_map={"/data/tv/Show/S01E01.mkv": ("5000", "show", "Show")})
+
+        assert rows[0].is_pinned is True
+        assert rows[0].outcome == "held"
+        assert rows[0].pin_scope == "show"
+        assert rows[0].pin_holder_key == "5000"
+        assert rows[0].pin_holder_title == "Show"
+
+    def test_direct_movie_pin_reports_itself_as_the_holder(self):
+        item = _item("42", "Dune", "movie", "/data/movies/Dune.mkv")
+        svc = _service(["/mnt/cache/movies/Dune.mkv"])
+        rows = _enrich(svc, [item],
+                       pin_path_map={"/data/movies/Dune.mkv": ("42", "movie", "Dune")})
+
+        assert rows[0].pin_scope == "movie"
+        assert rows[0].pin_holder_key == "42"
+
+    def test_pinned_but_not_on_cache_is_arriving_not_held(self):
+        item = _item("42", "Dune", "movie", "/data/movies/Dune.mkv")
+        svc = _service(["/mnt/user0/movies/Dune.mkv"])  # array only
+        rows = _enrich(svc, [item],
+                       pin_path_map={"/data/movies/Dune.mkv": ("42", "movie", "Dune")})
+
+        assert rows[0].is_pinned is True
+        assert rows[0].outcome == "arriving"
+
+    def test_unresolvable_pins_render_indeterminate_not_unpinned(self):
+        # Rendering "not pinned" here would put a live Pin button on a pinned
+        # row; one click unpins it and starts a background eviction.
+        item = _item("42", "Dune", "movie", "/data/movies/Dune.mkv")
+        svc = _service(["/mnt/cache/movies/Dune.mkv"])
+        rows = _enrich(svc, [item], pin_path_map=None)
+
+        assert rows[0].outcome == "pin_unknown"
+
+    def test_unresolvable_pins_still_honour_a_direct_key_match(self):
+        # Degraded but true: a direct item pin is knowable from the tracker
+        # alone. Only inherited show/season coverage needs Plex.
+        item = _item("42", "Dune", "movie", "/data/movies/Dune.mkv")
+        svc = _service(["/mnt/cache/movies/Dune.mkv"])
+        rows = _enrich(svc, [item], pinned=["42"], pin_path_map=None)
+
+        assert rows[0].is_pinned is True
+        assert rows[0].outcome == "pin_unknown"  # still indeterminate overall
+
+    def test_empty_map_means_definitively_nothing_pinned(self):
+        item = _item("42", "Dune", "movie", "/data/movies/Dune.mkv")
+        svc = _service(["/mnt/cache/movies/Dune.mkv"])
+        rows = _enrich(svc, [item], pin_path_map={},
+                       exclude=["/mnt/cache/movies/Dune.mkv"])
+
+        assert rows[0].is_pinned is False
+        assert rows[0].outcome == "moves_back"
+
+
+class TestMoverOutcomes:
+    def test_cached_file_absent_from_exclude_list_is_the_movers_call(self):
+        item = _item("1", "Fresh", "movie", "/data/movies/Fresh.mkv")
+        svc = _service(["/mnt/cache/movies/Fresh.mkv"])
+        rows = _enrich(svc, [item], exclude=[])
+
+        assert rows[0].is_mover_protected is False
+        assert rows[0].outcome == "mover_decides"
+
+    def test_released_file_is_flagged(self):
+        item = _item("1", "Rel", "movie", "/data/movies/Rel.mkv")
+        svc = _service(["/mnt/cache/movies/Rel.mkv"])
+        rows = _enrich(svc, [item], exclude=[], released=["/mnt/cache/movies/Rel.mkv"])
+
+        assert rows[0].is_released is True
+        assert rows[0].outcome == "mover_decides"
+
+    def test_watched_move_off_is_reported_on_cached_rows(self):
+        item = _item("1", "Held", "movie", "/data/movies/Held.mkv")
+        svc = _service(["/mnt/cache/movies/Held.mkv"])
+        rows = _enrich(svc, [item], exclude=["/mnt/cache/movies/Held.mkv"],
+                       watched_move=False)
+
+        assert rows[0].outcome == "held_by_setting"
+
+    def test_ondeck_cached_file_returns_when_watched(self):
+        item = _item("1", "OD", "movie", "/data/movies/OD.mkv")
+        svc = _service(["/mnt/cache/movies/OD.mkv"])
+        rows = _enrich(svc, [item], ondeck=["/mnt/user/movies/OD.mkv"],
+                       exclude=["/mnt/cache/movies/OD.mkv"])
+
+        assert rows[0].outcome == "returns_when_done"

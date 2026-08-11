@@ -13,8 +13,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional, Generator, Tuple, Dict, Set
-from dataclasses import dataclass
+from typing import Any, List, Optional, Generator, Tuple, Dict, Set
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from plexapi.server import PlexServer
@@ -155,6 +155,23 @@ class RecentlyAddedItem:
     library_section_id: Optional[int] = None
     size: int = 0
     episode_info: Optional[Dict[str, any]] = None
+    # Every file behind this item, across all versions:
+    # [{file_path, size, is_preferred, label}]. ``file_path``/``size`` above
+    # describe the PREFERRED version only — the one PlexCache caches and pins.
+    version_files: List[Dict[str, any]] = field(default_factory=list)
+
+
+def _media_version_label(media: Any) -> str:
+    """Short human label for a Plex Media version, e.g. "4k" or "1080p".
+
+    Used to distinguish rows in the multi-version expand detail. Falls back to
+    an empty string when Plex reports no resolution.
+    """
+    res = getattr(media, 'videoResolution', None)
+    if not res:
+        return ""
+    res = str(res).strip().lower()
+    return res if res.endswith('k') else f"{res}p"
 
 
 # API delay between plex.tv calls (seconds)
@@ -1630,7 +1647,8 @@ class PlexManager:
             logging.debug(f"[PLEX API] {len(unknown_user_ids)} unknown user ID(s) in RSS feed: {', '.join(sorted(unknown_user_ids))}. Run 'python3 plexcache_setup.py' and refresh users to resolve.")
 
     def get_recently_added_media(self, valid_sections: List[int], days_to_monitor: int,
-                                 max_items: int = 100) -> List['RecentlyAddedItem']:
+                                 max_items: int = 100,
+                                 version_preference: str = "highest") -> List['RecentlyAddedItem']:
         """Get recently-added media across enabled libraries (server-wide).
 
         Recently-added is a library-level view, so this uses the main account
@@ -1641,9 +1659,13 @@ class PlexManager:
                 path mappings). An empty list means all available sections.
             days_to_monitor: Only include items added within this many days.
             max_items: Cap on the number of items returned (newest first).
+            version_preference: ``pinned_preferred_resolution`` value used to
+                pick which version represents a multi-version item — the same
+                choice the pin and caching paths make.
 
         Returns:
-            List of RecentlyAddedItem, newest first, one entry per media file.
+            List of RecentlyAddedItem, newest first, one entry per Plex item
+            (not per file). ``version_files`` carries every underlying file.
         """
         items: List[RecentlyAddedItem] = []
         cutoff = datetime.now() - timedelta(days=days_to_monitor)
@@ -1702,22 +1724,56 @@ class PlexManager:
                 library_title = getattr(section, 'title', '') or ''
                 library_section_id = getattr(section, 'key', None)
 
-                for media in getattr(video, 'media', []) or []:
-                    for part in getattr(media, 'parts', []) or []:
-                        if not getattr(part, 'file', None):
+                # One item per rating_key, describing the version PlexCache would
+                # actually manage. Multi-VERSION items (4K + 1080p) are distinct
+                # Media objects and only the preferred one is ever cached or
+                # pinned (core/pinned_media.select_media_version) — emitting a
+                # row per version would put two pin controls on one rating_key,
+                # where the second reads "Pin" but unpins. Multi-PART items
+                # (cd1/cd2) are parts of ONE Media and are all cached together,
+                # so they stay folded into this item's file list.
+                medias = list(getattr(video, 'media', None) or [])
+                if not medias:
+                    continue
+                try:
+                    from core.pinned_media import select_media_version
+                    preferred = select_media_version(video, version_preference)
+                except (ValueError, AttributeError, ImportError):
+                    preferred = medias[0]
+
+                version_files: List[Dict[str, Any]] = []
+                for media in medias:
+                    is_preferred = media is preferred
+                    for part in getattr(media, 'parts', None) or []:
+                        part_file = getattr(part, 'file', None)
+                        if not part_file:
                             continue
-                        items.append(RecentlyAddedItem(
-                            file_path=part.file,
-                            rating_key=rating_key,
-                            title=title,
-                            media_type=media_type,
-                            added_at=added_at,
-                            library_title=library_title,
-                            library_section_id=library_section_id,
-                            size=int(getattr(part, 'size', 0) or 0),
-                            episode_info=episode_info,
-                        ))
-                        section_kept += 1
+                        version_files.append({
+                            'file_path': part_file,
+                            'size': int(getattr(part, 'size', 0) or 0),
+                            'is_preferred': is_preferred,
+                            'label': _media_version_label(media),
+                        })
+
+                preferred_files = [f for f in version_files if f['is_preferred']]
+                if not preferred_files:
+                    continue
+
+                items.append(RecentlyAddedItem(
+                    file_path=preferred_files[0]['file_path'],
+                    rating_key=rating_key,
+                    title=title,
+                    media_type=media_type,
+                    added_at=added_at,
+                    library_title=library_title,
+                    library_section_id=library_section_id,
+                    # Every part of the preferred version is cached together, so
+                    # the item's footprint is their sum.
+                    size=sum(f['size'] for f in preferred_files),
+                    episode_info=episode_info,
+                    version_files=version_files,
+                ))
+                section_kept += 1
 
             logging.debug(
                 f"Recently added [{getattr(section, 'title', '?')}] "

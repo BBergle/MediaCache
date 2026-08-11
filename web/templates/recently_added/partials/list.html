@@ -37,18 +37,23 @@
 {% endif %}
 {% endmacro %}
 
+{# Outcome badge — names what happens to the file next rather than a state noun.
+   Every arm is explicit: the terminal branch renders a neutral em-dash, which is
+   true of any input, rather than letting an unrecognised outcome silently borrow
+   another state's badge (the defect the old {% else %} → "Protected" produced).
+   tests/test_outcome_vocabulary.py asserts every enum member appears here. #}
 {% macro ra_status_badge(row) %}
-{% if row.state == 'pinned' %}
-<span class="badge badge-pinned"><i data-lucide="pin"></i> Pinned</span>
-{% elif row.state == 'protected' %}
-<span class="badge badge-info"><i data-lucide="check"></i> Protected</span>
-{% for p in row.protected_by %}<span class="badge badge-info badge-sm">{{ p }}</span>{% endfor %}
-{% elif row.state == 'on_cache_not_pinned' %}
-<span class="badge badge-muted" title="On cache now, but not held — it'll return to the array naturally once it's no longer OnDeck/Watchlist. Pin to keep it.">Not pinned</span>
-{% elif row.state == 'on_array' %}
-<span class="badge badge-muted">Not cached</span>
-{% else %}
-<span class="badge badge-muted">Unknown</span>
+{% if   row.outcome == 'held'              %}<span class="badge badge-pinned" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="pin"></i> Stays on cache</span>
+{% elif row.outcome == 'arriving'          %}<span class="badge badge-pinned" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="arrow-down-to-line"></i> Pinned, not on cache yet</span>
+{% elif row.outcome == 'held_by_setting'   %}<span class="badge badge-info" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="sliders-horizontal"></i> Stays on cache</span>
+{% elif row.outcome == 'returns_when_done' %}<span class="badge badge-info" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="clock"></i> Returns when watched</span>
+    {% for p in row.protected_by %}{% if p != 'Pinned' %}<span class="badge badge-info badge-sm">{{ p }}</span>{% endif %}{% endfor %}
+{% elif row.outcome == 'moves_back'        %}<span class="badge badge-muted" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="arrow-down"></i> Moves to array</span>
+{% elif row.outcome == 'mover_decides'     %}<span class="badge badge-released" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="send"></i> Mover's call</span>
+{% elif row.outcome == 'stays_on_array'    %}<span class="badge badge-muted" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="server"></i> Not on cache</span>
+{% elif row.outcome == 'unmapped'          %}<span class="badge badge-muted ra-badge-dashed" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="help-circle"></i> Unmapped</span>
+{% elif row.outcome == 'pin_unknown'       %}<span class="badge badge-muted ra-badge-dashed" title="{{ outcome_tooltip(row.outcome) }}">Pin state unknown</span>
+{% else %}<span class="badge badge-muted" title="Unrecognised outcome — please report">&mdash;</span>
 {% endif %}
 {% endmacro %}
 
@@ -93,25 +98,41 @@
     <td>{{ ra_status_badge(row) }}</td>
     <td>
         {% if row.rating_key %}
+        {# The pin that actually holds this file may be a show/season pin, so the
+           button must unpin the HOLDER — writing a redundant episode pin under a
+           show pin double-counts its bytes in budget_check and strands an
+           invisible pin when the show is later unpinned. #}
+        {% if row.outcome == 'pin_unknown' %}
+        {{ pin_button(row.rating_key, row.pin_type, row.title, False,
+                      disabled=True,
+                      disabled_reason='Plex did not answer, so PlexCache cannot tell whether this is pinned. Refresh to retry.') }}
+        {% elif row.is_pinned and row.pin_scope in ('show', 'season') %}
+        {{ pin_button(row.pin_holder_key, row.pin_scope, row.pin_holder_title, True,
+                      label='Unpin ' ~ row.pin_scope,
+                      confirm='This episode is held by a ' ~ row.pin_scope ~ ' pin on "' ~ row.pin_holder_title ~ '". Unpinning releases every episode it covers. Continue?') }}
+        {% else %}
         {{ pin_button(row.rating_key, row.pin_type, row.title, row.is_pinned) }}
-        {% if row.state == 'on_cache_not_pinned' %}
-        <div class="ra-status-note">stays on cache, backs up to array</div>
-        {% elif row.state == 'on_array' %}
+        {% endif %}
+        {% if row.outcome == 'stays_on_array' %}
         <div class="ra-status-note">copies ~{{ row.size_display }} to cache</div>
-        {% elif row.state == 'protected' %}
-        <div class="ra-status-note">{{ row.protected_by|join(' / ') }} is temporary</div>
-        {% elif row.state == 'pinned' %}
-        <div class="ra-status-note">stays on cache until unpinned</div>
+        {% elif row.outcome == 'arriving' %}
+        <div class="ra-status-note">next run copies ~{{ row.size_display }} across</div>
+        {% elif row.is_pinned and row.pin_scope in ('show', 'season') %}
+        <div class="ra-status-note">held by a {{ row.pin_scope }} pin</div>
         {% endif %}
         {% else %}
         <span class="text-muted">—</span>
         {% endif %}
     </td>
 </tr>
-{# Expand detail: the primary media file, then any associated files. #}
+{# Expand detail: the primary media file, then any associated files, then any
+   other Plex versions of the same item (which PlexCache does not manage). #}
 {{ ra_detail_file(row.filename or row.title, row.size_display, group_id if is_child else '') }}
 {% for af in row.associated_files %}
 {{ ra_detail_file(af.filename, af.size, group_id if is_child else '') }}
+{% endfor %}
+{% for ov in row.other_versions %}
+{{ ra_detail_file(ov.filename ~ (' — other version' if not ov.label else ' — ' ~ ov.label ~ ' version, not managed'), ov.size, group_id if is_child else '') }}
 {% endfor %}
 {% endmacro %}
 
@@ -223,13 +244,20 @@
                             {% if item.locations|length == 1 %}{{ ra_location_badge(item.locations[0]) }}
                             {% else %}<span class="badge badge-muted">Mixed</span>{% endif %}
                         </td>
+                        {# Weakest-outcome-wins, computed in Python (_group_outcome).
+                           The old chain lived here in Jinja and fell through to
+                           "Protected" for groups where nothing was protected. #}
                         <td>
-                            {% if item.not_pinned_count %}
-                            <span class="badge badge-muted">{{ item.not_pinned_count }} not pinned</span>
-                            {% elif item.pinned_count == item.episode_count %}
-                            <span class="badge badge-pinned"><i data-lucide="pin"></i> Pinned</span>
-                            {% else %}
-                            <span class="badge badge-info"><i data-lucide="check"></i> Protected</span>
+                            {% if   item.outcome_lead == 'held'              %}<span class="badge badge-pinned" title="{{ item.outcome_tooltip }}"><i data-lucide="pin"></i> {{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'arriving'          %}<span class="badge badge-pinned" title="{{ item.outcome_tooltip }}"><i data-lucide="arrow-down-to-line"></i> {{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'held_by_setting'   %}<span class="badge badge-info" title="{{ item.outcome_tooltip }}"><i data-lucide="sliders-horizontal"></i> {{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'returns_when_done' %}<span class="badge badge-info" title="{{ item.outcome_tooltip }}"><i data-lucide="clock"></i> {{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'moves_back'        %}<span class="badge badge-muted" title="{{ item.outcome_tooltip }}"><i data-lucide="arrow-down"></i> {{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'mover_decides'     %}<span class="badge badge-released" title="{{ item.outcome_tooltip }}"><i data-lucide="send"></i> {{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'stays_on_array'    %}<span class="badge badge-muted" title="{{ item.outcome_tooltip }}"><i data-lucide="server"></i> {{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'unmapped'          %}<span class="badge badge-muted ra-badge-dashed" title="{{ item.outcome_tooltip }}">{{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'pin_unknown'       %}<span class="badge badge-muted ra-badge-dashed" title="{{ item.outcome_tooltip }}">{{ item.outcome_label }}</span>
+                            {% else %}<span class="badge badge-muted" title="Unrecognised outcome — please report">&mdash;</span>
                             {% endif %}
                         </td>
                         <td><span class="text-muted" style="font-size: 0.72rem;">expand to pin</span></td>
