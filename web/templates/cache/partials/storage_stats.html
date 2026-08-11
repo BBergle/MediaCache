@@ -257,7 +257,7 @@
                 <div class="breakdown-bar">
                     <div class="breakdown-fill ondeck" style="width: {{ data.breakdown.ondeck.percent }}%"></div>
                 </div>
-                <div class="breakdown-percent">{{ data.breakdown.ondeck.percent }}% of cache</div>
+                <div class="breakdown-percent">{{ data.breakdown.ondeck.percent }}% of PlexCache data</div>
             </a>
             <a href="/cache?source=watchlist" class="breakdown-card breakdown-watchlist">
                 <div class="breakdown-header">
@@ -272,10 +272,29 @@
                 <div class="breakdown-bar">
                     <div class="breakdown-fill watchlist" style="width: {{ data.breakdown.watchlist.percent }}%"></div>
                 </div>
-                <div class="breakdown-percent">{{ data.breakdown.watchlist.percent }}% of cache</div>
+                <div class="breakdown-percent">{{ data.breakdown.watchlist.percent }}% of PlexCache data</div>
             </a>
+            {% if data.breakdown.released.count > 0 %}
+            <a href="/cache?source=released" class="breakdown-card breakdown-released"
+               title="Handed back to the Unraid mover. Still on cache and no longer protected, so the mover will relocate these on its own schedule. PlexCache keeps tracking them and will move them itself if the cache runs out of room first.">
+                <div class="breakdown-header">
+                    <i data-lucide="send"></i>
+                    <span>Released</span>
+                </div>
+                <div class="breakdown-stats">
+                    <div class="breakdown-value">{{ data.breakdown.released.count }}</div>
+                    <div class="breakdown-label">items</div>
+                </div>
+                <div class="breakdown-size">{{ data.breakdown.released.size_display }}</div>
+                <div class="breakdown-bar">
+                    <div class="breakdown-fill released" style="width: {{ data.breakdown.released.percent }}%"></div>
+                </div>
+                <div class="breakdown-percent">{{ data.breakdown.released.percent }}% of PlexCache data</div>
+            </a>
+            {% endif %}
             {% if data.breakdown.other.count > 0 %}
-            <a href="/cache?source=other" class="breakdown-card breakdown-other">
+            <a href="/cache?source=other" class="breakdown-card breakdown-other"
+               title="Cached files with no current OnDeck or watchlist demand recorded against them.">
                 <div class="breakdown-header">
                     <i data-lucide="help-circle"></i>
                     <span>Other</span>
@@ -288,7 +307,7 @@
                 <div class="breakdown-bar">
                     <div class="breakdown-fill other" style="width: {{ data.breakdown.other.percent }}%"></div>
                 </div>
-                <div class="breakdown-percent">{{ data.breakdown.other.percent }}% of cache</div>
+                <div class="breakdown-percent">{{ data.breakdown.other.percent }}% of PlexCache data</div>
             </a>
             {% endif %}
         </div>
@@ -331,6 +350,10 @@
                             </td>
                             {% endif %}
                             <td class="source-badges">
+                                {% if file.is_released %}
+                                <span class="badge badge-released badge-sm"
+                                      title="Handed back to the Unraid mover, still on cache until it relocates.">Released</span>
+                                {% else %}
                                 {% if file.is_ondeck %}
                                 <span class="badge badge-info badge-sm">OnDeck</span>
                                 {% endif %}
@@ -339,6 +362,7 @@
                                 {% endif %}
                                 {% if not file.is_ondeck and not file.is_watchlist %}
                                 <span class="badge badge-warning badge-sm">Other</span>
+                                {% endif %}
                                 {% endif %}
                             </td>
                             <td class="user-badges">
@@ -397,6 +421,10 @@
                             </td>
                             {% endif %}
                             <td class="source-badges">
+                                {% if file.is_released %}
+                                <span class="badge badge-released badge-sm"
+                                      title="Handed back to the Unraid mover, still on cache until it relocates.">Released</span>
+                                {% else %}
                                 {% if file.is_ondeck %}
                                 <span class="badge badge-info badge-sm">OnDeck</span>
                                 {% endif %}
@@ -405,6 +433,7 @@
                                 {% endif %}
                                 {% if not file.is_ondeck and not file.is_watchlist %}
                                 <span class="badge badge-warning badge-sm">Other</span>
+                                {% endif %}
                                 {% endif %}
                             </td>
                             <td class="user-badges">
@@ -473,6 +502,10 @@
                             </td>
                             {% endif %}
                             <td class="source-badges">
+                                {% if file.is_released %}
+                                <span class="badge badge-released badge-sm"
+                                      title="Handed back to the Unraid mover, still on cache until it relocates.">Released</span>
+                                {% else %}
                                 {% if file.is_ondeck %}
                                 <span class="badge badge-info badge-sm">OnDeck</span>
                                 {% endif %}
@@ -481,6 +514,7 @@
                                 {% endif %}
                                 {% if not file.is_ondeck and not file.is_watchlist %}
                                 <span class="badge badge-warning badge-sm">Other</span>
+                                {% endif %}
                                 {% endif %}
                             </td>
                             <td class="user-badges">

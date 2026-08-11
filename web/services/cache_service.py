@@ -30,6 +30,7 @@ def cached_files_to_dicts(files: List["CachedFile"]) -> List[Dict[str, Any]]:
             "is_ondeck": f.is_ondeck,
             "is_watchlist": f.is_watchlist,
             "is_pinned": f.is_pinned,
+            "is_released": f.is_released,
             "subtitle_count": f.subtitle_count,
             "sidecar_count": f.sidecar_count,
             "associated_files": f.associated_files,
@@ -46,9 +47,11 @@ def calculate_file_totals(files_data: List[Dict[str, Any]]) -> Dict[str, Any]:
         "ondeck_count": sum(1 for f in files_data if f["is_ondeck"]),
         "watchlist_count": sum(1 for f in files_data if f["is_watchlist"]),
         "pinned_count": sum(1 for f in files_data if f["is_pinned"]),
+        "released_count": sum(1 for f in files_data if f.get("is_released")),
         "other_count": sum(
             1 for f in files_data
             if not f["is_ondeck"] and not f["is_watchlist"] and not f["is_pinned"]
+            and not f.get("is_released")
         ),
         "total_size": total_size,
         "total_size_display": format_bytes(total_size),
@@ -78,6 +81,11 @@ class CachedFile:
     is_pinned: bool = False  # Set when this path (or its parent scope) is in PinnedMediaTracker
     rating_key: Optional[str] = None  # Plex rating key, when resolvable from trackers or pinned map
     pin_type: Optional[str] = None  # "episode" or "movie" — scope to pass to /api/pinned/toggle
+    # Handed back to the Unraid mover: still on cache, no longer in the exclude
+    # list, waiting for the mover to relocate it. Tracked from the timestamp
+    # entry's released_at stamp so PlexCache can still evict it if the mover
+    # never comes (a cache:prefer or cache:only share).
+    is_released: bool = False
 
 
 class CacheService:
@@ -642,9 +650,11 @@ class CacheService:
         if isinstance(ts_info, dict):
             cached_at_str = ts_info.get("cached_at")
             source = ts_info.get("source", "unknown")
+            is_released = "released_at" in ts_info
         else:
             cached_at_str = ts_info
             source = "unknown"
+            is_released = False
 
         try:
             cached_at = datetime.fromisoformat(cached_at_str) if cached_at_str else now
@@ -701,7 +711,11 @@ class CacheService:
             return None
         if source_filter == "watchlist" and not is_watchlist:
             return None
-        if source_filter == "other" and (is_ondeck or is_watchlist or is_pinned):
+        if source_filter == "released" and not is_released:
+            return None
+        # "Other" means genuinely unclassified. Released files have their own
+        # bucket, so they must not fall through into this one.
+        if source_filter == "other" and (is_ondeck or is_watchlist or is_pinned or is_released):
             return None
 
         if is_pinned:
@@ -762,6 +776,7 @@ class CacheService:
             is_pinned=is_pinned,
             rating_key=row_rating_key,
             pin_type=row_pin_type,
+            is_released=is_released,
         )
 
     def get_all_cached_files(
@@ -837,7 +852,9 @@ class CacheService:
             "priority": lambda f: f.priority_score,
             "age": lambda f: f.cache_age_hours,
             "users": lambda f: len(f.users),
-            "source": lambda f: (f.is_ondeck, f.is_watchlist),  # OnDeck first, then Watchlist
+            # OnDeck first, then Watchlist, then unclassified, with released last:
+            # they are on their way out, so they belong at the bottom of the list.
+            "source": lambda f: (f.is_ondeck, f.is_watchlist, not f.is_released),
         }
         sort_key = sort_keys.get(sort_by, sort_keys["priority"])
         files.sort(key=sort_key, reverse=reverse)
@@ -1060,15 +1077,32 @@ class CacheService:
             except (OSError, AttributeError):
                 pass
 
-        # Calculate sizes by source
-        ondeck_size = sum(f.size for f in all_files if f.is_ondeck)
-        watchlist_size = sum(f.size for f in all_files if f.is_watchlist and not f.is_ondeck)
-        other_size = sum(f.size for f in all_files if not f.is_ondeck and not f.is_watchlist)
+        # Calculate sizes by source. Released files are checked first: they are
+        # no longer OnDeck or watchlisted (release marks them uncached in both
+        # trackers), so without their own bucket they would silently swell
+        # "Other" with no indication of what they are.
+        released_size = sum(f.size for f in all_files if f.is_released)
+        ondeck_size = sum(f.size for f in all_files if f.is_ondeck and not f.is_released)
+        watchlist_size = sum(
+            f.size for f in all_files
+            if f.is_watchlist and not f.is_ondeck and not f.is_released
+        )
+        other_size = sum(
+            f.size for f in all_files
+            if not f.is_ondeck and not f.is_watchlist and not f.is_released
+        )
         total_cached_size = sum(f.size for f in all_files)
 
-        ondeck_count = sum(1 for f in all_files if f.is_ondeck)
-        watchlist_count = sum(1 for f in all_files if f.is_watchlist and not f.is_ondeck)
-        other_count = sum(1 for f in all_files if not f.is_ondeck and not f.is_watchlist)
+        released_count = sum(1 for f in all_files if f.is_released)
+        ondeck_count = sum(1 for f in all_files if f.is_ondeck and not f.is_released)
+        watchlist_count = sum(
+            1 for f in all_files
+            if f.is_watchlist and not f.is_ondeck and not f.is_released
+        )
+        other_count = sum(
+            1 for f in all_files
+            if not f.is_ondeck and not f.is_watchlist and not f.is_released
+        )
 
         # Calculate percentages of cache
         def calc_percent(size, total):
@@ -1329,6 +1363,12 @@ class CacheService:
                     "size": watchlist_size,
                     "size_display": format_bytes(watchlist_size),
                     "percent": calc_percent(watchlist_size, total_cached_size) if total_cached_size > 0 else 0
+                },
+                "released": {
+                    "count": released_count,
+                    "size": released_size,
+                    "size_display": format_bytes(released_size),
+                    "percent": calc_percent(released_size, total_cached_size) if total_cached_size > 0 else 0
                 },
                 "other": {
                     "count": other_count,

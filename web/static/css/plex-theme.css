@@ -817,6 +817,12 @@ body {
     color: var(--plex-text-muted);
 }
 
+/* Released to the Unraid mover — matches .breakdown-released */
+.badge-released {
+    background: color-mix(in srgb, var(--plex-purple) 15%, transparent);
+    color: var(--plex-purple);
+}
+
 .badge-pinned {
     background: rgba(229, 160, 13, 0.18);
     color: var(--plex-orange);
@@ -2098,6 +2104,13 @@ pre.log-output-wrapped {
     color: var(--plex-warning);
 }
 
+/* Released to the Unraid mover. Deliberately not --plex-success: green sits
+   next to the green PlexCache bar in the Cache Limit card and would read as
+   "protected", which is the opposite of what released means. */
+.breakdown-released .breakdown-header {
+    color: var(--plex-purple);
+}
+
 .breakdown-stats {
     display: flex;
     align-items: baseline;
@@ -2147,6 +2160,10 @@ pre.log-output-wrapped {
 
 .breakdown-fill.other {
     background: var(--plex-warning);
+}
+
+.breakdown-fill.released {
+    background: var(--plex-purple);
 }
 
 .breakdown-percent {

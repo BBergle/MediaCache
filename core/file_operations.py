@@ -841,6 +841,115 @@ class CacheTimestampTracker:
         """Backward-compatible alias for get_associated_files()."""
         return self.get_associated_files(parent_path)
 
+    def get_all_tracked_paths(self) -> Set[str]:
+        """Get every cache path this tracker knows about, sidecars included.
+
+        Associated files (subtitles, artwork, NFOs) are not top-level keys —
+        associate_files() folds them into their parent's "associated_files"
+        list and deletes the standalone entry. A caller that only walks
+        _timestamps.keys() therefore misses every sidecar, so this expands
+        them back out.
+
+        Returns:
+            Set of cache paths (parent videos + their associated files).
+        """
+        with self._lock:
+            paths = set(self._timestamps.keys())
+            for entry in self._timestamps.values():
+                if isinstance(entry, dict):
+                    paths.update(entry.get("associated_files", []))
+            return paths
+
+    def _resolve_entry_key(self, cache_file_path: str) -> Optional[str]:
+        """Map a cache path to the key that actually holds its entry.
+
+        Sidecars have no entry of their own — associate_files() folds them
+        into the parent video — so they resolve to the parent. Caller must
+        already hold the lock.
+        """
+        if cache_file_path in self._timestamps:
+            return cache_file_path
+        return self._file_to_parent.get(cache_file_path)
+
+    def mark_released(self, cache_file_path: str) -> bool:
+        """Stamp an entry as released to the Unraid mover.
+
+        A released file stays in the tracker — that is the whole point. The
+        exclude line is gone so the mover is free to take it, but PlexCache
+        keeps managing it so the quota and eviction can still reach it if the
+        mover never does.
+
+        Args:
+            cache_file_path: Cache path of the file (or one of its sidecars).
+
+        Returns:
+            True if an entry was stamped.
+        """
+        with self._lock:
+            key = self._resolve_entry_key(cache_file_path)
+            if key is None:
+                return False
+            entry = self._timestamps.get(key)
+            if not isinstance(entry, dict):
+                return False
+            entry["released_at"] = datetime.now().isoformat()
+            self._save()
+            logging.debug(f"Marked released: {cache_file_path}")
+            return True
+
+    def clear_released(self, cache_file_path: str) -> bool:
+        """Drop the release stamp, putting the file back under PlexCache's
+        own reclamation (used when re-adopting under cache pressure).
+
+        Returns:
+            True if a stamp was present and removed.
+        """
+        with self._lock:
+            key = self._resolve_entry_key(cache_file_path)
+            if key is None:
+                return False
+            entry = self._timestamps.get(key)
+            if not isinstance(entry, dict) or "released_at" not in entry:
+                return False
+            del entry["released_at"]
+            self._save()
+            logging.debug(f"Cleared released mark: {cache_file_path}")
+            return True
+
+    def is_released(self, cache_file_path: str) -> bool:
+        """Whether this file (or its parent video) is marked released."""
+        with self._lock:
+            key = self._resolve_entry_key(cache_file_path)
+            if key is None:
+                return False
+            entry = self._timestamps.get(key)
+            return isinstance(entry, dict) and "released_at" in entry
+
+    def get_released_at(self, cache_file_path: str) -> Optional[str]:
+        """ISO timestamp of when this file was released, or None."""
+        with self._lock:
+            key = self._resolve_entry_key(cache_file_path)
+            if key is None:
+                return None
+            entry = self._timestamps.get(key)
+            if isinstance(entry, dict):
+                return entry.get("released_at")
+            return None
+
+    def get_released_paths(self) -> Set[str]:
+        """Every cache path currently marked released, sidecars expanded.
+
+        A sidecar inherits its parent's released state, so releasing a video
+        releases its subtitles and artwork with it.
+        """
+        with self._lock:
+            released: Set[str] = set()
+            for key, entry in self._timestamps.items():
+                if isinstance(entry, dict) and "released_at" in entry:
+                    released.add(key)
+                    released.update(entry.get("associated_files", []))
+            return released
+
     def find_parent_video(self, file_path: str) -> Optional[str]:
         """Find the parent video for an associated file via the reverse index.
 

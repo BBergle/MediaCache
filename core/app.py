@@ -29,7 +29,7 @@ from core.config import ConfigManager
 from core.logging_config import LoggingManager, reset_warning_error_flag
 from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock, get_disk_usage, get_array_direct_path, detect_zfs, set_zfs_prefixes, format_bytes, create_dir_with_ownership, cleanup_empty_parent_folders, resolve_cache_boundary, sweep_empty_folders
 from core.plex_api import PlexManager, OnDeckItem
-from core.file_operations import MultiPathModifier, SiblingFileFinder, FileFilter, FileMover, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration, get_media_identity, find_matching_plexcached, is_directory_level_file, save_json_atomically
+from core.file_operations import MultiPathModifier, SiblingFileFinder, FileFilter, FileMover, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration, get_media_identity, find_matching_plexcached, is_directory_level_file, is_video_file, save_json_atomically
 from core.pinned_media import PinnedMediaTracker, resolve_pins_to_paths
 
 
@@ -88,6 +88,13 @@ class PlexCacheApp:
         self.moved_to_array_count = 0
         self.moved_to_array_bytes = 0
         self.cached_bytes = 0
+        # Files handed back to the Unraid mover instead of being relocated
+        self.released_count = 0
+        self.released_bytes = 0
+        self.readopted_count = 0
+        # Set when _apply_cache_limit() has to skip caching for space reasons.
+        # Drives _reclaim_released_if_constrained().
+        self._cache_space_constrained = False
         # Eviction tracking
         self.evicted_count = 0
         self.evicted_bytes = 0
@@ -469,6 +476,22 @@ class PlexCacheApp:
         move_verb = "Would move" if self.dry_run else "Moved"
         logging.info(f"[RESULTS] {move_verb} to cache: {actually_moved} files")
         logging.info(f"[RESULTS] {move_verb} to array: {moved_to_array} files")
+
+        # Show files handed back to the Unraid mover (no data moved)
+        released_count = getattr(self, 'released_count', 0)
+        if released_count > 0:
+            release_verb = "Would release" if self.dry_run else "Released"
+            released_size = format_bytes(getattr(self, 'released_bytes', 0))
+            logging.info(
+                f"[RESULTS] {release_verb} to mover: {released_count} files "
+                f"({released_size}, left in place)"
+            )
+
+        readopted_count = getattr(self, 'readopted_count', 0)
+        if readopted_count > 0:
+            logging.info(
+                f"[RESULTS] Reclaimed from mover: {readopted_count} files (cache had no room)"
+            )
 
         # Show eviction stats if any files were evicted
         if self.evicted_count > 0:
@@ -1847,6 +1870,262 @@ class PlexCacheApp:
 
         return to_restore, to_move
 
+    def _cache_path_for(self, array_path: str) -> Optional[str]:
+        """Translate an array path to its cache path, or None if unmappable."""
+        if not self.file_path_modifier:
+            return None
+        try:
+            cache_path, _ = self.file_path_modifier.convert_real_to_cache(array_path)
+        except (ValueError, TypeError, AttributeError):
+            return None
+        return cache_path or None
+
+    def _share_has_array_side(self, array_path: str) -> bool:
+        """Whether this share actually has an array behind it.
+
+        Release hands a file to the Unraid mover. That only means anything on a
+        share the mover can move cache -> array. Two shapes qualify:
+        a /mnt/user/ path that converts to a distinct /mnt/user0/ path, and a
+        path that is already array-direct. Everything else — ZFS pool-only
+        shares, non-Unraid installs — falls back to relocating.
+        """
+        if array_path.startswith('/mnt/user0/'):
+            return True
+        if array_path.startswith('/mnt/user/'):
+            return get_array_direct_path(array_path) != array_path
+        return False
+
+    def _partition_release_candidates(
+        self, files_to_move: List[str]
+    ) -> Tuple[List[str], List[str]]:
+        """Split the no-backup bucket into files to release vs files to relocate.
+
+        A file with no .plexcached backup was never lifted off the array by
+        PlexCache, so relocating it writes to the array for the first time and
+        spins a disk the user did not ask to spin. The Unraid mover reclaims
+        that file on its own schedule once the exclude line is gone, so
+        PlexCache releases it instead of moving bytes.
+
+        Fails closed to today's relocate behaviour whenever release would be
+        unsafe or pointless:
+
+        - not on Unraid, or no array behind the share (ZFS pool-only): nothing
+          would ever reclaim the file.
+        - a differently-named .plexcached exists (Radarr/Sonarr upgraded the
+          file while it was cached): _move_to_array has to clean that backup
+          up, and walking away would orphan it permanently.
+        - the cache file has more than one hard link (actively seeding): the
+          mover breaks the link when it relocates, doubling on-disk usage.
+          Checked unconditionally, not behind check_hardlinks_on_restore,
+          because that setting is about a different decision and defaults off.
+
+        Args:
+            files_to_move: Array paths with no exact .plexcached backup.
+
+        Returns:
+            Tuple of (files_to_release, files_to_relocate).
+        """
+        to_release = []
+        to_relocate = []
+
+        on_unraid = bool(getattr(self.system_detector, 'is_unraid', False))
+
+        for array_path in files_to_move:
+            if not on_unraid or not self._share_has_array_side(array_path):
+                to_relocate.append(array_path)
+                continue
+
+            cache_path = self._cache_path_for(array_path)
+            if not cache_path or not os.path.isfile(cache_path):
+                to_relocate.append(array_path)
+                continue
+
+            # Upgraded file: a backup under the old filename is still on the array
+            if is_video_file(cache_path):
+                array_dir = os.path.dirname(get_array_direct_path(array_path))
+                try:
+                    old_backup = find_matching_plexcached(
+                        array_dir, get_media_identity(cache_path), cache_path
+                    )
+                except OSError:
+                    old_backup = None
+                if old_backup:
+                    logging.debug(
+                        f"Not releasing (old .plexcached needs cleanup): {os.path.basename(cache_path)}"
+                    )
+                    to_relocate.append(array_path)
+                    continue
+
+            # Hard-linked file: let PlexCache's own hardlink-aware path handle it
+            try:
+                if os.stat(cache_path).st_nlink > 1:
+                    logging.debug(
+                        f"Not releasing (hard-linked): {os.path.basename(cache_path)}"
+                    )
+                    to_relocate.append(array_path)
+                    continue
+            except OSError as e:
+                logging.debug(f"Not releasing (cannot stat {cache_path}): {e}")
+                to_relocate.append(array_path)
+                continue
+
+            to_release.append(array_path)
+
+        return to_release, to_relocate
+
+    def _reclaim_released_if_constrained(self) -> int:
+        """Take released files back when the cache had no room for new content.
+
+        Release assumes Unraid's mover eventually relocates the file. On a
+        cache:prefer share the mover runs the other direction, and on a
+        cache:only share it does not run at all, so the file would sit there
+        forever. PlexCache cannot read shareUseCache to tell the difference
+        (neither /boot nor emhttp's share state is mounted in the container),
+        so rather than predict the mover's behaviour it observes the outcome.
+
+        The trigger is _apply_cache_limit() reporting that it had to skip
+        caching something for space reasons. That is measured harm rather than
+        a threshold: it scales from a 250GB SSD to a 20TB pool with no constant
+        to tune, it never fires while there is room to spare, and it inherits
+        whatever the user configured, since cache_limit, min_free_space and
+        plexcache_quota all feed it.
+
+        Deliberately not time-triggered. A Mover Tuning user holds recent media
+        on cache on purpose, and a timer would fight exactly the configuration
+        this feature exists to respect.
+
+        Runs after the caching phase, so the files relocate in this same pass.
+
+        Returns:
+            Number of files handed back to the array.
+        """
+        if not self.timestamp_tracker or self.dry_run:
+            return 0
+        if not getattr(self, '_cache_space_constrained', False):
+            return 0
+
+        released = self.timestamp_tracker.get_released_paths()
+        if not released:
+            return 0
+
+        still_resident = [p for p in sorted(released) if os.path.isfile(p)]
+        if not still_resident:
+            return 0
+
+        to_relocate = []
+        reclaimable_bytes = 0
+        for cache_path in still_resident:
+            array_path = None
+            if self.file_path_modifier:
+                array_path, _ = self.file_path_modifier.convert_cache_to_real(cache_path)
+            if not array_path:
+                logging.debug(f"Cannot reclaim (no array path): {cache_path}")
+                continue
+            try:
+                reclaimable_bytes += os.path.getsize(cache_path)
+            except OSError:
+                pass
+            self.timestamp_tracker.clear_released(cache_path)
+            to_relocate.append(array_path)
+
+        if not to_relocate:
+            return 0
+
+        count = len(to_relocate)
+        unit = "file" if count == 1 else "files"
+        logging.warning(
+            f"[RELEASE] Cache ran out of room while {count} released {unit} "
+            f"({format_bytes(reclaimable_bytes)}) were still waiting on the Unraid mover. "
+            f"The mover does not appear to be reclaiming them, which is expected on a "
+            f"cache:prefer or cache:only share. Moving them to the array now."
+        )
+        for array_path in to_relocate[:6]:
+            logging.info(f"  {self._extract_display_name(array_path)}")
+        if count > 6:
+            logging.info(f"  ...and {count - 6} more")
+
+        self._safe_move_files(to_relocate, 'array')
+        self.readopted_count = getattr(self, 'readopted_count', 0) + count
+        return count
+
+    def _release_files(self, files_to_release: List[str]) -> int:
+        """Hand watched files back to the Unraid mover without moving bytes.
+
+        Drops the mover exclude line and stamps the tracker entry as released.
+        The entry stays: the mover now owns relocation, but PlexCache keeps the
+        file in its inventory so the quota and eviction can still reach it if
+        the mover never runs (a cache:prefer or cache:only share).
+
+        Returns:
+            Number of files released.
+        """
+        if not files_to_release:
+            return 0
+
+        if self.dry_run:
+            logging.info(
+                f"[RELEASE] DRY-RUN: Would release {len(files_to_release)} file(s) to the Unraid mover"
+            )
+            for array_path in files_to_release[:6]:
+                logging.info(f"  {self._extract_display_name(array_path)}")
+            if len(files_to_release) > 6:
+                logging.info(f"  ...and {len(files_to_release) - 6} more")
+            return 0
+
+        cache_paths = []
+        for array_path in files_to_release:
+            cache_path = self._cache_path_for(array_path)
+            if cache_path:
+                cache_paths.append((array_path, cache_path))
+
+        if not cache_paths:
+            return 0
+
+        # Drop the exclude lines first. Only clear tracking for files whose
+        # exclude entry actually went away — otherwise the file stays
+        # mover-protected while PlexCache stops tracking it.
+        removed = self.file_filter.remove_files_from_exclude_list(
+            [c for _, c in cache_paths]
+        )
+        if not removed:
+            logging.warning(
+                "[RELEASE] Could not update the exclude list — leaving "
+                f"{len(cache_paths)} file(s) tracked for retry next run"
+            )
+            return 0
+
+        count = len(cache_paths)
+        unit = "file" if count == 1 else "files"
+        logging.info(f"[RELEASE] Handing {count} {unit} back to the Unraid mover (no data moved):")
+
+        released_bytes = 0
+        for array_path, cache_path in cache_paths:
+            try:
+                size = os.path.getsize(cache_path)
+            except OSError:
+                size = 0
+            released_bytes += size
+
+            if self.timestamp_tracker:
+                self.timestamp_tracker.mark_released(cache_path)
+            if self.ondeck_tracker:
+                self.ondeck_tracker.mark_uncached(cache_path)
+            if self.watchlist_tracker:
+                self.watchlist_tracker.mark_uncached(cache_path)
+
+            # INFO, and in the same "  [Action] name (size)" shape _move_to_array
+            # uses — the web OperationRunner builds its activity feed by parsing
+            # these lines out of the log stream.
+            display_name = self._extract_display_name(array_path)
+            logging.info(f"  [Released] {display_name} ({format_bytes(size)})")
+
+            if getattr(self, '_record_activity', False):
+                self._record_file_activity("Released", os.path.basename(array_path), size)
+
+        self.released_count = getattr(self, 'released_count', 0) + count
+        self.released_bytes = getattr(self, 'released_bytes', 0) + released_bytes
+        return count
+
     def _log_restore_and_move_summary(self, files_to_restore: List[str], files_to_move: List[str]) -> None:
         """Log summary of restore vs move operations at INFO level.
 
@@ -1974,11 +2253,25 @@ class PlexCacheApp:
             if self.timestamp_tracker:
                 self._build_restore_sibling_map()
 
-            # Log restore vs move summary before processing
             files_to_restore, files_to_move = self._separate_restore_and_move(self.media_to_array)
+
+            # Files PlexCache never lifted off the array are handed back to the
+            # Unraid mover rather than relocated — no array write, no spinup.
+            files_to_release, files_to_move = self._partition_release_candidates(files_to_move)
+            if files_to_release:
+                release_set = set(files_to_release)
+                self.media_to_array = [f for f in self.media_to_array if f not in release_set]
+
+            # Log restore vs move summary before processing
             if files_to_restore or files_to_move:
                 self._log_restore_and_move_summary(files_to_restore, files_to_move)
-            self._safe_move_files(self.media_to_array, 'array')
+
+            released_count = 0
+            if files_to_release:
+                released_count = self._release_files(files_to_release)
+
+            if self.media_to_array:
+                self._safe_move_files(self.media_to_array, 'array')
 
             # Deferred exclude list cleanup: only remove entries for files that actually moved (issue #13)
             # This prevents losing tracking of files if a move fails (e.g., disk full, I/O error)
@@ -1987,8 +2280,10 @@ class PlexCacheApp:
                 if successful_moves:
                     self.file_filter.remove_files_from_exclude_list(list(successful_moves))
 
-                # Log warnings for files that failed to move (their exclude entries stay protected)
-                deferred_count = len(self._move_back_exclude_paths)
+                # Log warnings for files that failed to move (their exclude entries stay protected).
+                # Released files had their exclude entries dropped by _release_files, so they are
+                # not pending moves and must not be counted as failures.
+                deferred_count = len(self._move_back_exclude_paths) - released_count
                 succeeded_count = len(successful_moves)
                 if succeeded_count < deferred_count:
                     failed_count = deferred_count - succeeded_count
@@ -2020,6 +2315,13 @@ class PlexCacheApp:
             if len(self.media_to_cache) > 6:
                 logging.info(f"  ...and {len(self.media_to_cache) - 6} more")
         self._safe_move_files(self.media_to_cache, 'cache')
+
+        # Step 4: If the cache had no room for content we wanted, take back any
+        # files still sitting released and waiting on a mover that is not coming.
+        # Runs last because the constraint is only known once caching has been
+        # sized, and _safe_move_files('array') here cannot re-enter that sizing.
+        if self.config_manager.cache.watched_move:
+            self._reclaim_released_if_constrained()
 
         # Associate sibling files with their parent videos in the timestamp tracker
         if self.timestamp_tracker and self.sibling_map:
@@ -2168,39 +2470,60 @@ class PlexCacheApp:
         )
 
     def _get_plexcache_tracked_size(self) -> tuple:
-        """Calculate current PlexCache tracked size from exclude file.
+        """Calculate current PlexCache tracked size from its file inventory.
+
+        The inventory is the timestamp tracker unioned with the Unraid mover
+        exclude file. The tracker leads — matching what
+        CacheService.get_cached_files_list() already does on the web side —
+        because the exclude file answers "what should the mover keep its hands
+        off", which is a narrower question than "what is PlexCache managing".
+        A released file keeps its tracker entry and is deliberately dropped
+        from the exclude file, and both the quota and the eviction candidate
+        pool still need to reach it.
+
+        The exclude file is unioned in rather than replaced so installs whose
+        two stores have drifted keep everything they had before. Deduping via
+        a set also stops repeated exclude-file lines from double-counting
+        bytes.
 
         Returns:
-            Tuple of (total_bytes, cached_files_list). Returns (0, []) on error.
-            In Docker, paths are translated from host to container paths.
+            Tuple of (total_bytes, cached_files_list). Returns (0, []) when
+            neither store yields a readable path. Paths are container paths;
+            the exclude file's host paths are translated.
         """
+        container_paths: Set[str] = set()
+
+        timestamp_tracker = getattr(self, 'timestamp_tracker', None)
+        if timestamp_tracker:
+            container_paths.update(timestamp_tracker.get_all_tracked_paths())
+
         exclude_file = self.config_manager.get_cached_files_file()
-        if not exclude_file.exists():
-            return (0, [])
+        if exclude_file.exists():
+            try:
+                with open(exclude_file, 'r') as f:
+                    host_paths = [line.strip() for line in f if line.strip()]
+
+                for host_path in host_paths:
+                    # In Docker, exclude file has host paths but we need container
+                    # paths to check existence and calculate size
+                    if self.file_filter:
+                        container_paths.add(self.file_filter._translate_from_host_path(host_path))
+                    else:
+                        container_paths.add(host_path)
+            except OSError as e:
+                logging.warning(f"Error reading exclude file: {e}")
+                if not container_paths:
+                    return (0, [])
 
         plexcache_tracked = 0
         cached_files = []
-        try:
-            with open(exclude_file, 'r') as f:
-                host_paths = [line.strip() for line in f if line.strip()]
-
-            for host_path in host_paths:
-                # In Docker, exclude file has host paths but we need container paths
-                # to check existence and calculate size
-                if self.file_filter:
-                    container_path = self.file_filter._translate_from_host_path(host_path)
-                else:
-                    container_path = host_path
-
-                try:
-                    if os.path.exists(container_path):
-                        plexcache_tracked += os.path.getsize(container_path)
-                        cached_files.append(container_path)  # Return container paths for eviction
-                except (OSError, FileNotFoundError):
-                    pass
-        except OSError as e:
-            logging.warning(f"Error reading exclude file: {e}")
-            return (0, [])
+        for container_path in sorted(container_paths):
+            try:
+                if os.path.exists(container_path):
+                    plexcache_tracked += os.path.getsize(container_path)
+                    cached_files.append(container_path)  # Container paths for eviction
+            except (OSError, FileNotFoundError):
+                pass
 
         return (plexcache_tracked, cached_files)
 
@@ -2337,6 +2660,10 @@ class PlexCacheApp:
             if gap_skipped_count:
                 msg += f" ({gap_skipped_count} skipped to keep show episodes contiguous)"
             logging.warning(msg)
+            # Measured harm: the cache had no room for content we wanted. This is
+            # what _reclaim_released_if_constrained() acts on, in place of any
+            # fixed pool-usage threshold — see its docstring.
+            self._cache_space_constrained = True
 
         return files_to_cache
 
