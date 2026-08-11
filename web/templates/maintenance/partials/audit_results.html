@@ -45,17 +45,17 @@
         {% endif %}
     </div>
 
-    <div class="stat-card {% if results.unprotected_files|length == 0 %}stat-card-success{% endif %}">
+    <div class="stat-card {% if results.untracked_files|length == 0 %}stat-card-success{% endif %}">
         <div class="stat-card-header">
-            {% if results.unprotected_files|length == 0 %}
+            {% if results.untracked_files|length == 0 %}
             <i data-lucide="shield-check"></i>
             {% else %}
             <i data-lucide="eye"></i>
             {% endif %}
             Untracked
         </div>
-        <div class="stat-value">{{ results.unprotected_files|length }}</div>
-        <div class="stat-label">{% if results.unprotected_files|length == 0 %}all tracked{% else %}not managed{% endif %}</div>
+        <div class="stat-value">{{ results.untracked_files|length }}</div>
+        <div class="stat-label">{% if results.untracked_files|length == 0 %}all tracked{% else %}not managed{% endif %}</div>
     </div>
 
     <div class="stat-card {% if results.orphaned_plexcached|length > 20 %}stat-card-danger{% elif results.orphaned_plexcached|length > 0 %}stat-card-warning{% else %}stat-card-success{% endif %}">
@@ -71,12 +71,17 @@
         <div class="stat-label">{% if results.orphaned_plexcached|length == 0 %}none found{% else %}need attention{% endif %}</div>
     </div>
 
+    {# "Mover-excluded", not "Protected": this counts exclude-list membership,
+       which holds the Unraid mover back. It is not eviction protection — only a
+       pin is that. The value is the intersection with what's actually on cache;
+       exclude_entry_count includes stale lines, so it could exceed the "of M"
+       denominator and render "3 of 1 on cache". #}
     <div class="stat-card">
         <div class="stat-card-header">
             <i data-lucide="shield-check"></i>
-            Protected
+            Mover-excluded
         </div>
-        <div class="stat-value">{{ results.exclude_entry_count }}</div>
+        <div class="stat-value">{{ results.excluded_on_cache_count }}</div>
         <div class="stat-label">of {{ results.cache_file_count }} on cache</div>
     </div>
 </div>
@@ -102,11 +107,11 @@
 {% endif %}
 
 <!-- Untracked Files Section -->
-{% if results.unprotected_files %}
+{% if results.untracked_files %}
 <div class="card mb-2">
     <div class="card-header">
         <i data-lucide="eye"></i>
-        <h2>Untracked Files ({{ results.unprotected_files|length }}{% if results.grouped_unprotected|length != results.unprotected_files|length %} in {{ results.grouped_unprotected|length }} groups{% endif %})</h2>
+        <h2>Untracked Files ({{ results.untracked_files|length }}{% if results.grouped_untracked|length != results.untracked_files|length %} in {{ results.grouped_untracked|length }} groups{% endif %})</h2>
     </div>
     <div class="card-body" style="padding: 0.75rem;">
         <p class="text-muted" style="margin: 0 0 0.75rem 0;">
@@ -146,7 +151,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    {% for group in results.grouped_unprotected %}
+                    {% for group in results.grouped_untracked %}
                     {% set file = group.primary %}
                     {% set children = group.children %}
                     {% set group_size = file.size + children|sum(attribute='size') if children else file.size %}
@@ -396,7 +401,7 @@
                 <button class="btn btn-sm btn-primary"
                         hx-post="/operations/run"
                         hx-swap="none"
-                        title="Start a run to re-protect pinned files">
+                        title="Start a run to re-add pinned files to the mover exclude list">
                     <i data-lucide="play"></i> Run Now
                 </button>
             </div>
@@ -581,12 +586,12 @@
 {% endif %}
 
 <!-- No Issues Message -->
-{% if not results.unprotected_files and not results.orphaned_plexcached and not results.extensionless_files and not results.stale_exclude_entries and not results.stale_timestamp_entries %}
+{% if not results.untracked_files and not results.orphaned_plexcached and not results.extensionless_files and not results.stale_exclude_entries and not results.stale_timestamp_entries %}
 <div class="card">
     <div class="card-body" style="text-align: center; padding: 3rem;">
         <i data-lucide="check-circle" style="width: 64px; height: 64px; color: var(--success); margin-bottom: 1rem;"></i>
         <h3 style="margin-bottom: 0.5rem;">Cache is Healthy</h3>
-        <p class="text-muted">No issues found. All files are properly tracked and protected.</p>
+        <p class="text-muted">No issues found. Every cached file is tracked.</p>
     </div>
 </div>
 {% endif %}

@@ -45,7 +45,7 @@ class Outcome:
 #     pinned while already on cache is exempt from PlexCache eviction while the
 #     Unraid mover can still relocate it, until a run adds the exclude entry.
 #     That gap is its own outcome (`held_mover_gap`) rather than a footnote.
-_PROTECTED_SENTENCE = "Pinned — protected from eviction."
+PROTECTED_SENTENCE = "Pinned — protected from eviction."
 
 # Ordered weakest-first. `stays_on_array` is deliberately outside the ranking
 # (see _group_outcome): a file that never arrived on cache cannot leave it.
@@ -107,14 +107,14 @@ OUTCOMES: Dict[str, Outcome] = {o.key: o for o in (
     Outcome(
         key="held_mover_gap", label="Stays on cache", badge="badge-pinned",
         icon="pin", tier=7,
-        tooltip=(_PROTECTED_SENTENCE + " PlexCache won't move it back to the "
+        tooltip=(PROTECTED_SENTENCE + " PlexCache won't move it back to the "
                  "array either. Not in the Unraid mover's exclude list yet, so "
                  "the mover could still relocate it — the next run fixes that."),
     ),
     Outcome(
         key="held", label="Stays on cache", badge="badge-pinned",
         icon="pin", tier=8,
-        tooltip=(_PROTECTED_SENTENCE + " PlexCache won't move it back to the "
+        tooltip=(PROTECTED_SENTENCE + " PlexCache won't move it back to the "
                  "array, and the Unraid mover is told to skip it."),
     ),
     Outcome(

@@ -276,7 +276,7 @@
             </a>
             {% if data.breakdown.released.count > 0 %}
             <a href="/cache?source=released" class="breakdown-card breakdown-released"
-               title="Handed back to the Unraid mover. Still on cache and no longer protected, so the mover will relocate these on its own schedule. PlexCache keeps tracking them and will move them itself if the cache runs out of room first.">
+               title="Handed back to the Unraid mover. Still on cache but no longer held back, so the mover relocates these on its own schedule. PlexCache keeps tracking them and will move them itself if the cache runs out of room first.">
                 <div class="breakdown-header">
                     <i data-lucide="send"></i>
                     <span>Released</span>
@@ -546,7 +546,7 @@
                 <i data-lucide="timer"></i>
                 <h2>Watchlist Expiring Soon</h2>
                 {% if not data.config.eviction_enabled %}
-                <span class="badge badge-muted badge-sm" title="Smart eviction is disabled. These items will lose watchlist protection but won't be auto-removed.">Eviction Off</span>
+                <span class="badge badge-muted badge-sm" title="Smart eviction is disabled, so these won't be evicted for space. They still stop counting as watchlisted, and a run moves them back to the array unless Move Watched to Array is off.">Eviction Off</span>
                 {% endif %}
             </div>
             <select class="form-select" style="width: auto; padding: 0.25rem 0.5rem; font-size: 0.85rem;"

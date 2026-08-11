@@ -93,8 +93,12 @@ templates.env.globals["settings_search_index_json"] = json.dumps(get_search_inde
 
 # Outcome vocabulary for Recently Added. Same reason as above for living outside
 # web/services/ — see web/outcome_vocabulary.py.
-from web.outcome_vocabulary import outcome_tooltip as _outcome_tooltip
+from web.outcome_vocabulary import outcome_tooltip as _outcome_tooltip, PROTECTED_SENTENCE
 templates.env.globals["outcome_tooltip"] = _outcome_tooltip
+# The reserved "protected from eviction" sentence, so the pages that assert it
+# can't drift apart — the Cached Files badge and Recently Added already differed
+# by a trailing period before this was shared.
+templates.env.globals["protected_sentence"] = PROTECTED_SENTENCE
 
 
 def get_time_format() -> str:

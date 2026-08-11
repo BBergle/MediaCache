@@ -776,12 +776,12 @@ class TestAuditResultsHealth:
 
     def test_untracked_files_do_not_affect_health(self):
         """Untracked files are informational and should not trigger critical status"""
-        from web.services.maintenance_service import AuditResults, UnprotectedFile
+        from web.services.maintenance_service import AuditResults, UntrackedFile
         results = AuditResults(
             cache_file_count=10, exclude_entry_count=5, timestamp_entry_count=10
         )
-        results.unprotected_files.append(
-            UnprotectedFile(
+        results.untracked_files.append(
+            UntrackedFile(
                 cache_path="/path/file.mkv", filename="file.mkv",
                 size=1000, size_display="1 KB",
                 has_plexcached_backup=False, backup_path=None,
@@ -852,14 +852,14 @@ class TestRunFullAuditFanOut:
         svc = _make_service(tmp_path, settings)
         return svc, cache_root, array_root
 
-    def test_audit_finds_unprotected_duplicate_and_orphaned(self, tmp_path):
+    def test_audit_finds_untracked_duplicate_and_orphaned(self, tmp_path):
         svc, cache_root, array_root = self._make_e2e_service(tmp_path)
 
         # Cache files
-        unprotected = cache_root / "Unprotected.mkv"
+        untracked = cache_root / "Unprotected.mkv"
         duplicated = cache_root / "Duplicated.mkv"
         protected = cache_root / "Protected.mkv"
-        for p in (unprotected, duplicated, protected):
+        for p in (untracked, duplicated, protected):
             p.write_bytes(b"x" * 1024)
 
         # Array side:
@@ -875,20 +875,20 @@ class TestRunFullAuditFanOut:
 
         results = svc.run_full_audit()
 
-        unprotected_paths = {f.cache_path for f in results.unprotected_files}
-        assert str(unprotected) in unprotected_paths
-        assert str(duplicated) in unprotected_paths
-        assert str(protected) not in unprotected_paths
+        untracked_paths = {f.cache_path for f in results.untracked_files}
+        assert str(untracked) in untracked_paths
+        assert str(duplicated) in untracked_paths
+        assert str(protected) not in untracked_paths
 
         # Duplicated.mkv should be flagged as duplicate AND marked fix_with_backup
-        dup_entry = next(f for f in results.unprotected_files
+        dup_entry = next(f for f in results.untracked_files
                          if f.cache_path == str(duplicated))
         assert dup_entry.has_array_duplicate is True
         assert dup_entry.recommended_action == "fix_with_backup"
 
         # Unprotected.mkv has no backup/duplicate → sync_to_array
-        un_entry = next(f for f in results.unprotected_files
-                        if f.cache_path == str(unprotected))
+        un_entry = next(f for f in results.untracked_files
+                        if f.cache_path == str(untracked))
         assert un_entry.has_array_duplicate is False
         assert un_entry.has_plexcached_backup is False
         assert un_entry.recommended_action == "sync_to_array"
@@ -927,8 +927,8 @@ class TestRunFullAuditFanOut:
                    side_effect=tracking_exists):
             results = svc.run_full_audit()
 
-        # All 50 should be flagged as unprotected
-        assert len(results.unprotected_files) == 50
+        # All 50 should be flagged as untracked
+        assert len(results.untracked_files) == 50
 
         # Any os.path.exists call against an individual cache FILE path would
         # indicate the old per-file probe pattern. Probing the cache directory

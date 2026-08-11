@@ -423,7 +423,7 @@ def _audit_results_to_dict(results) -> dict:
         'exclude_entry_count': results.exclude_entry_count,
         'timestamp_entry_count': results.timestamp_entry_count,
         'health_status': results.health_status,
-        'unprotected_count': len(results.unprotected_files),
+        'untracked_count': len(results.untracked_files),
         'orphaned_count': len(results.orphaned_plexcached),
         'stale_exclude_count': len(results.stale_exclude_entries),
         'stale_timestamp_count': len(results.stale_timestamp_entries),

@@ -7,7 +7,7 @@ from web.services.scheduler_service import SchedulerService, ScheduleConfig, get
 from web.services.maintenance_service import (
     MaintenanceService,
     AuditResults,
-    UnprotectedFile,
+    UntrackedFile,
     OrphanedBackup,
     DuplicateFile,
     ActionResult,
@@ -39,7 +39,7 @@ __all__ = [
     "get_scheduler_service",
     "MaintenanceService",
     "AuditResults",
-    "UnprotectedFile",
+    "UntrackedFile",
     "OrphanedBackup",
     "DuplicateFile",
     "ActionResult",

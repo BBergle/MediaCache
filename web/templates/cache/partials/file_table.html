@@ -25,16 +25,16 @@
         {% endif %}
         <td class="source-badges">
             {% if file.is_pinned %}
-            <span class="badge badge-pinned" title="Pinned — protected from eviction">
+            <span class="badge badge-pinned" title="{{ protected_sentence }} PlexCache won't move it back to the array either, until you unpin.">
                 <i data-lucide="pin" style="width: 10px; height: 10px; vertical-align: middle;"></i>
                 Pinned
             </span>
             {% endif %}
             {% if file.is_released %}
-            {# Released takes precedence: it is unprotected on purpose, so the
+            {# Released takes precedence: it is released on purpose, so the
                "Stale OnDeck" / "Other" wording below would misread as a problem. #}
             <span class="badge badge-released"
-                  title="Handed back to the Unraid mover. Still on cache and no longer protected, so the mover will relocate it on its own schedule.">
+                  title="Handed back to the Unraid mover. Still on cache but no longer held back, so the mover relocates it on its own schedule.">
                 <i data-lucide="send" style="width: 10px; height: 10px; vertical-align: middle;"></i>
                 Released
             </span>

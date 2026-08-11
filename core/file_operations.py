@@ -3860,7 +3860,7 @@ class FileFilter:
                 # The file may not be in ondeck/watchlist API response but is actively being played
                 if files_to_skip and check_path in files_to_skip:
                     display_name = self._extract_display_name(cache_file)
-                    logging.debug(f"Active session, keeping protected: {display_name}")
+                    logging.debug(f"Active session, keeping in cache: {display_name}")
                     continue
 
                 # Skip files with active hard links

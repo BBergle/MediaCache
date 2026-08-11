@@ -400,7 +400,7 @@ def add_to_exclude(dry_run=True):
     cache_files = get_cache_files()
     exclude_files = get_exclude_files()
     released_files = get_released_files()
-    # Released files are unprotected by design — re-protecting them here would
+    # Released files are left out of the exclude list by design — re-adding them would
     # silently undo the release and set up a release/re-protect oscillation.
     orphaned = cache_files - exclude_files - released_files
 
@@ -711,7 +711,7 @@ def main():
     print("=" * 80)
 
     if on_cache_not_in_exclude:
-        print(f"\n⚠️  WARNING: {len(on_cache_not_in_exclude)} files on cache are NOT protected!")
+        print(f"\n⚠️  WARNING: {len(on_cache_not_in_exclude)} files on cache are NOT tracked!")
         print("   Run the script to add them to exclude list, or sync them back to array.")
     else:
         print("\n✅ All cache files are properly tracked in exclude list.")
@@ -740,7 +740,7 @@ def main():
             print("  --sync-to-array --execute     Apply changes")
 
         if has_backup or no_backup:
-            print(f"\nTo protect all {len(on_cache_not_in_exclude)} unprotected files (add to exclude list):")
+            print(f"\nTo track all {len(on_cache_not_in_exclude)} untracked files (add to exclude list):")
             print("  --add-to-exclude           Dry run (preview)")
             print("  --add-to-exclude --execute    Apply changes")
 

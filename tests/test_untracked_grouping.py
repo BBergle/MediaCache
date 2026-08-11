@@ -1,4 +1,4 @@
-"""Tests for the audit's unprotected-files grouping.
+"""Tests for the audit's untracked-files grouping.
 
 This table pairs a video with its own sidecars for remediation, so it keys on
 *directory* rather than show — but it uses the same ordered-bucket rule from
@@ -10,12 +10,12 @@ import pytest
 
 pytest.importorskip("web.services.maintenance_service")
 
-from web.services.maintenance_service import MaintenanceService, UnprotectedFile
+from web.services.maintenance_service import MaintenanceService, UntrackedFile
 
 
 def _f(cache_path, size=100):
     import os
-    return UnprotectedFile(
+    return UntrackedFile(
         cache_path=cache_path,
         filename=os.path.basename(cache_path),
         size=size,
@@ -29,12 +29,12 @@ def _f(cache_path, size=100):
 
 
 def _group(files):
-    return MaintenanceService._group_unprotected_by_directory(
+    return MaintenanceService._group_untracked_by_directory(
         MaintenanceService.__new__(MaintenanceService), files
     )
 
 
-class TestGroupUnprotectedByDirectory:
+class TestGroupUntrackedByDirectory:
     def test_video_with_sidecars_becomes_one_group(self):
         result = _group([
             _f("/mnt/cache/Movies/Dune/Dune.mkv", 900),
