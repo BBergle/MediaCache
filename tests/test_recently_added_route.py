@@ -168,8 +168,52 @@ class TestPage:
         assert "function restore()" in r.text
         assert "_state.expanded" in r.text
 
+    def test_page_recovers_when_the_selected_library_leaves_the_window(self, client):
+        """Restoring a library that is no longer in the options leaves the
+        select at selectedIndex -1 / value "", which matches no row — every
+        row hides behind "No items match" under a blank dropdown.
+
+        Source-text assertion: there is no JS runtime in this suite, so this
+        pins the guard's presence, not its behaviour. It would also pass on a
+        commented-out guard. The behavioural half it depends on — that the
+        option set really does vary with the rows — is pinned by
+        TestList::test_library_options_follow_the_returned_rows below.
+        """
+        p_svc, p_set, _ = _patch(_result([]), settings={})
+        with p_svc, p_set:
+            r = client.get("/recently-added/")
+        assert "lib.selectedIndex === -1" in r.text
+        assert "_state.lib = 'all'" in r.text
+
 
 class TestList:
+    def test_library_options_follow_the_returned_rows(self, client):
+        """The Library filter is built per response from the rows it returned,
+        so a narrower window can drop a library the user had selected. This is
+        the server-side fact the selectedIndex -1 guard in restore() exists to
+        absorb; without it the guard would look like dead code."""
+        import re
+
+        def options(rows):
+            p_svc, p_set, _ = _patch(_result(rows), settings={})
+            with p_svc, p_set:
+                r = client.get("/recently-added/list")
+            block = re.search(r'<select[^>]*id="ra-lib-filter".*?</select>', r.text, re.S)
+            assert block, "Library filter select not rendered"
+            return set(re.findall(r'value="([^"]*)"', block.group(0)))
+
+        wide = options([
+            _row(rating_key="1", title="Dune", library_title="Movies"),
+            _row(rating_key="2", title="Nova", library_title="Documentaries"),
+        ])
+        narrow = options([_row(rating_key="1", title="Dune", library_title="Movies")])
+
+        assert "Documentaries" in wide
+        assert "Documentaries" not in narrow, (
+            "Library options no longer vary with the row set — re-check whether "
+            "restore()'s selectedIndex guard is still needed."
+        )
+
     def test_renders_states_and_pin_button(self, client):
         rows = [
             _row(rating_key="1", title="Dune", state="on_cache_not_pinned", location="cache"),

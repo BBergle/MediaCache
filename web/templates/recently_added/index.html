@@ -157,7 +157,17 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
     // which is what makes restoring expansion by id work.
     function restore() {
         var lib = document.getElementById('ra-lib-filter');
-        if (lib && _state.lib) lib.value = _state.lib;
+        if (lib && _state.lib) {
+            lib.value = _state.lib;
+            // The Library options are built from whatever rows the server
+            // returned, so a narrower window — or an item ageing out between
+            // refetches — can drop the selected library entirely. Assigning a
+            // value no <option> carries leaves the select at selectedIndex -1
+            // with value "", which matches no row: every row would hide behind
+            // "No items match" under a blank dropdown, with nothing on screen
+            // explaining why. Fall back to showing everything.
+            if (lib.selectedIndex === -1) { lib.value = 'all'; _state.lib = 'all'; }
+        }
         var search = document.getElementById('ra-search');
         if (search && _state.term) search.value = _state.term;
 
