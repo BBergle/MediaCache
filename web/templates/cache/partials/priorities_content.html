@@ -177,6 +177,10 @@
                         {{ af_badge(assoc_count, (file.subtitle_count or 0) ~ ' subtitle' ~ ('s' if (file.subtitle_count or 0) != 1 else '') ~ ', ' ~ (file.sidecar_count or 0) ~ ' asset' ~ ('s' if (file.sidecar_count or 0) != 1 else '')) }}
                     </td>
                     <td class="source-badges">
+                        {% if file.is_released %}
+                        <span class="badge badge-released"
+                              title="Handed back to the Unraid mover, still on cache until it relocates.">Released</span>
+                        {% else %}
                         {% if file.is_ondeck %}
                         <span class="badge badge-info">OnDeck</span>
                         {% endif %}
@@ -191,6 +195,7 @@
                             {% else %}
                             <span class="badge badge-warning">Other</span>
                             {% endif %}
+                        {% endif %}
                         {% endif %}
                     </td>
                     <td class="text-muted">{{ file.cache_age_hours|round(1) }}h</td>

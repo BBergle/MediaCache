@@ -29,6 +29,15 @@
                 Pinned
             </span>
             {% endif %}
+            {% if file.is_released %}
+            {# Released takes precedence: it is unprotected on purpose, so the
+               "Stale OnDeck" / "Other" wording below would misread as a problem. #}
+            <span class="badge badge-released"
+                  title="Handed back to the Unraid mover. Still on cache and no longer protected, so the mover will relocate it on its own schedule.">
+                <i data-lucide="send" style="width: 10px; height: 10px; vertical-align: middle;"></i>
+                Released
+            </span>
+            {% else %}
             {% if file.is_ondeck %}
             <span class="badge badge-info">OnDeck</span>
             {% endif %}
@@ -43,6 +52,7 @@
                 {% else %}
                 <span class="badge badge-warning">Other</span>
                 {% endif %}
+            {% endif %}
             {% endif %}
         </td>
         <td>
