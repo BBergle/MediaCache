@@ -165,6 +165,26 @@ class RecentlyAddedItem:
     version_files: List[Dict[str, any]] = field(default_factory=list)
 
 
+@dataclass
+class RecentlyAddedResult:
+    """What a recently-added sweep found, and what it could not read.
+
+    A per-library fetch can fail on its own — a section that times out or 5xxes
+    while its neighbours answer. Returning only the items would make that
+    library indistinguishable from one that genuinely had nothing new, so the
+    page would state "Nothing added" about media it never managed to look at.
+
+    Attributes:
+        items: Recently-added items, newest first, one entry per Plex item.
+        unreadable_libraries: Titles of sections that were attempted and
+            failed. Empty on a clean sweep. A total failure — no section
+            readable at all — raises instead, since there is no partial
+            result to report.
+    """
+    items: List[RecentlyAddedItem] = field(default_factory=list)
+    unreadable_libraries: List[str] = field(default_factory=list)
+
+
 def _partial_attr(obj: Any, name: str, default: Any = None) -> Any:
     """Read an attribute off a plexapi *listing* object without failing the caller.
 
@@ -1677,7 +1697,7 @@ class PlexManager:
 
     def get_recently_added_media(self, valid_sections: List[int], days_to_monitor: int,
                                  max_items: int = 100,
-                                 version_preference: str = "highest") -> List['RecentlyAddedItem']:
+                                 version_preference: str = "highest") -> 'RecentlyAddedResult':
         """Get recently-added media across enabled libraries (server-wide).
 
         Recently-added is a library-level view, so this uses the main account
@@ -1693,17 +1713,30 @@ class PlexManager:
                 choice the pin and caching paths make.
 
         Returns:
-            List of RecentlyAddedItem, newest first, one entry per Plex item
-            (not per file). ``version_files`` carries every underlying file.
+            RecentlyAddedResult. ``items`` is newest first, one entry per Plex
+            item (not per file) — ``version_files`` carries every underlying
+            file. ``unreadable_libraries`` names any section that was attempted
+            and failed, so the caller can say so instead of reporting an empty
+            library as empty.
+
+        Raises:
+            Exception: If the library list itself cannot be read. Nothing was
+                enumerated in that case, so there is no partial result and the
+                caller must render the failure rather than an empty view.
         """
         items: List[RecentlyAddedItem] = []
+        unreadable: List[str] = []
+        read_sections: List[str] = []
         cutoff = datetime.now() - timedelta(days=days_to_monitor)
 
         try:
             sections = self.plex.library.sections()
         except Exception as e:
+            # Nothing was enumerated, so there is no partial result to report.
+            # Returning [] here would render as "Nothing added", stating a fact
+            # about libraries that were never contacted.
             _log_api_error("list library sections for recently added", e)
-            return items
+            raise
 
         # plexapi exposes section.key as a string ("1"), while valid_sections
         # from config are ints — compare as strings so the filter actually matches.
@@ -1721,11 +1754,16 @@ class PlexManager:
                 else:
                     recent = section.recentlyAdded(maxresults=max_items)
             except Exception as e:
-                _log_api_error(
-                    f"fetch recently added for section '{getattr(section, 'title', '?')}'", e
+                section_title = str(
+                    getattr(section, 'title', '') or f"section {getattr(section, 'key', '?')}"
                 )
+                _log_api_error(f"fetch recently added for section '{section_title}'", e)
+                # Name it rather than dropping it: an unreadable library that
+                # vanishes silently looks exactly like an empty one.
+                unreadable.append(section_title)
                 continue
 
+            read_sections.append(str(getattr(section, 'title', '?')))
             section_kept = 0
             for video in recent:
                 # Read-only view over listing fields: opt out of plexapi's lazy
@@ -1830,11 +1868,17 @@ class PlexManager:
             )
             items = items[:max_items]
 
-        logging.info(
+        # Count sections actually answered, not the ones config asked for —
+        # the old form reported "from 2 section(s)" even when both had failed.
+        answered = len(read_sections)
+        summary = (
             f"Recently added: returning {len(items)} item(s) from "
-            f"{len(section_ids) or 'all'} section(s) within {days_to_monitor}d"
+            f"{answered} section(s) within {days_to_monitor}d"
         )
-        return items
+        if unreadable:
+            summary += f"; {len(unreadable)} unreadable ({', '.join(unreadable)})"
+        logging.info(summary)
+        return RecentlyAddedResult(items=items, unreadable_libraries=unreadable)
 
     def get_watchlist_media(self, valid_sections: List[int], watchlist_episodes: int,
                             users_toggle: bool, skip_watchlist: List[str], rss_url: Optional[str] = None,

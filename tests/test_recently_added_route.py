@@ -186,6 +186,46 @@ class TestPage:
         assert "_state.lib = 'all'" in r.text
 
 
+class TestUnreadableLibraryStrip:
+    """The page must not report an unread library as an empty one."""
+
+    def _get(self, client, path, rows, unreadable):
+        result = _result(rows)
+        result["unreadable_libraries"] = unreadable
+        p_svc, p_set, _ = _patch(result, settings={})
+        with p_svc, p_set:
+            return client.get(path)
+
+    def test_strip_names_the_libraries(self, client):
+        r = self._get(client, "/recently-added/list",
+                      [_row(rating_key="1", title="Dune")], ["Documentaries"])
+        assert "Couldn&#39;t read 1 library" in r.text or "Couldn't read 1 library" in r.text
+        assert "Documentaries" in r.text
+
+    def test_empty_state_does_not_claim_nothing_was_added(self, client):
+        """With a library unread, "Nothing added in the last 7 days" would be a
+        statement about media the app never looked at."""
+        r = self._get(client, "/recently-added/list", [], ["Movies"])
+        assert "Nothing added in the last" not in r.text
+        assert "No results from the libraries that answered." in r.text
+
+    def test_empty_state_is_unchanged_on_a_clean_sweep(self, client):
+        r = self._get(client, "/recently-added/list", [], [])
+        assert "Nothing added in the last" in r.text
+
+    def test_no_strip_when_every_library_answered(self, client):
+        r = self._get(client, "/recently-added/list",
+                      [_row(rating_key="1", title="Dune")], [])
+        assert "counts are incomplete" not in r.text
+        assert "read 1 librar" not in r.text
+
+    def test_widget_says_its_counts_are_incomplete(self, client):
+        r = self._get(client, "/recently-added/widget",
+                      [_row(rating_key="1", title="Dune")], ["Documentaries"])
+        assert "counts are incomplete" in r.text
+        assert "Documentaries" in r.text
+
+
 class TestList:
     def test_library_options_follow_the_returned_rows(self, client):
         """The Library filter is built per response from the rows it returned,

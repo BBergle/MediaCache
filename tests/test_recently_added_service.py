@@ -25,7 +25,7 @@ for _mod in [
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.plex_api import RecentlyAddedItem
+from core.plex_api import RecentlyAddedItem, RecentlyAddedResult
 from web.services.recently_added_service import RecentlyAddedService, RecentlyAddedRow
 
 
@@ -407,6 +407,69 @@ class TestScanAssociatedFiles:
         assert rows[0].associated_files == []
 
 
+class TestUnreadableLibraries:
+    """A library Plex refused to list must reach the template, not vanish."""
+
+    def _settings(self, tmp_path):
+        data = {
+            "PLEX_URL": "http://x", "PLEX_TOKEN": "t", "number_episodes": 5,
+            "valid_sections": [1], "days_to_monitor": 7, "users_toggle": True,
+            "watchlist_toggle": True, "watchlist_episodes": 3, "watched_move": True,
+            "cache_dir": "/mnt/cache/", "max_concurrent_moves_array": 2,
+            "max_concurrent_moves_cache": 2, "prefetch_minimum_minutes": 0,
+            "path_mappings": [{
+                "name": "Movies", "plex_path": "/data/", "real_path": "/mnt/user/",
+                "cache_path": "/mnt/cache/", "enabled": True, "cacheable": True,
+                "section_id": 1,
+            }],
+        }
+        p = tmp_path / "settings.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+        return p
+
+    def _run(self, tmp_path, result):
+        svc = RecentlyAddedService()
+        svc.settings_file = str(self._settings(tmp_path))
+        fake_pm = MagicMock()
+        fake_pm.connect.return_value = None
+        fake_pm.get_recently_added_media.return_value = result
+        with patch("core.plex_api.PlexManager", return_value=fake_pm):
+            return svc.get_recently_added(days=7, max_items=100)
+
+    def test_partial_failure_keeps_the_page_but_names_the_library(self, tmp_path):
+        item = RecentlyAddedItem(
+            file_path="/data/movies/Dune.mkv", rating_key="1", title="Dune",
+            media_type="movie", added_at=datetime.now(), library_title="Movies",
+            library_section_id=1, size=1000,
+        )
+        res = self._run(tmp_path, RecentlyAddedResult(
+            items=[item], unreadable_libraries=["Documentaries"]))
+
+        assert res["available"] is True
+        assert res["unreadable_libraries"] == ["Documentaries"]
+
+    def test_total_failure_reads_as_failure_not_as_empty(self, tmp_path):
+        """Every attempted library failed, so there are no counts to show.
+        Rendering zeroed stat cards under a warning would assert numbers the
+        app cannot know."""
+        res = self._run(tmp_path, RecentlyAddedResult(
+            items=[], unreadable_libraries=["Movies", "TV Shows"]))
+
+        assert res["available"] is False
+        assert "Movies" in res["error"] and "TV Shows" in res["error"]
+
+    def test_clean_sweep_reports_nothing_unreadable(self, tmp_path):
+        res = self._run(tmp_path, RecentlyAddedResult(items=[]))
+
+        assert res["available"] is True
+        assert res["unreadable_libraries"] == []
+
+    def test_empty_result_carries_the_key(self):
+        """Shape symmetry — every consumer can read it without a guard."""
+        svc = RecentlyAddedService()
+        assert svc._empty_result("boom")["unreadable_libraries"] == []
+
+
 class TestScanDirectoryMemo:
     """N rows in one directory must scan it once, without changing any result."""
 
@@ -533,7 +596,7 @@ class TestGetRecentlyAddedEndToEnd:
         return p
 
     def test_enriches_real_items_without_error(self, tmp_path):
-        from core.plex_api import RecentlyAddedItem
+        from core.plex_api import RecentlyAddedItem, RecentlyAddedResult
 
         items = [
             RecentlyAddedItem(file_path="/data/movies/Dune.mkv", rating_key="101",
@@ -550,7 +613,7 @@ class TestGetRecentlyAddedEndToEnd:
 
         fake_pm = MagicMock()
         fake_pm.connect.return_value = None
-        fake_pm.get_recently_added_media.return_value = items
+        fake_pm.get_recently_added_media.return_value = RecentlyAddedResult(items=items)
 
         with patch("core.plex_api.PlexManager", return_value=fake_pm):
             res = svc.get_recently_added(days=7, max_items=100)

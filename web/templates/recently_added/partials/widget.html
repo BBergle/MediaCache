@@ -20,6 +20,15 @@
 </div>
 {% endmacro %}
 
+{# The counts below exclude any library Plex refused to list, so say so rather
+   than letting the card read as complete. #}
+{% if unreadable_libraries %}
+<div class="text-muted" style="padding: 0.75rem 1.25rem 0; font-size: 0.78rem; display: flex; align-items: flex-start; gap: 0.4rem;">
+    <i data-lucide="alert-triangle" style="width: 13px; height: 13px; flex-shrink: 0; margin-top: 2px; color: var(--plex-warning);"></i>
+    <span>Couldn't read {{ unreadable_libraries|join(', ') }} — counts are incomplete.</span>
+</div>
+{% endif %}
+
 <div style="display: flex; gap: 1.25rem; flex-wrap: wrap; padding: 1rem 1.25rem; align-items: center;">
     <div>
         <div class="stat-value" style="font-size: 1.5rem;">{{ summary.total }}</div>

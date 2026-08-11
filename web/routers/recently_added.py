@@ -104,6 +104,9 @@ def recently_added_list(
             "days": days,
             "allowed_days": ALLOWED_DAYS,
             "max_items": max_items,
+            # Libraries Plex refused to list. Their rows are missing from the
+            # table, the counts and the filter above, so the page has to say so.
+            "unreadable_libraries": result.get("unreadable_libraries") or [],
             # The fetch caps at max_items (newest first); if we hit it, older
             # media is hidden — surface that rather than silently truncating.
             "capped": result["summary"].get("total", 0) >= max_items,
@@ -131,5 +134,6 @@ def recently_added_widget(request: Request):
             "summary": result["summary"],
             "groups": groups[:WIDGET_ROWS],
             "days": default_days,
+            "unreadable_libraries": result.get("unreadable_libraries") or [],
         },
     )

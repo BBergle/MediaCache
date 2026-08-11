@@ -93,7 +93,7 @@ class TestGetRecentlyAddedMedia:
         api = _api([_section(1, "Movies", [
             _movie(101, "Dune", added_days_ago=1, parts=[_part("/data/movies/Dune.mkv", 28_000)]),
         ])])
-        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
+        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7).items
 
         assert len(items) == 1
         item = items[0]
@@ -112,7 +112,7 @@ class TestGetRecentlyAddedMedia:
             _movie(1, "Fresh", added_days_ago=2),
             _movie(2, "Stale", added_days_ago=40),
         ])])
-        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
+        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7).items
 
         titles = {i.title for i in items}
         assert titles == {"Fresh"}
@@ -121,7 +121,7 @@ class TestGetRecentlyAddedMedia:
         api = _api([_section(3, "TV Shows", [
             _episode(50, "Future Days", "The Last of Us", 2, 1, added_days_ago=1),
         ])])
-        items = api.get_recently_added_media(valid_sections=[3], days_to_monitor=7)
+        items = api.get_recently_added_media(valid_sections=[3], days_to_monitor=7).items
 
         assert len(items) == 1
         item = items[0]
@@ -133,7 +133,7 @@ class TestGetRecentlyAddedMedia:
             _section(1, "Movies", [_movie(1, "A", added_days_ago=1)]),
             _section(2, "4K Movies", [_movie(2, "B", added_days_ago=1)]),
         ])
-        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
+        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7).items
 
         assert {i.title for i in items} == {"A"}
 
@@ -142,7 +142,7 @@ class TestGetRecentlyAddedMedia:
             _section(1, "Movies", [_movie(1, "A", added_days_ago=1)]),
             _section(2, "4K Movies", [_movie(2, "B", added_days_ago=1)]),
         ])
-        items = api.get_recently_added_media(valid_sections=[], days_to_monitor=7)
+        items = api.get_recently_added_media(valid_sections=[], days_to_monitor=7).items
 
         assert {i.title for i in items} == {"A", "B"}
 
@@ -152,7 +152,7 @@ class TestGetRecentlyAddedMedia:
             _movie(2, "Middle", added_days_ago=2),
             _movie(3, "Newest", added_days_ago=1),
         ])])
-        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7, max_items=2)
+        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7, max_items=2).items
 
         assert [i.title for i in items] == ["Newest", "Middle"]
 
@@ -161,7 +161,7 @@ class TestGetRecentlyAddedMedia:
             _section(1, "Movies", [_movie(1, "Older", added_days_ago=5)]),
             _section(2, "TV Shows", [_episode(2, "Ep", "Show", 1, 1, added_days_ago=1)]),
         ])
-        items = api.get_recently_added_media(valid_sections=[1, 2], days_to_monitor=7)
+        items = api.get_recently_added_media(valid_sections=[1, 2], days_to_monitor=7).items
 
         assert [i.title for i in items] == ["Ep", "Older"]
 
@@ -171,7 +171,7 @@ class TestGetRecentlyAddedMedia:
             addedAt=datetime.now(), media=[],
         )
         api = _api([_section(3, "TV Shows", [season_wrapper])])
-        items = api.get_recently_added_media(valid_sections=[3], days_to_monitor=7)
+        items = api.get_recently_added_media(valid_sections=[3], days_to_monitor=7).items
 
         assert items == []
 
@@ -184,7 +184,7 @@ class TestGetRecentlyAddedMedia:
                 _part("/data/movies/Multi-cd2.mkv", 600),
             ]),
         ])])
-        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
+        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7).items
 
         assert len(items) == 1
         assert items[0].file_path == "/data/movies/Multi-cd1.mkv"
@@ -207,7 +207,7 @@ class TestGetRecentlyAddedMedia:
             ],
         )
         api = _api([_section(1, "Movies", [movie])])
-        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
+        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7).items
 
         assert len(items) == 1
         assert items[0].file_path == "/data/movies/Dune-4K.mkv"
@@ -230,7 +230,7 @@ class TestGetRecentlyAddedMedia:
         api = _api([_section(1, "Movies", [movie])])
         items = api.get_recently_added_media(
             valid_sections=[1], days_to_monitor=7, version_preference="lowest"
-        )
+        ).items
         assert items[0].file_path == "/data/movies/Dune-1080p.mkv"
 
     def test_item_with_no_media_is_skipped(self):
@@ -239,18 +239,56 @@ class TestGetRecentlyAddedMedia:
             addedAt=datetime.now(), media=[],
         )
         api = _api([_section(1, "Movies", [blank])])
-        assert api.get_recently_added_media(valid_sections=[1], days_to_monitor=7) == []
+        assert api.get_recently_added_media(valid_sections=[1], days_to_monitor=7).items == []
 
-    def test_returns_empty_when_sections_unavailable(self):
+    def test_raises_when_sections_unavailable(self):
+        """No section was ever enumerated, so there is no partial result to
+        return. Swallowing this gave the caller available=True with no rows,
+        which renders as "Nothing added" — a confident statement about
+        libraries that were never contacted."""
         api = PlexManager.__new__(PlexManager)
 
         def _raise():
             raise RuntimeError("not connected")
 
         api.plex = SimpleNamespace(library=SimpleNamespace(sections=_raise))
-        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
+        with pytest.raises(RuntimeError, match="not connected"):
+            api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
 
-        assert items == []
+
+class TestPartialLibraryFailure:
+    """One library failing must not look like one library being empty."""
+
+    def _flaky_section(self, key, title):
+        def _raise(**kwargs):
+            raise RuntimeError("(504) gateway timeout")
+        return SimpleNamespace(key=str(key), title=title, type='movie',
+                               recentlyAdded=_raise)
+
+    def test_failed_section_is_named_not_dropped(self):
+        movie = _movie(1, "Dune", added_days_ago=1)
+        api = _api([
+            _section(1, "Movies", [movie]),
+            self._flaky_section(2, "Documentaries"),
+        ])
+        result = api.get_recently_added_media(valid_sections=[1, 2], days_to_monitor=7)
+
+        assert [i.title for i in result.items] == ["Dune"]
+        assert result.unreadable_libraries == ["Documentaries"]
+
+    def test_clean_sweep_reports_nothing_unreadable(self):
+        movie = _movie(1, "Dune", added_days_ago=1)
+        api = _api([_section(1, "Movies", [movie])])
+        result = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
+
+        assert result.unreadable_libraries == []
+
+    def test_untitled_section_falls_back_to_its_key(self):
+        section = self._flaky_section(7, "")
+        api = _api([section])
+        result = api.get_recently_added_media(valid_sections=[7], days_to_monitor=7)
+
+        assert result.unreadable_libraries == ["section 7"]
 
     def test_show_section_uses_recently_added_episodes(self):
         # recentlyAdded() on a show library returns show wrappers (skipped);
@@ -259,7 +297,7 @@ class TestGetRecentlyAddedMedia:
         section = _show_section(2, "TV Shows", episodes=eps,
                                 shows=[_show_wrapper(9, "The Last of Us")])
         api = _api([section])
-        items = api.get_recently_added_media(valid_sections=[2], days_to_monitor=7)
+        items = api.get_recently_added_media(valid_sections=[2], days_to_monitor=7).items
 
         assert len(items) == 1
         assert items[0].media_type == "episode"
@@ -273,7 +311,7 @@ class TestGetRecentlyAddedMedia:
             recentlyAdded=lambda maxresults=None, _e=eps: list(_e),
         )
         api = _api([section])
-        items = api.get_recently_added_media(valid_sections=[2], days_to_monitor=7)
+        items = api.get_recently_added_media(valid_sections=[2], days_to_monitor=7).items
 
         assert len(items) == 1
         assert items[0].media_type == "episode"
@@ -282,7 +320,7 @@ class TestGetRecentlyAddedMedia:
         api = _api([_section(1, "Movies", [
             _movie(1, "NoFile", added_days_ago=1, parts=[_part(None), _part("/data/movies/Ok.mkv")]),
         ])])
-        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
+        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7).items
 
         assert [i.file_path for i in items] == ["/data/movies/Ok.mkv"]
 
@@ -328,7 +366,7 @@ class TestPartialObjectResilience:
         ])
 
         with caplog.at_level(logging.WARNING):
-            items = api.get_recently_added_media(valid_sections=[1, 2], days_to_monitor=7)
+            items = api.get_recently_added_media(valid_sections=[1, 2], days_to_monitor=7).items
 
         # All four survive — including the raising item, degraded rather than dropped.
         assert len(items) == 4
@@ -347,7 +385,7 @@ class TestPartialObjectResilience:
         ])])
 
         with caplog.at_level(logging.WARNING):
-            items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
+            items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7).items
 
         # No media means no file to show, so this one is correctly skipped —
         # but it takes only itself down. Compared as a set: both survivors share
@@ -368,11 +406,11 @@ class TestShowIdentity:
         ep = _episode(1, "Ep", "Show", 1, 1, added_days_ago=1)
         ep.grandparentRatingKey = 500          # plexapi casts this to int
         api = _api([_section(1, "TV Shows", [ep])])
-        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
+        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7).items
         assert items[0].show_rating_key == "500"
 
     def test_missing_show_rating_key_degrades_to_empty(self):
         ep = _episode(1, "Ep", "Show", 1, 1, added_days_ago=1)
         api = _api([_section(1, "TV Shows", [ep])])
-        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
+        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7).items
         assert items[0].show_rating_key == ""

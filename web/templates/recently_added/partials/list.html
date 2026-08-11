@@ -152,6 +152,23 @@
 </div>
 {% else %}
 
+{# A library Plex refused to list is missing from the table, the counts and the
+   Library filter alike. Same register as the pin_unknown outcome: an
+   unverifiable fetch becomes a named state, never a reassuring default. Markup
+   copied from cache/partials/storage_stats.html rather than including
+   partials/alert.html, which appends its own lucide.createIcons() call that
+   this template already makes. #}
+{% if unreadable_libraries %}
+<div class="alert alert-warning mb-2" style="display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.75rem 1rem;">
+    <i data-lucide="alert-triangle" style="flex-shrink: 0; margin-top: 2px;"></i>
+    <div>
+        <strong>Couldn't read {{ unreadable_libraries|length }} librar{{ 'ies' if unreadable_libraries|length != 1 else 'y' }}:</strong>
+        {{ unreadable_libraries|join(', ') }}. Plex didn't answer, so anything
+        added there is missing from the counts and the table below. Refresh to retry.
+    </div>
+</div>
+{% endif %}
+
 <!-- Stat cards -->
 <div class="stats-row">
     <div class="stat-card">
@@ -277,7 +294,13 @@
                 {% if not groups %}
                 <tr id="ra-empty-row">
                     <td colspan="7" class="text-muted" style="text-align: center; padding: 2.5rem;">
+                        {# Only claim there is nothing new if every library answered.
+                           Otherwise the sentence would be about media never read. #}
+                        {% if unreadable_libraries %}
+                        No results from the libraries that answered.
+                        {% else %}
                         Nothing added in the last {{ days }} day{{ 's' if days != 1 else '' }}.
+                        {% endif %}
                     </td>
                 </tr>
                 {% endif %}

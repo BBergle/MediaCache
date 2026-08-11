@@ -158,19 +158,28 @@ class RecentlyAddedService:
         # describes the file PlexCache would actually manage.
         version_preference = getattr(config.plex, "pinned_preferred_resolution", "highest") or "highest"
         try:
-            items = plex_manager.get_recently_added_media(
+            fetched = plex_manager.get_recently_added_media(
                 valid_sections, days, max_items, version_preference=version_preference
             )
         except Exception as e:
             logger.warning(f"RecentlyAddedService: fetch failed: {e}")
             return self._empty_result(f"Could not fetch recently added media: {e}")
 
+        unreadable = list(fetched.unreadable_libraries)
+        # Every attempted library failed and nothing came back: that is a
+        # failure, not an empty result. Saying so beats three zeroed stat cards
+        # under a warning, which would assert counts the app cannot know.
+        if unreadable and not fetched.items:
+            return self._empty_result(
+                "Could not read any library: " + ", ".join(unreadable)
+            )
+
         try:
             from core.file_operations import MultiPathModifier
             path_modifier = MultiPathModifier(config.paths.path_mappings)
 
             rows = self._enrich(
-                items,
+                fetched.items,
                 path_modifier,
                 pinned_keys=self._json_keys(self.pinned_file),
                 ondeck_keys=self._json_keys(self.ondeck_file),
@@ -192,6 +201,7 @@ class RecentlyAddedService:
             "rows": rows,
             "summary": self._summary(rows),
             "error": None,
+            "unreadable_libraries": unreadable,
         }
 
     # ------------------------------------------------------------------
@@ -678,11 +688,14 @@ class RecentlyAddedService:
             return set()
 
     def _empty_result(self, error: str) -> Dict[str, Any]:
+        # Carries unreadable_libraries for shape symmetry with the success
+        # result; the unavailable card renders `error` and never reads it.
         return {
             "available": False,
             "rows": [],
             "summary": self._summary([]),
             "error": error,
+            "unreadable_libraries": [],
         }
 
 
