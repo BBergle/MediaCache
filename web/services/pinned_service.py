@@ -36,6 +36,7 @@ from core.pinned_media import (
     resolve_size_setting,
     sum_pinned_bytes_on_disk,
 )
+from core.media_grouping import format_season_episode
 
 
 logger = logging.getLogger(__name__)
@@ -209,9 +210,7 @@ class PinnedService:
                     ep_num = getattr(ep, "index", None)
                     ep_title = getattr(ep, "title", "") or ""
                     ep_show_label = show_label or getattr(ep, "grandparentTitle", "") or ""
-                    se_code = ""
-                    if isinstance(season_num, int) and isinstance(ep_num, int):
-                        se_code = f"S{season_num:02d}E{ep_num:02d}"
+                    se_code = format_season_episode(season_num, ep_num)
                     parts = [p for p in (ep_show_label, se_code, ep_title) if p]
                     display_title = " — ".join(parts) if parts else ep_title
                     size_bytes = self._estimate_item_size(
@@ -446,9 +445,7 @@ class PinnedService:
             season_num = getattr(item, "parentIndex", None)
             ep_num = getattr(item, "index", None)
             ep_title = getattr(item, "title", "") or fallback
-            se_code = ""
-            if isinstance(season_num, int) and isinstance(ep_num, int):
-                se_code = f"S{season_num:02d}E{ep_num:02d}"
+            se_code = format_season_episode(season_num, ep_num)
             parts = [p for p in (show_label, se_code, ep_title) if p]
             return " — ".join(parts) if parts else fallback
         except Exception:
@@ -647,9 +644,7 @@ class PinnedService:
                 season_num = getattr(item, "parentIndex", None)
                 ep_num = getattr(item, "index", None)
                 ep_title = getattr(item, "title", "") or ""
-                se_code = ""
-                if isinstance(season_num, int) and isinstance(ep_num, int):
-                    se_code = f"S{season_num:02d}E{ep_num:02d}"
+                se_code = format_season_episode(season_num, ep_num)
                 if se_code and ep_title:
                     result["scope_text"] = f"{se_code} — {ep_title}"
                 elif se_code:

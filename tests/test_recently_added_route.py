@@ -186,6 +186,88 @@ class TestPage:
         assert "_state.lib = 'all'" in r.text
 
 
+class TestDegradedEpisodeNumbering:
+    """An episode Plex could not number is still an episode."""
+
+    def _render(self, client, path, row):
+        p_svc, p_set, _ = _patch(_result([row]), settings={})
+        with p_svc, p_set:
+            return client.get(path)
+
+    def test_episode_without_numbering_keeps_its_show_name(self, client):
+        r = self._render(client, "/recently-added/list", _row(
+            rating_key="1", title="Holiday Special", media_type="episode",
+            pin_type="episode",
+            episode_info={"show": "The Show", "season": None, "episode": None}))
+
+        assert "The Show" in r.text
+        assert ">Movie<" not in r.text
+
+    def test_episode_with_no_episode_info_is_not_labelled_movie(self, client):
+        """The terminal arm: an episode row carrying no episode_info at all
+        fell into the movie branch and rendered a "Movie" caption directly
+        under the tv icon the same row had already chosen."""
+        r = self._render(client, "/recently-added/list", _row(
+            rating_key="1", title="Orphan", media_type="episode",
+            pin_type="episode", episode_info=None))
+
+        # Match the sub-label element itself — a bare "Movie" also occurs in
+        # the "Movies" library name elsewhere on the page.
+        assert ">Movie</div>" not in r.text
+        assert ">Episode</div>" in r.text
+
+    def test_missing_numbering_does_not_fabricate_s00e00(self, client):
+        """S00E00 is a real Specials episode 0, so inventing it for an unknown
+        episode makes the two indistinguishable."""
+        r = self._render(client, "/recently-added/list", _row(
+            rating_key="1", title="Holiday Special", media_type="episode",
+            pin_type="episode",
+            episode_info={"show": "The Show", "season": None, "episode": None}))
+
+        assert "S00E00" not in r.text
+        assert "Holiday Special" in r.text
+
+    def test_genuine_specials_episode_still_renders(self, client):
+        r = self._render(client, "/recently-added/list", _row(
+            rating_key="1", title="Xmas", media_type="episode", pin_type="episode",
+            episode_info={"show": "The Show", "season": 0, "episode": 7}))
+
+        assert "S00E07" in r.text
+
+    def test_malformed_index_does_not_raise(self, client):
+        """plexapi casts an unparseable index to float('nan'), and
+        '%02d'|format(nan) raises ValueError — a 500 on the page, not a bad
+        label. The isinstance guard is what prevents it."""
+        nan = float("nan")
+        r = self._render(client, "/recently-added/list", _row(
+            rating_key="1", title="Weird Ep", media_type="episode",
+            pin_type="episode",
+            episode_info={"show": "The Show", "season": nan, "episode": nan}))
+
+        assert r.status_code == 200
+        assert "The Show" in r.text
+
+    def test_widget_survives_the_same_row(self, client):
+        nan = float("nan")
+        r = self._render(client, "/recently-added/widget", _row(
+            rating_key="1", title="Weird Ep", media_type="episode",
+            pin_type="episode",
+            episode_info={"show": "The Show", "season": nan, "episode": nan}))
+
+        assert r.status_code == 200
+        assert "S00E00" not in r.text
+
+    def test_missing_show_name_does_not_leak_none_into_the_search_index(self, client):
+        """`None|lower` renders the literal "none", which would make every such
+        row match a search for "none"."""
+        r = self._render(client, "/recently-added/list", _row(
+            rating_key="1", title="Orphan Ep", media_type="episode",
+            pin_type="episode",
+            episode_info={"show": None, "season": 1, "episode": 2}))
+
+        assert 'data-title="orphan ep none' not in r.text
+
+
 class TestUnreadableLibraryStrip:
     """The page must not report an unread library as an empty one."""
 

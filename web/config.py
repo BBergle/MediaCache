@@ -100,6 +100,13 @@ templates.env.globals["outcome_tooltip"] = _outcome_tooltip
 # by a trailing period before this was shared.
 templates.env.globals["protected_sentence"] = PROTECTED_SENTENCE
 
+# SxxEyy formatting, shared with the Python callers in pinned_service so a
+# template cannot fabricate an S00E00 for an episode whose numbering Plex did
+# not supply — and so a malformed index (which plexapi casts to NaN, not None)
+# cannot raise inside a format filter.
+from core.media_grouping import format_season_episode as _format_season_episode
+templates.env.globals["format_season_episode"] = _format_season_episode
+
 
 def get_time_format() -> str:
     """Read time_format from settings JSON. Returns '12h' or '24h' (default)."""

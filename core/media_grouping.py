@@ -109,3 +109,32 @@ def format_season_range(seasons: List[int]) -> str:
     if len(known) == 1:
         return f"Season {known[0]}"
     return f"Seasons {known[0]}–{known[-1]}"
+
+
+def format_season_episode(season: Any, episode: Any) -> str:
+    """``"S01E03"`` for a numbered episode, ``""`` when either number is unknown.
+
+    Both numbers or neither: a half-known episode renders as nothing rather
+    than a fabricated ``S00E00``, which would be indistinguishable from a real
+    Specials episode 0. Callers fall back to the episode title.
+
+    The ``isinstance(..., int)`` guard is load-bearing, not defensive.
+    ``plexapi.utils.cast(int, value)`` returns ``float('nan')`` — not ``None``
+    — for anything it cannot parse, including the empty string. A ``None``
+    check therefore passes NaN straight into the format, where it raises
+    ``ValueError: cannot convert float NaN to integer``. ``bool`` is excluded
+    separately because ``isinstance(True, int)`` is True, and ``S01ETrue`` is
+    not a thing. This matches Jinja's own ``is integer`` test.
+
+    Args:
+        season: Season number, or any unparsed value from a Plex listing.
+        episode: Episode number, same.
+
+    Returns:
+        The ``SxxEyy`` code, or ``""`` if either number is unusable.
+    """
+    if isinstance(season, bool) or isinstance(episode, bool):
+        return ""
+    if isinstance(season, int) and isinstance(episode, int):
+        return f"S{season:02d}E{episode:02d}"
+    return ""

@@ -9,6 +9,7 @@ singleton semantics.
 
 from core.media_grouping import (
     format_season_range,
+    format_season_episode,
     group_ordered,
     parse_show_episode,
     show_name_from_filename,
@@ -144,3 +145,49 @@ class TestFormatSeasonRange:
     def test_no_seasons(self):
         assert format_season_range([]) == ""
         assert format_season_range([None]) == ""
+
+
+class TestFormatSeasonEpisode:
+    def test_numbered_episode(self):
+        assert format_season_episode(1, 3) == "S01E03"
+
+    def test_zero_padding_and_wide_numbers(self):
+        assert format_season_episode(0, 0) == "S00E00"
+        assert format_season_episode(12, 105) == "S12E105"
+
+    def test_specials_episode_zero_is_real_and_renders(self):
+        """Season 0 is Plex's Specials. A truthiness check would drop it, which
+        is why the guard tests the type rather than the value."""
+        assert format_season_episode(0, 7) == "S00E07"
+
+    def test_missing_numbers_render_as_nothing_not_as_s00e00(self):
+        # A fabricated S00E00 is indistinguishable from a genuine Specials 0.
+        assert format_season_episode(None, None) == ""
+        assert format_season_episode(1, None) == ""
+        assert format_season_episode(None, 3) == ""
+
+    def test_nan_is_rejected(self):
+        """plexapi.utils.cast(int, x) yields float('nan') — not None — for
+        anything unparseable, including "". An `is not None` guard would let it
+        through and the format would then raise ValueError."""
+        nan = float("nan")
+        assert format_season_episode(nan, nan) == ""
+        assert format_season_episode(1, nan) == ""
+        assert format_season_episode(nan, 3) == ""
+
+    def test_booleans_are_rejected(self):
+        # isinstance(True, int) is True, and "S01ETrue" is not a thing.
+        assert format_season_episode(True, True) == ""
+        assert format_season_episode(1, True) == ""
+
+    def test_strings_are_rejected(self):
+        assert format_season_episode("1", "3") == ""
+
+    def test_matches_jinja_is_integer(self):
+        """The template and the Python callers must agree on what counts as a
+        usable number, or the two surfaces drift."""
+        from jinja2 import Environment
+        is_integer = Environment().compile_expression("x is integer")
+        for value in [3, 0, -1, None, float("nan"), True, False, "1", 1.5]:
+            assert bool(format_season_episode(value, 1)) == bool(
+                is_integer(x=value)), f"disagreement on {value!r}"

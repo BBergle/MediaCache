@@ -1788,14 +1788,17 @@ class PlexManager:
                 if media_type == 'episode':
                     # _partial_attr, not getattr: these are the two reads that
                     # legitimately hold None and so trigger the reload above.
-                    season = _partial_attr(video, 'parentIndex')
-                    episode = _partial_attr(video, 'index')
-                    if season is not None and episode is not None:
-                        episode_info = {
-                            'show': getattr(video, 'grandparentTitle', None),
-                            'season': season,
-                            'episode': episode,
-                        }
+                    # Emitted whenever the item is an episode, even with the
+                    # numbering missing — the show name is the more useful half
+                    # and gating the whole dict on the numbers threw it away,
+                    # leaving the row to render as a movie. Renderers format the
+                    # code with format_season_episode(), which yields "" rather
+                    # than a fabricated S00E00 when a number is unusable.
+                    episode_info = {
+                        'show': getattr(video, 'grandparentTitle', None),
+                        'season': _partial_attr(video, 'parentIndex'),
+                        'episode': _partial_attr(video, 'index'),
+                    }
 
                 rating_key = str(getattr(video, 'ratingKey', '') or '')
                 title = getattr(video, 'title', '') or ''

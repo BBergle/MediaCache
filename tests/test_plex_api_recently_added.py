@@ -372,9 +372,14 @@ class TestPartialObjectResilience:
         assert len(items) == 4
         degraded = [i for i in items if i.title == "Special"]
         assert len(degraded) == 1
-        # A healthy server with a genuinely unnumbered special produces exactly
-        # this, so the degraded path is byte-identical to the healthy one.
-        assert degraded[0].episode_info is None
+        # Degraded in the numbering only. The show name is the more useful half
+        # and is still there, so the row renders as an episode of its show
+        # rather than falling through to the movie layout. A healthy server with
+        # a genuinely unnumbered special produces exactly this shape too.
+        assert degraded[0].media_type == "episode"
+        assert degraded[0].episode_info == {
+            "show": "Show", "season": 1, "episode": None,
+        }
         assert any("could not read 'index'" in r.message for r in caplog.records)
 
     def test_unreadable_media_is_skipped_but_the_rest_survive(self, caplog):

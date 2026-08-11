@@ -66,7 +66,9 @@
     {% if is_child %}data-group="{{ group_id }}" style="display: none;"{% endif %}
     data-library="{{ row.library_title }}"
     data-loc="{{ row.location }}"
-    data-title="{{ row.title|lower }}{% if row.episode_info %} {{ row.episode_info.show|lower }}{% endif %} {{ row.filename|lower }}">
+    {# `or ''` before |lower: a missing show would render the literal "none" into
+       the search index and make every row match a search for "none". #}
+    data-title="{{ row.title|lower }}{% if row.episode_info %} {{ (row.episode_info.show or '')|lower }}{% endif %} {{ row.filename|lower }}">
     <td class="ra-title-cell" onclick="RecentlyAdded.toggleDetail(this)"
         style="cursor: pointer;{% if is_child %} padding-left: 2.4rem;{% endif %}"
         title="Show file details">
@@ -79,17 +81,23 @@
             {% endif %}
             <div>
                 {% if row.media_type == 'episode' and row.episode_info %}
+                    {# "" when Plex gave no usable numbering, so the row falls back
+                       to the episode title rather than inventing S00E00 — which a
+                       genuine Specials episode 0 also renders as. #}
+                    {% set se = format_season_episode(row.episode_info.season, row.episode_info.episode) %}
                     {% if is_child %}
-                    <div style="font-weight: 500;">S{{ '%02d'|format(row.episode_info.season or 0) }}E{{ '%02d'|format(row.episode_info.episode or 0) }}{% if row.title %} — {{ row.title }}{% endif %}</div>
+                    <div style="font-weight: 500;">{% if se %}{{ se }}{% if row.title %} — {{ row.title }}{% endif %}{% else %}{{ row.title or 'Episode' }}{% endif %}</div>
                     {% else %}
-                    <div style="font-weight: 500;">{{ row.episode_info.show }}</div>
+                    <div style="font-weight: 500;">{{ row.episode_info.show or row.title }}</div>
                     <div class="text-muted" style="font-size: 0.76rem;">
-                        S{{ '%02d'|format(row.episode_info.season or 0) }}E{{ '%02d'|format(row.episode_info.episode or 0) }}{% if row.title %} — {{ row.title }}{% endif %}
+                        {% if se %}{{ se }}{% if row.title %} — {{ row.title }}{% endif %}{% else %}{{ row.title or 'Episode' }}{% endif %}
                     </div>
                     {% endif %}
                 {% else %}
                 <div style="font-weight: 500;">{{ row.title }}</div>
-                <div class="text-muted" style="font-size: 0.76rem;">Movie</div>
+                {# Terminal arm, so a row built outside plex_api cannot land here
+                   and label an episode "Movie" underneath a tv icon. #}
+                <div class="text-muted" style="font-size: 0.76rem;">{% if row.media_type == 'episode' %}Episode{% else %}Movie{% endif %}</div>
                 {% endif %}
             </div>
             {% if row.associated_files %}<span class="badge badge-muted badge-sm" title="{{ row.associated_files|length }} associated file(s)">+{{ row.associated_files|length }}</span>{% endif %}
