@@ -256,6 +256,9 @@ class RecentlyAddedService:
         released_paths = released_paths if released_paths is not None else set()
 
         rows: List[RecentlyAddedRow] = []
+        # Local to this call, so it cannot outlive the request or be shared
+        # between threadpool workers — the service itself is a singleton.
+        dir_cache: Dict[str, list] = {}
         for item in items:
             real_path, _ = path_modifier.convert_plex_to_real(item.file_path)
             cache_path, _ = (
@@ -348,7 +351,9 @@ class RecentlyAddedService:
                 protected_by=protected_by,
                 pin_type="episode" if item.media_type == "episode" else "movie",
                 episode_info=item.episode_info,
-                associated_files=self._scan_associated_files(cache_path) if on_cache else [],
+                associated_files=(
+                    self._scan_associated_files(cache_path, dir_cache) if on_cache else []
+                ),
                 filename=os.path.basename(item.file_path) if item.file_path else "",
                 other_versions=self._other_versions(item),
                 outcome=outcome,
@@ -501,7 +506,8 @@ class RecentlyAddedService:
             })
         return display
 
-    def _scan_associated_files(self, video_cache_path: Optional[str]) -> List[Dict[str, str]]:
+    def _scan_associated_files(self, video_cache_path: Optional[str],
+                               dir_cache: Optional[Dict[str, list]] = None) -> List[Dict[str, str]]:
         """Find subtitle/sidecar files sharing a cache-resident video's basename.
 
         Two shared rules, in order: :func:`is_sidecar_candidate` decides what
@@ -513,6 +519,16 @@ class RecentlyAddedService:
 
         Cache-only: array/unknown items are never probed. Returns
         ``[{filename, size}]`` sorted by name, for display only.
+
+        Args:
+            video_cache_path: The video's cache-side path.
+            dir_cache: Optional ``{directory: [DirEntry]}`` memo so that N rows
+                sharing a directory scan it once instead of N times — the cost
+                tracks directory *size*, so a flat library is where this pays.
+                It caches the raw listing, never the filtered result: two videos
+                in one directory have different stems and must each be matched
+                against the full listing. Pass a fresh dict per request; a
+                longer-lived one would go stale (the service is a singleton).
         """
         if not video_cache_path:
             return []
@@ -521,32 +537,43 @@ class RecentlyAddedService:
         stem = os.path.splitext(video_name)[0]
         if not directory or not stem:
             return []
+
+        entries = None if dir_cache is None else dir_cache.get(directory)
+        if entries is None:
+            try:
+                with os.scandir(directory) as it:
+                    # DirEntry, not (name, size): is_file() stays served from
+                    # the cached d_type and stat() stays on matches only.
+                    entries = list(it)
+            except OSError:
+                entries = []
+            if dir_cache is not None:
+                dir_cache[directory] = entries
+
         found: List[Dict[str, str]] = []
-        try:
-            with os.scandir(directory) as it:
-                for entry in it:
-                    if entry.name == video_name:
-                        continue
-                    # Name-only checks first: neither needs a stat, so an
-                    # excluded entry costs no syscall.
-                    if not is_sidecar_candidate(entry.name):
-                        continue
-                    try:
-                        if not entry.is_file():
-                            continue
-                    except OSError:
-                        continue
-                    if name_matches_video_stem(entry.name, stem):
-                        try:
-                            size = entry.stat().st_size
-                        except OSError:
-                            size = 0
-                        found.append({
-                            "filename": entry.name,
-                            "size": format_bytes(size) if size else "",
-                        })
-        except OSError:
-            return []
+        for entry in entries:
+            if entry.name == video_name:
+                continue
+            # Name-only checks first: neither needs a stat, so an
+            # excluded entry costs no syscall.
+            if not is_sidecar_candidate(entry.name):
+                continue
+            try:
+                if not entry.is_file():
+                    continue
+            except OSError:
+                continue
+            if name_matches_video_stem(entry.name, stem):
+                try:
+                    size = entry.stat().st_size
+                except OSError:
+                    # Still list it — a sidecar the mover is moving out from
+                    # under the scan is real, it just has no size to show.
+                    size = 0
+                found.append({
+                    "filename": entry.name,
+                    "size": format_bytes(size) if size else "",
+                })
         return sorted(found, key=lambda f: f["filename"])
 
     @staticmethod

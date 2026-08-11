@@ -394,17 +394,119 @@ class TestScanAssociatedFiles:
 
     def test_enrich_only_scans_cache_resident_items(self):
         svc = _service(on_disk={"/mnt/cache/movies/Movie.mkv"})
-        svc._scan_associated_files = lambda p: [{"filename": "Movie.en.srt", "size": "1 KB"}]
+        svc._scan_associated_files = lambda p, *_: [{"filename": "Movie.en.srt", "size": "1 KB"}]
         rows = _enrich(svc, [_item()])
         assert rows[0].location == "cache"
         assert rows[0].associated_files == [{"filename": "Movie.en.srt", "size": "1 KB"}]
 
     def test_enrich_skips_scan_for_array_items(self):
         svc = _service(on_disk={"/mnt/user0/movies/Movie.mkv"})
-        svc._scan_associated_files = lambda p: [{"filename": "should-not-appear", "size": "1 KB"}]
+        svc._scan_associated_files = lambda p, *_: [{"filename": "should-not-appear", "size": "1 KB"}]
         rows = _enrich(svc, [_item()])
         assert rows[0].location == "array"
         assert rows[0].associated_files == []
+
+
+class TestScanDirectoryMemo:
+    """N rows in one directory must scan it once, without changing any result."""
+
+    def _dir(self, tmp_path, videos, sidecars):
+        d = tmp_path / "Movies"
+        d.mkdir()
+        for n in list(videos) + list(sidecars):
+            (d / n).write_bytes(b"x")
+        return d
+
+    def test_one_scandir_per_directory_not_per_row(self, tmp_path, monkeypatch):
+        d = self._dir(tmp_path, ["A.mkv", "B.mkv", "C.mkv"],
+                      ["A.en.srt", "B.en.srt", "C.en.srt"])
+        real = os.scandir
+        calls = []
+
+        def counting(path):
+            calls.append(path)
+            return real(path)
+
+        monkeypatch.setattr(os, "scandir", counting)
+        svc = RecentlyAddedService()
+        cache = {}
+        for name in ("A.mkv", "B.mkv", "C.mkv"):
+            svc._scan_associated_files(str(d / name), cache)
+        assert len(calls) == 1, f"scanned {len(calls)} times, expected 1"
+
+    def test_without_the_memo_each_row_scans(self, tmp_path, monkeypatch):
+        """Pins the behaviour the memo is optimising, so the test above cannot
+        pass for the wrong reason."""
+        d = self._dir(tmp_path, ["A.mkv", "B.mkv"], ["A.en.srt", "B.en.srt"])
+        real = os.scandir
+        calls = []
+        monkeypatch.setattr(os, "scandir", lambda p: (calls.append(p), real(p))[1])
+        svc = RecentlyAddedService()
+        for name in ("A.mkv", "B.mkv"):
+            svc._scan_associated_files(str(d / name))
+        assert len(calls) == 2
+
+    def test_memo_caches_the_listing_not_the_filtered_result(self, tmp_path):
+        """The trap: two videos in one directory have different stems, so a
+        memo keyed only on the directory must re-filter per row. Caching the
+        filtered result would give every row the first row's sidecars."""
+        d = self._dir(tmp_path, ["A.mkv", "B.mkv"],
+                      ["A.en.srt", "A.nfo", "B.en.srt"])
+        svc = RecentlyAddedService()
+        cache = {}
+        a = {f["filename"] for f in svc._scan_associated_files(str(d / "A.mkv"), cache)}
+        b = {f["filename"] for f in svc._scan_associated_files(str(d / "B.mkv"), cache)}
+        assert a == {"A.en.srt", "A.nfo"}
+        assert b == {"B.en.srt"}
+
+    def test_memoised_output_matches_unmemoised(self, tmp_path):
+        d = self._dir(tmp_path, ["A.mkv", "B.mkv"],
+                      ["A.en.srt", "A-poster.jpg", "B.en.srt", "stray.txt"])
+        svc = RecentlyAddedService()
+        cache = {}
+        for name in ("A.mkv", "B.mkv"):
+            assert (svc._scan_associated_files(str(d / name), cache)
+                    == svc._scan_associated_files(str(d / name)))
+
+    def test_sidecar_whose_stat_fails_is_still_listed(self, tmp_path):
+        """A sidecar the mover is moving out from under the scan is real; it
+        just has no size to show. An implementation that skipped on OSError
+        would silently drop it."""
+        d = self._dir(tmp_path, ["A.mkv"], ["A.en.srt"])
+
+        class Boom:
+            name = "A.nfo"
+
+            def is_file(self):
+                return True
+
+            def stat(self):
+                raise OSError("EACCES")
+
+        svc = RecentlyAddedService()
+        cache = {str(d): list(os.scandir(str(d))) + [Boom()]}
+        found = svc._scan_associated_files(str(d / "A.mkv"), cache)
+        by_name = {f["filename"]: f["size"] for f in found}
+        assert by_name["A.nfo"] == ""
+        assert by_name["A.en.srt"]
+
+    def test_missing_directory_is_cached_as_empty(self, tmp_path):
+        svc = RecentlyAddedService()
+        cache = {}
+        missing = str(tmp_path / "nope" / "Movie.mkv")
+        assert svc._scan_associated_files(missing, cache) == []
+        assert svc._scan_associated_files(missing, cache) == []
+        assert cache[os.path.dirname(missing)] == []
+
+    def test_enrich_passes_a_fresh_cache_per_call(self):
+        """A cache that outlived the call would go stale — the service is a
+        module-level singleton shared across requests."""
+        svc = _service(on_disk={"/mnt/cache/movies/Movie.mkv"})
+        seen = []
+        svc._scan_associated_files = lambda p, c=None: (seen.append(id(c)), [])[1]
+        _enrich(svc, [_item()])
+        _enrich(svc, [_item()])
+        assert len(seen) == 2 and seen[0] != seen[1]
 
 
 class TestGetRecentlyAddedEndToEnd:
