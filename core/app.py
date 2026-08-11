@@ -3263,7 +3263,12 @@ class PlexCacheApp:
         if destination == 'cache':
             media_files_filtered = self._apply_cache_limit(media_files_filtered, cache_dir)
 
-        total_size, total_size_unit = self.file_utils.get_total_size_of_files(media_files_filtered)
+        # Array-destination paths are expected to be absent: the originals were
+        # renamed to .plexcached when the files were cached, so sizing them here
+        # misses every one. The fallback just below recovers the real total.
+        total_size, total_size_unit = self.file_utils.get_total_size_of_files(
+            media_files_filtered, warn_missing=(destination != 'array')
+        )
 
         # Fallback for array moves: on non-FUSE setups (e.g., ZFS with direct pool paths),
         # array paths don't exist because originals were renamed to .plexcached.

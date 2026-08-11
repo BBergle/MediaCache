@@ -1005,8 +1005,20 @@ class FileUtils:
         stat = os.statvfs(directory)
         return stat.f_blocks * stat.f_frsize
 
-    def get_total_size_of_files(self, files: list) -> Tuple[float, str]:
-        """Calculate total size of files in human-readable format."""
+    def get_total_size_of_files(self, files: list, warn_missing: bool = True) -> Tuple[float, str]:
+        """Calculate total size of files in human-readable format.
+
+        Args:
+            files: Paths to size.
+            warn_missing: Whether an unreadable path is worth a WARNING. Set
+                False when the caller expects some paths to be absent. Sizing
+                an array-destination move is the case that matters: PlexCache
+                renamed those originals to .plexcached when it cached them, so
+                every path legitimately misses and the warning is noise on an
+                otherwise healthy restore. A genuinely missing file is still
+                reported by _move_to_array, which checks cache and .plexcached
+                before giving up.
+        """
         total_size_bytes = 0
         skipped_files = []
         for file in files:
@@ -1017,7 +1029,10 @@ class FileUtils:
 
         if skipped_files:
             file_word = "file" if len(skipped_files) == 1 else "files"
-            logging.warning(f"Skipping {len(skipped_files)} {file_word} not found on disk (may have been renamed - try refreshing Plex library)")
+            if warn_missing:
+                logging.warning(f"Skipping {len(skipped_files)} {file_word} not found on disk (may have been renamed - try refreshing Plex library)")
+            else:
+                logging.debug(f"Sizing skipped {len(skipped_files)} {file_word} not present at the requested path")
             for f in skipped_files:
                 logging.debug(f"  Not found: {f}")
 
