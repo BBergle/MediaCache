@@ -1761,7 +1761,13 @@ footer {
     transition: transform 0.15s ease;
 }
 .ra-group-header.is-open .ra-chevron { transform: rotate(90deg); }
-.ra-group-child { background: rgba(0, 0, 0, 0.12); }
+/* Inset surface token, so the nesting tint follows the theme. A hardcoded
+   rgba(0,0,0,0.12) composited to #E0E0E0 in light, all but identical to the
+   #DDDDE2 that tbody tr:hover paints — 1.03 contrast, i.e. no hover feedback
+   on a row that is clickable. Keep the specificity at (0,1,0): a
+   [data-theme="light"] companion would outrank tbody tr:hover and kill the
+   hover outright. */
+.ra-group-child { background: var(--plex-bg-input); }
 
 /* Per-row file-detail expander (chevron on the title cell) */
 .ra-detail-chevron {
