@@ -76,12 +76,8 @@ OUTCOMES: Dict[str, Outcome] = {o.key: o for o in (
     Outcome(
         key="returns_when_done", label="Returns when watched", badge="badge-info",
         icon="clock", tier=4,
-        # The last sentence is load-bearing, not padding: OnDeck/Watchlist only
-        # add +15 to the priority score, so this is a move-back deferral and not
-        # the eviction exemption the label could be read as.
         tooltip=("Held while it's on OnDeck or a Watchlist. PlexCache moves it "
-                 "back once it drops off. This defers the move — it doesn't "
-                 "prevent eviction."),
+                 "back once it drops off."),
     ),
     # Deliberately NOT labelled "Stays on cache": watched_move only governs the
     # move-back to array. Eviction is a separate path with no watched_move
@@ -98,18 +94,17 @@ OUTCOMES: Dict[str, Outcome] = {o.key: o for o in (
         key="arriving", label="Pinned, not on cache yet", badge="badge-pinned",
         icon="arrow-down-to-line", tier=6,
         # No eviction claim: there is nothing on cache to evict, so the reserved
-        # sentence would be vacuous here. The copy promise is hedged because
+        # sentence would be vacuous here. No "immediately" promise either —
         # _apply_cache_limit has no pin awareness and can skip a pinned file
-        # when the pool is full.
-        tooltip=("Pinned, but not on cache yet. The next run copies it across. "
-                 "Cache Pinned Now copies it immediately, ignoring cache limits."),
+        # when the pool is full, so the copy is not guaranteed on any one run.
+        tooltip=("Pinned, but not on cache yet. The next run copies it across."),
     ),
     Outcome(
         key="held_mover_gap", label="Stays on cache", badge="badge-pinned",
         icon="pin", tier=7,
         tooltip=(PROTECTED_SENTENCE + " PlexCache won't move it back to the "
                  "array either. Not in the Unraid mover's exclude list yet, so "
-                 "the mover could still relocate it — the next run fixes that."),
+                 "the mover could still relocate it."),
     ),
     Outcome(
         key="held", label="Stays on cache", badge="badge-pinned",
