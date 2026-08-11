@@ -62,7 +62,11 @@
 {% endmacro %}
 
 {% macro ra_row(row, is_child=False, group_id='') %}
+{# data-row-id is identity, not search: RecentlyAdded._state.details keys on it
+   to re-open a row's file details after an HTMX swap. rating_key is stable
+   across Sonarr/Radarr upgrades; filename covers the rows Plex gave no key. #}
 <tr class="ra-row {% if is_child %}ra-group-child{% else %}ra-item{% endif %}"
+    data-row-id="{{ row.rating_key or row.filename }}"
     {% if is_child %}data-group="{{ group_id }}" style="display: none;"{% endif %}
     data-library="{{ row.library_title }}"
     data-loc="{{ row.location }}"

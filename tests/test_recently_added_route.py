@@ -186,6 +186,94 @@ class TestPage:
         assert "_state.lib = 'all'" in r.text
 
 
+class TestRowIdentity:
+    """Leaf rows need a stable identity for _state.details to key on."""
+
+    def _rows_html(self, client, rows):
+        p_svc, p_set, _ = _patch(_result(rows), settings={})
+        with p_svc, p_set:
+            return client.get("/recently-added/list").text
+
+    def _row_ids(self, html):
+        # Only leaf rows carry data-row-id, so no need to anchor on the <tr>
+        # and depend on the template's line wrapping.
+        import re
+        return re.findall(r'data-row-id="([^"]*)"', html)
+
+    def test_every_leaf_row_carries_a_row_id(self, client):
+        html = self._rows_html(client, [
+            _row(rating_key="1", title="Dune"),
+            _row(rating_key="2", title="Civil War"),
+        ])
+        ids = self._row_ids(html)
+        assert len(ids) == 2
+        assert all(i for i in ids), f"blank data-row-id in {ids}"
+
+    def test_row_ids_are_unique(self, client):
+        """A collision would make one row's detail expansion re-open another's."""
+        html = self._rows_html(client, [
+            _row(rating_key="1", title="Dune"),
+            _row(rating_key="2", title="Dune"),  # same title, different item
+        ])
+        ids = self._row_ids(html)
+        assert len(ids) == len(set(ids)) == 2
+
+    def test_row_without_a_rating_key_falls_back_to_its_filename(self, client):
+        """Plex does not always give a rating_key — the pin button is already
+        guarded for it — so identity cannot depend on one being present."""
+        html = self._rows_html(client, [
+            _row(rating_key="", title="Orphan", filename="Orphan.mkv"),
+        ])
+        assert self._row_ids(html) == ["Orphan.mkv"]
+
+    def test_group_children_carry_row_ids_too(self, client):
+        """Children are swapped and restored like any other leaf row."""
+        html = self._rows_html(client, [
+            _row(rating_key="1", title="Ep One", media_type="episode",
+                 library_title="TV", pin_type="episode",
+                 episode_info={"show": "The Show", "season": 1, "episode": 1}),
+            _row(rating_key="2", title="Ep Two", media_type="episode",
+                 library_title="TV", pin_type="episode",
+                 episode_info={"show": "The Show", "season": 1, "episode": 2}),
+        ])
+        ids = self._row_ids(html)
+        assert sorted(ids) == ["1", "2"]
+
+
+class TestDetailExpansionSurvivesASwap:
+    """Source-text assertions: this suite has no JS runtime, so these pin the
+    wiring's presence rather than its behaviour — they would also pass on a
+    commented-out implementation.
+
+    Two things carry the behavioural weight instead. TestRowIdentity above
+    pins the server-side fact the JS depends on (every leaf row has a unique,
+    stable data-row-id). And the round trip itself — expand, swap #ra-content,
+    restore, assert the same row re-opens and no other — was driven against
+    the real DOM in jsdom before this landed, including the negative case:
+    without data-row-id and the details map, restore leaves 0 of 3 sub-rows
+    open. That driver is not in the suite because it would add a Node
+    dependency to CI for one page's JS."""
+
+    def _page(self, client):
+        p_svc, p_set, _ = _patch(_result([]), settings={})
+        with p_svc, p_set:
+            return client.get("/recently-added/").text
+
+    def test_detail_state_is_tracked(self, client):
+        html = self._page(client)
+        assert "details: {}" in html
+        assert "_state.details[id] = true" in html
+
+    def test_detail_state_is_restored_after_a_swap(self, client):
+        html = self._page(client)
+        assert "_state.details[r.getAttribute('data-row-id')]" in html
+
+    def test_filtering_a_row_out_forgets_its_detail_state(self, client):
+        """Otherwise clearing a filter would re-open rows on its own."""
+        html = self._page(client)
+        assert "delete _state.details[id]" in html
+
+
 class TestDegradedEpisodeNumbering:
     """An episode Plex could not number is still an episode."""
 

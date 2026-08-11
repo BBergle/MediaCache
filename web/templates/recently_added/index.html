@@ -72,7 +72,11 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
     // The user's current view, kept in memory so it survives an HTMX swap of
     // #ra-content (the pin/unpin refetch). Deliberately not persisted: a stale
     // search term restored on a fresh page load would look like a bug.
-    var _state = { lib: '', term: '', loc: 'all', expanded: {} };
+    // `expanded` holds show groups by data-group-id; `details` holds leaf rows
+    // by data-row-id. Both are view state and both must survive the pin/unpin
+    // refetch — inspecting a row's files and then pinning it is the page's main
+    // sequence, and the pin swaps #ra-content out from under the expansion.
+    var _state = { lib: '', term: '', loc: 'all', expanded: {}, details: {} };
 
     // Does a single media row match the active library/search/location filters?
     function rowMatches(row, lib, term, loc) {
@@ -83,17 +87,29 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
     }
 
     // A leaf row's detail sub-rows (.associated-sub-row) follow it directly.
-    // Reset them (collapse) when the leaf row itself is hidden/collapsed.
-    function resetDetailRows(leafRow, visible) {
+    // Open or close all of them together, chevron included. Takes the target
+    // state rather than toggling each sub-row, so a row can be restored to a
+    // known state instead of only flipped from whatever it currently shows.
+    function setDetail(leafRow, open) {
+        var chev = leafRow.querySelector('.ra-detail-chevron');
+        if (chev) chev.classList.toggle('open', open);
         var s = leafRow.nextElementSibling;
         while (s && s.classList.contains('associated-sub-row')) {
-            if (!visible) s.classList.remove('af-visible');
+            s.classList.toggle('af-visible', open);
             s = s.nextElementSibling;
         }
-        if (!visible) {
-            var chev = leafRow.querySelector('.ra-detail-chevron');
-            if (chev) chev.classList.remove('open');
-        }
+    }
+
+    // Collapse a leaf row's details when the row itself is hidden, so a row
+    // filtered out of view cannot leave its sub-rows on screen. Forgetting the
+    // row here as well keeps what is remembered in step with what is shown:
+    // filtering discards detail state deliberately, so clearing the filter must
+    // not spring rows back open on its own.
+    function resetDetailRows(leafRow, visible) {
+        if (visible) return;
+        setDetail(leafRow, false);
+        var id = leafRow.getAttribute('data-row-id');
+        if (id) delete _state.details[id];
     }
 
     function apply() {
@@ -180,6 +196,13 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
         document.querySelectorAll('#ra-table-body .ra-group-header').forEach(function (h) {
             if (_state.expanded[h.getAttribute('data-group-id')]) h.classList.add('is-open');
         });
+
+        // Re-open the rows whose file details were showing. Safe to run before
+        // apply(): apply() only ever collapses details for rows it hides, so a
+        // row restored here and then filtered out still ends up closed.
+        document.querySelectorAll('#ra-table-body .ra-row').forEach(function (r) {
+            if (_state.details[r.getAttribute('data-row-id')]) setDetail(r, true);
+        });
     }
 
     // Expand/collapse a leaf row's file-detail sub-rows.
@@ -187,11 +210,12 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
         var row = td.closest ? td.closest('tr') : null;
         if (!row) return;
         var chev = row.querySelector('.ra-detail-chevron');
-        if (chev) chev.classList.toggle('open');
-        var s = row.nextElementSibling;
-        while (s && s.classList.contains('associated-sub-row')) {
-            s.classList.toggle('af-visible');
-            s = s.nextElementSibling;
+        var open = !(chev && chev.classList.contains('open'));
+        setDetail(row, open);
+        var id = row.getAttribute('data-row-id');
+        if (id) {
+            if (open) _state.details[id] = true;
+            else delete _state.details[id];
         }
     }
 
