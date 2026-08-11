@@ -19,17 +19,23 @@
   data/recent_activity.json, so rewriting it on disk would need a migration and
   would rewrite history; mapping here keeps old and new entries reading the same.
 #}
+{#
+  Tooltip rule: say the thing that changes the reader's understanding, then
+  stop. Mechanism earns a place only when it explains a difference they can
+  actually see — Restored vs Moved is the case that does, since both appear in
+  one run and otherwise look arbitrary.
+#}
 {% set ACTION_LABELS = {'Protected': 'Kept on Cache'} %}
 {% set ACTION_TOOLTIPS = {
-    'Cached':          'Copied from the array to the cache pool.',
-    'Restored':        'Moved back to the array by renaming its .plexcached backup — no bytes copied.',
-    'Moved':           'Copied back to the array. No .plexcached backup existed to rename, so the file was copied and then removed from cache.',
-    'Released':        'Handed to the Unraid mover. No bytes were moved — PlexCache dropped its exclude entry and left relocation to the mover.',
-    'Protected':       'Added to the mover exclude list and tracked, so the Unraid mover leaves it on cache. A one-time keep, not a pin — it will not be re-cached automatically.',
-    'Moved to Array':  'Copied from cache to the array by a maintenance action, then removed from cache.',
-    'Fixed':           'Had a .plexcached backup on the array, so the cache copy was removed and the backup restored to its original name.',
-    'Restored Backup': 'A .plexcached backup on the array was restored to its original filename.',
-    'Deleted Backup':  'An orphaned .plexcached backup was deleted from the array.'
+    'Cached':          'Copied to the cache pool.',
+    'Restored':        'Moved back to the array using its .plexcached backup.',
+    'Moved':           'Copied back to the array. No .plexcached backup existed.',
+    'Released':        'Handed to the Unraid mover, which relocates it on its own schedule.',
+    'Protected':       'Kept on cache so the Unraid mover leaves it alone. One-time — not a pin.',
+    'Moved to Array':  'Copied to the array by a maintenance action.',
+    'Fixed':           'Cache copy removed and its .plexcached backup restored.',
+    'Restored Backup': 'A .plexcached backup was restored to its original name.',
+    'Deleted Backup':  'An orphaned .plexcached backup was deleted.'
 } %}
 
 {% macro action_badge(action) -%}

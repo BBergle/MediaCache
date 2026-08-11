@@ -132,16 +132,92 @@ class TestFilterPills:
             for action in value.split("|"):
                 assert action in ALL_ACTIONS, f"pill filters on unknown action {action!r}"
 
-    def test_actions_without_a_pill_fall_through_to_other(self, dashboard_src):
-        """Anything not named by a pill must be reachable under "Other"."""
+    def test_every_action_is_reachable_by_some_filter(self, dashboard_src):
+        """Each action matches either its own pill or "Other" — never neither.
+
+        Rows matched neither when KNOWN_ACTIONS named an action that had no
+        pill: the pill couldn't match it and "Other" excluded it, so it was
+        visible only under "All". Deriving the list from the pills makes the two
+        sets identical by construction, which is what this asserts.
+        """
         bar = dashboard_src[dashboard_src.index('id="activity-filter-bar"'):]
         bar = bar[:bar.index("</div>")]
         covered = set()
         for value in re.findall(r'data-filter="([^"]+)"', bar):
             if value not in ("all", "other"):
                 covered.update(value.split("|"))
-        uncovered = [a for a in ALL_ACTIONS if a not in covered]
-        # These have no pill of their own, so "Other" is their only filter —
-        # which the derived knownActions() now guarantees.
-        assert "Released" in uncovered
-        assert "Protected" in uncovered
+
+        # "Other" is the complement of the pill set, and the pill set is what
+        # knownActions() derives — so reachability holds iff no action is
+        # claimed by the known-list without also having a pill. That is exactly
+        # what a hardcoded list broke, so assert the two can't diverge: every
+        # covered action must appear as a pill's own data-filter value.
+        pill_values = set()
+        for value in re.findall(r'data-filter="([^"]+)"', bar):
+            if value not in ("all", "other"):
+                pill_values.update(value.split("|"))
+        assert covered == pill_values
+
+        # Released earns a pill of its own — it is a deliberate state, not a
+        # leftover, so burying it under "Other" hid the feature working.
+        assert "Released" in covered
+
+
+SOURCE_BADGE = REPO / "web" / "templates" / "macros" / "source_badge.html"
+FILE_TABLE = REPO / "web" / "templates" / "cache" / "partials" / "file_table.html"
+RA_LIST = REPO / "web" / "templates" / "recently_added" / "partials" / "list.html"
+
+
+class TestSharedSourceBadges:
+    """OnDeck/Watchlist/lapsed badges are shared, not hand-copied.
+
+    Hand-copied copy is how "Protected" came to mean three different things.
+    Both the Cached Files table and Recently Added answer the same question —
+    what put this file on cache, and does that still hold — so one macro serves
+    both.
+    """
+
+    @pytest.fixture(scope="class")
+    def macro_src(self):
+        return SOURCE_BADGE.read_text(encoding="utf-8")
+
+    def test_both_pages_import_the_shared_macro(self):
+        for path in (FILE_TABLE, RA_LIST):
+            src = path.read_text(encoding="utf-8")
+            assert "macros/source_badge.html" in src, f"{path.name} hand-rolls its badges"
+
+    def test_neither_page_hardcodes_the_per_file_badge_markup(self):
+        # Scoped to the per-row source cell. The Cached Files totals legend
+        # legitimately prints the words with its counts, which is a different
+        # thing from a row's source badge.
+        src = FILE_TABLE.read_text(encoding="utf-8")
+        cell = src[src.index('class="source-badges"'):]
+        cell = cell[:cell.index("</td>")]
+        assert ">OnDeck<" not in cell, "file_table row still inlines an OnDeck badge"
+        assert ">Watchlist<" not in cell, "file_table row still inlines a Watchlist badge"
+        assert "ondeck_badge()" in cell and "watchlist_badge()" in cell
+
+        ra = RA_LIST.read_text(encoding="utf-8")
+        badge_macro = ra[ra.index("{% macro ra_status_badge"):ra.index("{% macro ra_row")]
+        assert ">OnDeck<" not in badge_macro
+        assert "ondeck_badge()" in badge_macro and "watchlist_badge()" in badge_macro
+
+    def test_ondeck_and_watchlist_have_tooltips(self, macro_src):
+        for key in ("ondeck", "watchlist", "stale_ondeck", "stale_watchlist", "other"):
+            assert f"'{key}':" in macro_src, f"no tooltip for {key}"
+
+    def test_transient_sources_disclaim_eviction_protection(self, macro_src):
+        # OnDeck/Watchlist add +15 to the priority score; only a pin exempts.
+        # The badge must not read as a protection guarantee.
+        tips = macro_src[macro_src.index("SOURCE_TOOLTIPS = {"):]
+        tips = tips[:tips.index("} %}")]
+        for key in ("ondeck", "watchlist"):
+            line = [l for l in tips.splitlines() if f"'{key}':" in l][0]
+            assert "Not eviction protection" in line, f"{key} implies protection it lacks"
+
+    def test_lapsed_badges_say_what_happens_next(self, macro_src):
+        tips = macro_src[macro_src.index("SOURCE_TOOLTIPS = {"):]
+        tips = tips[:tips.index("} %}")]
+        for key in ("stale_ondeck", "stale_watchlist", "other"):
+            line = [l for l in tips.splitlines() if f"'{key}':" in l][0]
+            assert "moves it back to the array" in line

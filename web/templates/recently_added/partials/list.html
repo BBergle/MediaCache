@@ -1,4 +1,5 @@
 {% from "macros/pin_button.html" import pin_button %}
+{% from "macros/source_badge.html" import ondeck_badge, watchlist_badge %}
 {#
   Recently Added — stat cards + filter bar + table.
 
@@ -48,7 +49,9 @@
 {% elif row.outcome == 'arriving'          %}<span class="badge badge-pinned" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="arrow-down-to-line"></i> Pinned, not on cache yet</span>
 {% elif row.outcome == 'held_by_setting'   %}<span class="badge badge-info" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="sliders-horizontal"></i> Not moved back</span>
 {% elif row.outcome == 'returns_when_done' %}<span class="badge badge-info" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="clock"></i> Returns when watched</span>
-    {% for p in row.protected_by %}{% if p != 'Pinned' %}<span class="badge badge-info badge-sm">{{ p }}</span>{% endif %}{% endfor %}
+    {# Which list is holding it. Same badges and wording as Cached Files. #}
+    {% if row.is_ondeck %}{{ ondeck_badge() }}{% endif %}
+    {% if row.is_watchlist %}{{ watchlist_badge() }}{% endif %}
 {% elif row.outcome == 'moves_back'        %}<span class="badge badge-muted" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="arrow-down"></i> Moves to array</span>
 {% elif row.outcome == 'mover_decides'     %}<span class="badge badge-released" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="send"></i> Mover's call</span>
 {% elif row.outcome == 'stays_on_array'    %}<span class="badge badge-muted" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="server"></i> Not on cache</span>

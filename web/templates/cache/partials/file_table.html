@@ -1,6 +1,7 @@
 <!-- Cache files table body - HTMX partial -->
 {% from "macros/associated_files.html" import af_popup, af_popup_init %}
 {% from "macros/user_badge.html" import user_badge %}
+{% from "macros/source_badge.html" import ondeck_badge, watchlist_badge, lapsed_badge %}
 {% if files %}
     {% for file in files %}
     {% set assoc_count = file.subtitle_count + file.sidecar_count %}
@@ -38,20 +39,10 @@
                 Released
             </span>
             {% else %}
-            {% if file.is_ondeck %}
-            <span class="badge badge-info">OnDeck</span>
-            {% endif %}
-            {% if file.is_watchlist %}
-            <span class="badge badge-muted">Watchlist</span>
-            {% endif %}
+            {% if file.is_ondeck %}{{ ondeck_badge() }}{% endif %}
+            {% if file.is_watchlist %}{{ watchlist_badge() }}{% endif %}
             {% if not file.is_ondeck and not file.is_watchlist and not file.is_pinned %}
-                {% if file.source == 'ondeck' %}
-                <span class="badge badge-warning">Stale OnDeck</span>
-                {% elif file.source == 'watchlist' %}
-                <span class="badge badge-warning">Stale Watchlist</span>
-                {% else %}
-                <span class="badge badge-warning">Other</span>
-                {% endif %}
+                {{ lapsed_badge(file.source) }}
             {% endif %}
             {% endif %}
         </td>
