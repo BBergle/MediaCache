@@ -8,15 +8,17 @@ the tracker entry, move no bytes.
 
 The tracker entry is deliberately kept. The mover owns relocation now, but if
 the share is cache:prefer or cache:only the mover will never act, and PlexCache
-has to be able to reach the file again. That is what _readopt_released_under_pressure
-is for.
+has to be able to reach the file again. That is what
+_reclaim_released_if_constrained() is for. Its trigger is measured harm — the
+cache having no room for content we wanted — rather than a pool-usage
+threshold, so it needs no constant and scales across any pool size.
 
 Coverage:
 - release moves no bytes and drops only the exclude line
 - every gate that forces the old relocate behaviour
 - the exclude-write failure path leaves tracking intact
 - released files stay visible to the quota and to eviction
-- pressure-based re-adoption fires only under pressure
+- reclaim fires only when the cache actually ran out of room
 - the audit treats released-and-gone as success, not staleness
 """
 
@@ -511,113 +513,133 @@ class TestReleasedFilesStayManaged:
 # Pressure-based re-adoption
 # ============================================================================
 
-class TestReadoptUnderPressure:
+class TestReclaimWhenConstrained:
+    """The backstop fires on measured harm, not on a pool-usage threshold.
 
-    def _prepare(self, tmp_path, temp_dir, pressure):
+    _apply_cache_limit() reporting that it skipped caching something for space
+    reasons is the signal. It scales from a 250GB SSD to a 20TB pool with no
+    constant to tune, and inherits whatever cache_limit / min_free_space /
+    plexcache_quota the user configured.
+    """
+
+    def _prepare(self, tmp_path, temp_dir, constrained):
         tracker = _real_tracker(temp_dir)
         app, cache_root, array_root = _build_app(tmp_path, tracker=tracker)
         cache_path = create_test_file(os.path.join(cache_root, "Movie.mkv"), size_bytes=10)
         tracker.record_cache_time(cache_path, "ondeck")
         tracker.mark_released(cache_path)
-        patcher = patch.object(app, "_cache_pressure_percent", return_value=pressure)
-        return app, tracker, cache_path, os.path.join(array_root, "Movie.mkv"), patcher
+        app._cache_space_constrained = constrained
+        app._safe_move_files = MagicMock()
+        return app, tracker, cache_path, os.path.join(array_root, "Movie.mkv")
 
-    def test_no_pressure_leaves_file_with_the_mover(self, tmp_path, temp_dir):
-        """A Mover Tuning user deliberately holds media on cache. Leave it."""
-        app, tracker, cache_path, array_path, patcher = self._prepare(tmp_path, temp_dir, 40.0)
+    def test_room_to_spare_leaves_the_file_with_the_mover(self, tmp_path, temp_dir):
+        """A Mover Tuning user holds media on cache on purpose. Leave it."""
+        app, tracker, cache_path, _ = self._prepare(tmp_path, temp_dir, constrained=False)
 
-        with patcher:
-            readopted = app._readopt_released_under_pressure()
-
-        assert readopted == 0
-        assert app.media_to_array == []
+        assert app._reclaim_released_if_constrained() == 0
+        app._safe_move_files.assert_not_called()
         assert tracker.is_released(cache_path) is True
 
-    def test_pressure_takes_the_file_back(self, tmp_path, temp_dir):
+    def test_no_room_takes_the_file_back(self, tmp_path, temp_dir):
         """cache:prefer / cache:only: the mover never acts, so PlexCache does."""
-        app, tracker, cache_path, array_path, patcher = self._prepare(tmp_path, temp_dir, 95.0)
+        app, tracker, cache_path, array_path = self._prepare(tmp_path, temp_dir, constrained=True)
 
-        with patcher:
-            readopted = app._readopt_released_under_pressure()
-
-        assert readopted == 1
-        assert app.media_to_array == [array_path]
+        assert app._reclaim_released_if_constrained() == 1
+        app._safe_move_files.assert_called_once_with([array_path], 'array')
         assert tracker.is_released(cache_path) is False
         assert app.readopted_count == 1
 
-    def test_unmeasurable_pressure_does_nothing(self, tmp_path, temp_dir):
-        app, tracker, cache_path, _, patcher = self._prepare(tmp_path, temp_dir, None)
+    def test_warns_and_explains_why(self, tmp_path, temp_dir, caplog):
+        """The log has to explain itself or this becomes a debugging mystery."""
+        app, _, _, _ = self._prepare(tmp_path, temp_dir, constrained=True)
 
-        with patcher:
-            assert app._readopt_released_under_pressure() == 0
-        assert tracker.is_released(cache_path) is True
+        with caplog.at_level("WARNING"):
+            app._reclaim_released_if_constrained()
 
-    def test_file_already_gone_is_not_readopted(self, tmp_path, temp_dir):
-        """The mover did its job — nothing to take back."""
+        warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "cache:prefer" in warnings[0]
+        assert "Moving them to the array now" in warnings[0]
+
+    def test_file_already_gone_is_not_reclaimed(self, tmp_path, temp_dir):
+        """The mover did its job, so there is nothing to take back."""
         tracker = _real_tracker(temp_dir)
         app, cache_root, _ = _build_app(tmp_path, tracker=tracker)
-        cache_path = os.path.join(cache_root, "Moved.mkv")
+        cache_path = os.path.join(cache_root, "Moved.mkv")  # never created
         tracker.record_cache_time(cache_path, "ondeck")
         tracker.mark_released(cache_path)
+        app._cache_space_constrained = True
+        app._safe_move_files = MagicMock()
 
-        with patch.object(app, "_cache_pressure_percent", return_value=99.0):
-            assert app._readopt_released_under_pressure() == 0
+        assert app._reclaim_released_if_constrained() == 0
+        app._safe_move_files.assert_not_called()
 
-    def test_dry_run_does_not_readopt(self, tmp_path, temp_dir):
-        app, tracker, cache_path, _, patcher = self._prepare(tmp_path, temp_dir, 99.0)
+    def test_dry_run_reclaims_nothing(self, tmp_path, temp_dir):
+        app, tracker, cache_path, _ = self._prepare(tmp_path, temp_dir, constrained=True)
         app.dry_run = True
 
-        with patcher:
-            assert app._readopt_released_under_pressure() == 0
+        assert app._reclaim_released_if_constrained() == 0
+        app._safe_move_files.assert_not_called()
         assert tracker.is_released(cache_path) is True
 
     def test_no_released_files_is_a_noop(self, tmp_path, temp_dir):
         tracker = _real_tracker(temp_dir)
         app, _, _ = _build_app(tmp_path, tracker=tracker)
+        app._cache_space_constrained = True
+        app._safe_move_files = MagicMock()
 
-        with patch.object(app, "_cache_pressure_percent") as mock_pressure:
-            assert app._readopt_released_under_pressure() == 0
-        mock_pressure.assert_not_called()
+        assert app._reclaim_released_if_constrained() == 0
+        app._safe_move_files.assert_not_called()
 
-    def test_does_not_duplicate_an_existing_move_back(self, tmp_path, temp_dir):
-        app, tracker, cache_path, array_path, patcher = self._prepare(tmp_path, temp_dir, 99.0)
-        app.media_to_array = [array_path]
+    def test_reclaims_every_released_file_at_once(self, tmp_path, temp_dir):
+        tracker = _real_tracker(temp_dir)
+        app, cache_root, array_root = _build_app(tmp_path, tracker=tracker)
+        for name in ("A.mkv", "B.mkv"):
+            p = create_test_file(os.path.join(cache_root, name), size_bytes=10)
+            tracker.record_cache_time(p, "ondeck")
+            tracker.mark_released(p)
+        app._cache_space_constrained = True
+        app._safe_move_files = MagicMock()
 
-        with patcher:
-            readopted = app._readopt_released_under_pressure()
-
-        assert readopted == 0
-        assert app.media_to_array == [array_path]
+        assert app._reclaim_released_if_constrained() == 2
+        moved = app._safe_move_files.call_args.args[0]
+        assert sorted(os.path.basename(p) for p in moved) == ["A.mkv", "B.mkv"]
 
 
-class TestCachePressurePercent:
+class TestConstraintSignal:
+    """_apply_cache_limit() raises the flag the backstop reads."""
 
-    def test_reads_the_filesystem_not_user_settings(self, tmp_path):
-        """cache_limit and min_free_space both default to unset, so the
-        backstop cannot depend on them."""
+    def test_flag_is_not_set_when_everything_fits(self, tmp_path, temp_dir):
+        tracker = _real_tracker(temp_dir)
+        app, _, _ = _build_app(tmp_path, tracker=tracker)
+        app._cache_space_constrained = False
+
+        assert app._cache_space_constrained is False
+
+    def test_skipping_for_space_raises_the_flag(self, tmp_path, temp_dir, caplog):
+        """Driven through the real warning path so the two stay wired together."""
+        tracker = _real_tracker(temp_dir)
+        app, cache_root, _ = _build_app(tmp_path, tracker=tracker)
+        app._cache_space_constrained = False
+
+        # One 100-byte file against a 10-byte limit: cannot fit.
+        big = create_test_file(os.path.join(cache_root, "Big.mkv"), size_bytes=100)
+        app.config_manager.cache.cache_limit_bytes = 10
+        app.config_manager.cache.min_free_space_bytes = 0
+        app.config_manager.cache.plexcache_quota_bytes = 0
+        app.config_manager.cache.cache_drive_size_bytes = 0
+        app.media_info_map = {}
+        app.file_filter = MagicMock()
+
         from core.system_utils import DiskUsage
-
-        app, cache_root, _ = _build_app(tmp_path)
         with patch("core.app.get_disk_usage",
-                   return_value=DiskUsage(total=1000, used=920, free=80)):
-            assert app._cache_pressure_percent() == pytest.approx(92.0)
+                   return_value=DiskUsage(total=1000, used=0, free=1000)), \
+             patch.object(app, "_get_plexcache_tracked_size", return_value=(0, [])), \
+             caplog.at_level("WARNING"):
+            app._apply_cache_limit([big], cache_root)
 
-    def test_missing_cache_dir_returns_none(self, tmp_path):
-        app, _, _ = _build_app(tmp_path)
-        app.config_manager.paths.cache_dir = ""
-        assert app._cache_pressure_percent() is None
-
-    def test_oserror_returns_none(self, tmp_path):
-        app, _, _ = _build_app(tmp_path)
-        with patch("core.app.get_disk_usage", side_effect=OSError("boom")):
-            assert app._cache_pressure_percent() is None
-
-    def test_zero_total_returns_none(self, tmp_path):
-        from core.system_utils import DiskUsage
-
-        app, _, _ = _build_app(tmp_path)
-        with patch("core.app.get_disk_usage", return_value=DiskUsage(total=0, used=0, free=0)):
-            assert app._cache_pressure_percent() is None
+        assert app._cache_space_constrained is True
+        assert any("Cache limit reached" in r.message for r in caplog.records)
 
 
 # ============================================================================
@@ -780,7 +802,6 @@ class TestMoveFilesWiring:
         app.media_to_array = [array_path]
 
         with patch.object(app, "_build_restore_sibling_map"), \
-             patch.object(app, "_readopt_released_under_pressure", return_value=0), \
              patch.object(app, "_share_has_array_side", return_value=True), \
              patch.object(app, "_safe_move_files") as mock_move, \
              patch.object(app, "_run_smart_eviction", return_value=(0, 0)):
@@ -803,7 +824,6 @@ class TestMoveFilesWiring:
         app.media_to_array = [array_path]
 
         with patch.object(app, "_build_restore_sibling_map"), \
-             patch.object(app, "_readopt_released_under_pressure", return_value=0), \
              patch.object(app, "_share_has_array_side", return_value=True), \
              patch.object(app, "_safe_move_files") as mock_move, \
              patch.object(app, "_run_smart_eviction", return_value=(0, 0)):
@@ -828,7 +848,6 @@ class TestMoveFilesWiring:
         app.media_to_array = [backed_up_array, native_array]
 
         with patch.object(app, "_build_restore_sibling_map"), \
-             patch.object(app, "_readopt_released_under_pressure", return_value=0), \
              patch.object(app, "_share_has_array_side", return_value=True), \
              patch.object(app, "_safe_move_files") as mock_move, \
              patch.object(app, "_run_smart_eviction", return_value=(0, 0)):
@@ -851,7 +870,6 @@ class TestMoveFilesWiring:
         app._move_back_exclude_paths = [cache_path]
 
         with patch.object(app, "_build_restore_sibling_map"), \
-             patch.object(app, "_readopt_released_under_pressure", return_value=0), \
              patch.object(app, "_share_has_array_side", return_value=True), \
              patch.object(app, "_safe_move_files"), \
              patch.object(app, "_run_smart_eviction", return_value=(0, 0)):

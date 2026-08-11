@@ -92,6 +92,9 @@ class PlexCacheApp:
         self.released_count = 0
         self.released_bytes = 0
         self.readopted_count = 0
+        # Set when _apply_cache_limit() has to skip caching for space reasons.
+        # Drives _reclaim_released_if_constrained().
+        self._cache_space_constrained = False
         # Eviction tracking
         self.evicted_count = 0
         self.evicted_bytes = 0
@@ -487,7 +490,7 @@ class PlexCacheApp:
         readopted_count = getattr(self, 'readopted_count', 0)
         if readopted_count > 0:
             logging.info(
-                f"[RESULTS] Re-adopted from mover: {readopted_count} files (cache under pressure)"
+                f"[RESULTS] Reclaimed from mover: {readopted_count} files (cache had no room)"
             )
 
         # Show eviction stats if any files were evicted
@@ -1970,51 +1973,35 @@ class PlexCacheApp:
 
         return to_release, to_relocate
 
-    # Pool usage above which released files are taken back and relocated by
-    # PlexCache itself. Deliberately not a setting: it is a safety backstop for
-    # shares whose mover never reclaims, not a tuning knob.
-    _READOPT_PRESSURE_PERCENT = 90
-
-    def _cache_pressure_percent(self) -> Optional[float]:
-        """Percentage of the cache pool in use, or None if unmeasurable.
-
-        Reads the filesystem directly rather than cache_limit / min_free_space,
-        both of which default to unset. The backstop has to work on a default
-        install or it is not a backstop.
-        """
-        cache_dir = self.config_manager.paths.cache_dir
-        if not cache_dir:
-            return None
-        try:
-            override = getattr(self.config_manager.cache, 'cache_drive_size_bytes', 0) or 0
-            usage = get_disk_usage(cache_dir, override)
-        except (OSError, ValueError) as e:
-            logging.debug(f"Could not measure cache pressure: {e}")
-            return None
-        if not usage or not usage.total:
-            return None
-        return (usage.used / usage.total) * 100
-
-    def _readopt_released_under_pressure(self) -> int:
-        """Take released files back when the pool fills and the mover hasn't acted.
+    def _reclaim_released_if_constrained(self) -> int:
+        """Take released files back when the cache had no room for new content.
 
         Release assumes Unraid's mover eventually relocates the file. On a
         cache:prefer share the mover runs the other direction, and on a
-        cache:only share it does not run at all — so the file would sit there
+        cache:only share it does not run at all, so the file would sit there
         forever. PlexCache cannot read shareUseCache to tell the difference
-        (/boot is not mounted in the container), so rather than predict the
-        mover's behaviour it observes the outcome: if the pool is genuinely
-        under pressure and released files are still resident, take them back
-        and relocate them the ordinary way.
+        (neither /boot nor emhttp's share state is mounted in the container),
+        so rather than predict the mover's behaviour it observes the outcome.
 
-        Pressure-triggered rather than time-triggered on purpose. A Mover
-        Tuning user deliberately holds recent media on cache, and a timer would
-        fight exactly the configuration this feature exists to respect.
+        The trigger is _apply_cache_limit() reporting that it had to skip
+        caching something for space reasons. That is measured harm rather than
+        a threshold: it scales from a 250GB SSD to a 20TB pool with no constant
+        to tune, it never fires while there is room to spare, and it inherits
+        whatever the user configured, since cache_limit, min_free_space and
+        plexcache_quota all feed it.
+
+        Deliberately not time-triggered. A Mover Tuning user holds recent media
+        on cache on purpose, and a timer would fight exactly the configuration
+        this feature exists to respect.
+
+        Runs after the caching phase, so the files relocate in this same pass.
 
         Returns:
-            Number of files re-adopted into media_to_array.
+            Number of files handed back to the array.
         """
         if not self.timestamp_tracker or self.dry_run:
+            return 0
+        if not getattr(self, '_cache_space_constrained', False):
             return 0
 
         released = self.timestamp_tracker.get_released_paths()
@@ -2025,45 +2012,41 @@ class PlexCacheApp:
         if not still_resident:
             return 0
 
-        pressure = self._cache_pressure_percent()
-        if pressure is None:
-            logging.debug("Skipping re-adoption check — cache pressure unmeasurable")
-            return 0
-        if pressure < self._READOPT_PRESSURE_PERCENT:
-            logging.debug(
-                f"{len(still_resident)} released file(s) still on cache, "
-                f"pool at {pressure:.1f}% — leaving them to the mover"
-            )
-            return 0
-
-        readopted = []
+        to_relocate = []
+        reclaimable_bytes = 0
         for cache_path in still_resident:
             array_path = None
             if self.file_path_modifier:
                 array_path, _ = self.file_path_modifier.convert_cache_to_real(cache_path)
             if not array_path:
-                logging.debug(f"Cannot re-adopt (no array path): {cache_path}")
+                logging.debug(f"Cannot reclaim (no array path): {cache_path}")
                 continue
-            if array_path in self.media_to_array:
-                continue
+            try:
+                reclaimable_bytes += os.path.getsize(cache_path)
+            except OSError:
+                pass
             self.timestamp_tracker.clear_released(cache_path)
-            self.media_to_array.append(array_path)
-            readopted.append(array_path)
+            to_relocate.append(array_path)
 
-        if readopted:
-            count = len(readopted)
-            unit = "file" if count == 1 else "files"
-            logging.info(
-                f"[RELEASE] Cache pool at {pressure:.1f}% and the mover has not "
-                f"reclaimed {count} released {unit} — moving to array now"
-            )
-            for array_path in readopted[:6]:
-                logging.info(f"  {self._extract_display_name(array_path)}")
-            if count > 6:
-                logging.info(f"  ...and {count - 6} more")
-            self.readopted_count = getattr(self, 'readopted_count', 0) + count
+        if not to_relocate:
+            return 0
 
-        return len(readopted)
+        count = len(to_relocate)
+        unit = "file" if count == 1 else "files"
+        logging.warning(
+            f"[RELEASE] Cache ran out of room while {count} released {unit} "
+            f"({format_bytes(reclaimable_bytes)}) were still waiting on the Unraid mover. "
+            f"The mover does not appear to be reclaiming them, which is expected on a "
+            f"cache:prefer or cache:only share. Moving them to the array now."
+        )
+        for array_path in to_relocate[:6]:
+            logging.info(f"  {self._extract_display_name(array_path)}")
+        if count > 6:
+            logging.info(f"  ...and {count - 6} more")
+
+        self._safe_move_files(to_relocate, 'array')
+        self.readopted_count = getattr(self, 'readopted_count', 0) + count
+        return count
 
     def _release_files(self, files_to_release: List[str]) -> int:
         """Hand watched files back to the Unraid mover without moving bytes.
@@ -2264,12 +2247,6 @@ class PlexCacheApp:
         logging.info("--- Moving Files ---")
 
         # Step 1: Move watched files to array (frees space naturally)
-        # Backstop before anything else: if the pool is under pressure and the
-        # Unraid mover has not reclaimed files PlexCache released on an earlier
-        # run, take them back now so they relocate in this pass.
-        if self.config_manager.cache.watched_move:
-            self._readopt_released_under_pressure()
-
         if self.config_manager.cache.watched_move and self.media_to_array:
             # Build restore sibling map from timestamp tracker associations
             # so the web UI can group sidecars under their parent video
@@ -2338,6 +2315,13 @@ class PlexCacheApp:
             if len(self.media_to_cache) > 6:
                 logging.info(f"  ...and {len(self.media_to_cache) - 6} more")
         self._safe_move_files(self.media_to_cache, 'cache')
+
+        # Step 4: If the cache had no room for content we wanted, take back any
+        # files still sitting released and waiting on a mover that is not coming.
+        # Runs last because the constraint is only known once caching has been
+        # sized, and _safe_move_files('array') here cannot re-enter that sizing.
+        if self.config_manager.cache.watched_move:
+            self._reclaim_released_if_constrained()
 
         # Associate sibling files with their parent videos in the timestamp tracker
         if self.timestamp_tracker and self.sibling_map:
@@ -2676,6 +2660,10 @@ class PlexCacheApp:
             if gap_skipped_count:
                 msg += f" ({gap_skipped_count} skipped to keep show episodes contiguous)"
             logging.warning(msg)
+            # Measured harm: the cache had no room for content we wanted. This is
+            # what _reclaim_released_if_constrained() acts on, in place of any
+            # fixed pool-usage threshold — see its docstring.
+            self._cache_space_constrained = True
 
         return files_to_cache
 
