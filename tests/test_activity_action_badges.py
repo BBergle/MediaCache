@@ -100,9 +100,13 @@ class TestProtectedRelabel:
         src = (REPO / "web" / "services" / "maintenance_runner.py").read_text(encoding="utf-8")
         assert '"protect-with-backup": "Protected"' in src
 
-    def test_protected_tooltip_disclaims_being_a_pin(self, activity_src):
+    def test_protected_tooltip_states_the_mover_effect(self, activity_src):
+        # The pin-vs-keep distinction is guarded where the user acts on it —
+        # the button and confirm modal (tests/test_pin_vocabulary.py). This
+        # badge is a history record, so it only needs to say what was done.
         tips = activity_src[activity_src.index("ACTION_TOOLTIPS = {"):]
-        assert "not a pin" in tips[:tips.index("} %}")].lower()
+        line = [l for l in tips[:tips.index("} %}")].splitlines() if "'Protected':" in l][0]
+        assert "mover leaves it alone" in line
 
 
 class TestFilterPills:
