@@ -2,15 +2,49 @@
 {% from "macros/associated_files.html" import af_expand_badge, af_expand_rows, af_expand_onclick %}
 {% from "macros/user_badge.html" import user_badge %}
 
+{#
+  Activity action badge.
+
+  These describe HISTORY — what already happened to a file — so the tooltips say
+  what was done and why, unlike the Recently Added outcome badges which predict
+  what happens next.
+
+  Every action written to the feed gets an explicit arm. The writers are
+  FileMover (Cached/Restored/Moved), PlexCacheApp._release_files (Released),
+  MaintenanceRunner.ACTION_ACTIVITY_LABELS, and the pin router. `Moved` and
+  `Released` previously fell through to the muted default, which made them
+  indistinguishable from an unrecognised action.
+
+  ACTION_LABELS re-labels at RENDER time only. The action string is persisted in
+  data/recent_activity.json, so rewriting it on disk would need a migration and
+  would rewrite history; mapping here keeps old and new entries reading the same.
+#}
+{% set ACTION_LABELS = {'Protected': 'Kept on Cache'} %}
+{% set ACTION_TOOLTIPS = {
+    'Cached':          'Copied from the array to the cache pool.',
+    'Restored':        'Moved back to the array by renaming its .plexcached backup — no bytes copied.',
+    'Moved':           'Copied back to the array. No .plexcached backup existed to rename, so the file was copied and then removed from cache.',
+    'Released':        'Handed to the Unraid mover. No bytes were moved — PlexCache dropped its exclude entry and left relocation to the mover.',
+    'Protected':       'Added to the mover exclude list and tracked, so the Unraid mover leaves it on cache. A one-time keep, not a pin — it will not be re-cached automatically.',
+    'Moved to Array':  'Copied from cache to the array by a maintenance action, then removed from cache.',
+    'Fixed':           'Had a .plexcached backup on the array, so the cache copy was removed and the backup restored to its original name.',
+    'Restored Backup': 'A .plexcached backup on the array was restored to its original filename.',
+    'Deleted Backup':  'An orphaned .plexcached backup was deleted from the array.'
+} %}
+
 {% macro action_badge(action) -%}
+{%- set label = ACTION_LABELS.get(action, action) -%}
+{%- set tip = ACTION_TOOLTIPS.get(action, '') -%}
 {%- if action in ('Cached', 'Protected', 'Fixed') -%}
-<span class="badge badge-success">{{ action }}</span>
-{%- elif action in ('Restored', 'Moved to Array', 'Restored Backup') -%}
-<span class="badge badge-info">{{ action }}</span>
+<span class="badge badge-success" title="{{ tip }}">{{ label }}</span>
+{%- elif action in ('Restored', 'Moved', 'Moved to Array', 'Restored Backup') -%}
+<span class="badge badge-info" title="{{ tip }}">{{ label }}</span>
+{%- elif action == 'Released' -%}
+<span class="badge badge-released" title="{{ tip }}">{{ label }}</span>
 {%- elif action == 'Deleted Backup' -%}
-<span class="badge badge-warning">{{ action }}</span>
+<span class="badge badge-warning" title="{{ tip }}">{{ label }}</span>
 {%- else -%}
-<span class="badge badge-muted">{{ action }}</span>
+<span class="badge badge-muted" title="{{ tip }}">{{ label }}</span>
 {%- endif -%}
 {%- endmacro %}
 

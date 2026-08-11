@@ -81,11 +81,14 @@
         <h2>Recent Activity</h2>
         <span class="text-muted" style="font-size: 0.75rem; margin-left: auto;">Last {{ retention_label }}</span>
     </div>
-    <div class="activity-filter-bar" style="padding: 0.75rem 1.25rem;">
+    <div class="activity-filter-bar" id="activity-filter-bar" style="padding: 0.75rem 1.25rem;">
         <button class="activity-filter-pill active" data-filter="all">All</button>
         <button class="activity-filter-pill" data-filter="Cached">Cached</button>
         <button class="activity-filter-pill" data-filter="Restored">Restored</button>
-        <button class="activity-filter-pill" data-filter="Moved to Array">Moved</button>
+        {# Runs write "Moved"; maintenance sync-to-array writes "Moved to Array".
+           Both mean "copied back to the array", so one pill matches both — it
+           previously sent only "Moved to Array" and missed every run entry. #}
+        <button class="activity-filter-pill" data-filter="Moved|Moved to Array">Moved</button>
         <button class="activity-filter-pill" data-filter="other">Other</button>
     </div>
     <div class="card-body" style="padding: 0;">
@@ -147,7 +150,22 @@ document.getElementById('verbose-toggle').addEventListener('change', saveVerbose
 // throw on `const` redeclaration (the partial includes its own <script>).
 var ActivityRuns = window.ActivityRuns || {
     EXPANDED_RUNS_KEY: 'plexcache_dashboard_expanded_runs',
-    KNOWN_ACTIONS: ['Cached', 'Restored', 'Moved to Array', 'Protected'],
+    // Actions covered by a specific pill, derived from the pills themselves so
+    // the two can't drift. The hardcoded list previously named 'Protected',
+    // which has no pill — so those rows matched neither their own filter nor
+    // "Other" and were reachable only under "All".
+    knownActions: function() {
+        var acts = [];
+        document.querySelectorAll('#activity-filter-bar .activity-filter-pill[data-filter]')
+            .forEach(function(pill) {
+                var f = pill.getAttribute('data-filter');
+                if (f === 'all' || f === 'other') return;
+                f.split('|').forEach(function(a) {
+                    if (a && acts.indexOf(a) === -1) acts.push(a);
+                });
+            });
+        return acts;
+    },
 
     loadExpandedRuns: function() {
         try {
@@ -226,12 +244,15 @@ var ActivityRuns = window.ActivityRuns || {
         var self = this;
 
         // Per-row filter decision
+        var known = self.knownActions();
         tbody.querySelectorAll('.run-row[data-action]').forEach(function(row) {
             var action = row.getAttribute('data-action');
+            // A pill may name several actions ("Moved|Moved to Array") when one
+            // user-facing outcome has more than one internal label.
             var pass = (
                 filter === 'all' ||
-                (filter === 'other' && self.KNOWN_ACTIONS.indexOf(action) === -1) ||
-                action === filter
+                (filter === 'other' && known.indexOf(action) === -1) ||
+                filter.split('|').indexOf(action) !== -1
             );
             row.dataset.filterPass = pass ? '1' : '0';
             // When filtered out, force-hide via inline style (overrides .is-visible)
