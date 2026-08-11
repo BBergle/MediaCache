@@ -36,9 +36,16 @@
 </div>
 
 <!-- Lazy-loaded content (stat cards + filters + table) -->
+{# Refetches on pin/unpin: the pin button swaps only its own <form>, so without
+   this the row's outcome badge, status note and group header keep asserting the
+   pre-click state — and after an *unpin* the badge still promises the file stays
+   on cache while a background eviction of it has already started. The small
+   delay lets the toggle's own swap land first. RecentlyAdded._state restores the
+   user's filters and expanded groups after the swap. #}
 <div id="ra-content"
-     hx-get="/recently-added/list?days={{ default_days }}"
-     hx-trigger="load"
+     hx-get="/recently-added/list"
+     hx-include="#ra-days-input"
+     hx-trigger="load, pinned-updated from:body delay:400ms"
      hx-swap="innerHTML">
     <div class="card">
         <div class="card-body" style="text-align: center; padding: 3rem;">
@@ -61,6 +68,11 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
             activePill: document.querySelector('.ra-loc-pill.active'),
         };
     }
+
+    // The user's current view, kept in memory so it survives an HTMX swap of
+    // #ra-content (the pin/unpin refetch). Deliberately not persisted: a stale
+    // search term restored on a fresh page load would look like a bug.
+    var _state = { lib: '', term: '', loc: 'all', expanded: {} };
 
     // Does a single media row match the active library/search/location filters?
     function rowMatches(row, lib, term, loc) {
@@ -129,7 +141,35 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
 
     function toggleGroup(header) {
         header.classList.toggle('is-open');
+        var gid = header.getAttribute('data-group-id');
+        if (gid) {
+            if (header.classList.contains('is-open')) _state.expanded[gid] = true;
+            else delete _state.expanded[gid];
+        }
         apply();
+    }
+
+    // Re-apply the remembered view to freshly-swapped markup. Without this a
+    // pin/unpin refetch silently resets the library filter, the search term,
+    // the location pill and every expanded group — trading one wrong-state bug
+    // for another. Group ids are stable across renders (core.media_grouping's
+    // stable_group_id derives them from the grouping key, not list position),
+    // which is what makes restoring expansion by id work.
+    function restore() {
+        var lib = document.getElementById('ra-lib-filter');
+        if (lib && _state.lib) lib.value = _state.lib;
+        var search = document.getElementById('ra-search');
+        if (search && _state.term) search.value = _state.term;
+
+        if (_state.loc && _state.loc !== 'all') {
+            document.querySelectorAll('.ra-loc-pill').forEach(function (p) {
+                p.classList.toggle('active', p.getAttribute('data-loc') === _state.loc);
+            });
+        }
+
+        document.querySelectorAll('#ra-table-body .ra-group-header').forEach(function (h) {
+            if (_state.expanded[h.getAttribute('data-group-id')]) h.classList.add('is-open');
+        });
     }
 
     // Expand/collapse a leaf row's file-detail sub-rows.
@@ -150,12 +190,15 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
             p.classList.remove('active');
         });
         pill.classList.add('active');
+        _state.loc = pill.getAttribute('data-loc') || 'all';
         apply();
     }
 
     // Event delegation survives HTMX swaps of #ra-content.
     document.addEventListener('input', function (e) {
         if (e.target && (e.target.id === 'ra-lib-filter' || e.target.id === 'ra-search')) {
+            if (e.target.id === 'ra-lib-filter') _state.lib = e.target.value;
+            else _state.term = e.target.value;
             apply();
         }
     });
@@ -164,10 +207,14 @@ var RecentlyAdded = window.RecentlyAdded || (function () {
         if (pill) setPill(pill);
     });
     document.body.addEventListener('htmx:afterSwap', function (e) {
-        if (e.detail.target && e.detail.target.id === 'ra-content') apply();
+        if (e.detail.target && e.detail.target.id === 'ra-content') {
+            restore();
+            apply();
+        }
     });
 
-    return { apply: apply, setPill: setPill, toggleGroup: toggleGroup, toggleDetail: toggleDetail };
+    return { apply: apply, setPill: setPill, toggleGroup: toggleGroup,
+             toggleDetail: toggleDetail, restore: restore };
 })();
 </script>
 {% endblock %}

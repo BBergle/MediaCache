@@ -74,6 +74,9 @@ class RecentlyAddedRow:
     pin_scope: str = ""           # "movie" | "show" | "season" | "episode"
     pin_holder_key: str = ""      # rating_key of the holding pin
     pin_holder_title: str = ""
+    # The show's rating key, for episodes. Grouping keys on this rather than the
+    # display title so two same-titled shows in one library stay separate.
+    show_rating_key: str = ""
     is_mover_protected: bool = False  # in the Unraid mover exclude list
     is_released: bool = False
 
@@ -353,6 +356,7 @@ class RecentlyAddedService:
                 pin_holder_title=pin_holder_title,
                 is_mover_protected=is_mover_protected,
                 is_released=is_released,
+                show_rating_key=getattr(item, "show_rating_key", "") or "",
             ))
         return rows
 
@@ -442,7 +446,10 @@ class RecentlyAddedService:
         def key_fn(row: RecentlyAddedRow):
             info = row.episode_info or {}
             if row.media_type == "episode" and info.get("show"):
-                return ("show", row.library_title, info.get("show"))
+                # Identity, not display title. The `or` fallback keeps today's
+                # behaviour when Plex omits grandparentRatingKey, so this can
+                # only ever split a merged group, never merge separate ones.
+                return ("show", row.library_title, row.show_rating_key or info.get("show"))
             return None
 
         display: List[Dict[str, Any]] = []
@@ -470,7 +477,9 @@ class RecentlyAddedService:
                 # key, not from list position, and free of user content that
                 # could break the data-* attribute it lands in.
                 "group_id": stable_group_id("ra", key[1], key[2]),
-                "show": key[2],
+                # Label from a member, not from the key — the key now holds the
+                # show's rating key whenever Plex supplies one.
+                "show": (members[0].episode_info or {}).get("show"),
                 # Kept for callers that want a plain season number; None once a
                 # group spans more than one season. Prefer season_display.
                 "season": seasons[0] if len(seasons) == 1 else None,
@@ -560,6 +569,16 @@ class RecentlyAddedService:
                 config.plex.plex_url,
                 config.plex.plex_token,
                 plex_db_path=getattr(config.plex, "plex_db_path", "") or "",
+                # plexapi keeps this on the session (PlexServer._timeout ->
+                # query()), so it caps each per-library recentlyAdded() sweep
+                # too, not just the handshake. Deliberately NOT lowered to the
+                # 10s used elsewhere: those sites are connect-and-validate
+                # handshakes, while this one pulls up to `recently_added_max_items`
+                # per library off an array that may be spun down — and
+                # get_recently_added_media() swallows a per-section failure with
+                # `continue`, so a short leash produces a silently short list
+                # rather than a faster error.
+                timeout=30,
             )
             plex_manager.connect()
             return plex_manager

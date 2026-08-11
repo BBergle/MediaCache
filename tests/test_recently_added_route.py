@@ -139,21 +139,34 @@ def _patch(service_result, settings=None):
 
 
 class TestPage:
-    def test_page_renders_shell(self, client):
+    def test_page_lazy_loads_the_list(self, client):
         p_svc, p_set, _ = _patch(_result([]), settings={})
         with p_svc, p_set:
             r = client.get("/recently-added/")
         assert r.status_code == 200
         assert "Recently Added" in r.text
-        # Lazy-loads the list partial with the default window.
-        assert "/recently-added/list?days=7" in r.text
+        # The window is no longer pinned into the URL: #ra-content includes
+        # #ra-days-input instead, so a pin/unpin refetch re-sends whatever the
+        # user currently has selected rather than the page-load default. On the
+        # initial load that input isn't in the DOM yet, so no days param is sent
+        # and the router falls back to the persisted setting.
+        assert 'hx-get="/recently-added/list"' in r.text
+        assert 'hx-include="#ra-days-input"' in r.text
 
-    def test_page_uses_settings_default_window(self, client):
-        p_svc, p_set, _ = _patch(_result([]), settings={"recently_added_days": 30})
+    def test_page_refetches_the_list_on_pin_change(self, client):
+        """Pin/unpin must not leave the row's outcome badge asserting the old state."""
+        p_svc, p_set, _ = _patch(_result([]), settings={})
         with p_svc, p_set:
             r = client.get("/recently-added/")
-        assert r.status_code == 200
-        assert "/recently-added/list?days=30" in r.text
+        assert "pinned-updated from:body" in r.text
+
+    def test_page_preserves_the_users_view_across_a_swap(self, client):
+        """A refetch that reset the filters would trade one wrong state for another."""
+        p_svc, p_set, _ = _patch(_result([]), settings={})
+        with p_svc, p_set:
+            r = client.get("/recently-added/")
+        assert "function restore()" in r.text
+        assert "_state.expanded" in r.text
 
 
 class TestList:
@@ -214,6 +227,31 @@ class TestList:
         assert r.status_code == 200
         assert "unavailable" in r.text.lower()
         assert "Plex not configured." in r.text
+
+    def test_error_state_days_input_is_named_so_refresh_keeps_the_window(self, client):
+        """Refresh after a Plex outage must re-request the user's window.
+
+        The error branch keeps a hidden days input so `hx-include` has something
+        to send, but it had no `name` — and htmx's shouldInclude skips any
+        element with an empty name, so Refresh silently fell back to the
+        default window instead of the 30-day view the user was on.
+        """
+        p_svc, p_set, fake_service = _patch(
+            _result([], available=False, error="Plex not configured."),
+            settings={"recently_added_days": 7},
+        )
+        with p_svc, p_set:
+            r = client.get("/recently-added/list?days=30")
+            # The input carries a name, in either attribute order.
+            assert (re.search(r'<input[^>]*id="ra-days-input"[^>]*name="days"', r.text)
+                    or re.search(r'<input[^>]*name="days"[^>]*id="ra-days-input"', r.text)), \
+                "error-state days input has no name; hx-include will send nothing"
+            assert 'value="30"' in r.text
+
+            # Round trip: what Refresh would send actually reaches the service.
+            fake_service.get_recently_added.reset_mock()
+            client.get("/recently-added/list?days=30")
+        assert fake_service.get_recently_added.call_args.kwargs["days"] == 30
 
     def test_empty_window_message(self, client):
         p_svc, p_set, _ = _patch(_result([]))

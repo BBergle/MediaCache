@@ -389,7 +389,8 @@ def format_cache_age(updated_at) -> Optional[str]:
         updated_at: datetime when the cache was last updated, or None.
 
     Returns:
-        String like 'just now', '5 min ago', '2 hr ago', or None if no timestamp.
+        String like 'just now', '5 min ago', '2 hr ago', '3 days ago', or None
+        if no timestamp.
     """
     if not updated_at:
         return None
@@ -400,8 +401,12 @@ def format_cache_age(updated_at) -> Optional[str]:
         return "just now"
     elif age_seconds < 3600:
         return f"{int(age_seconds / 60)} min ago"
-    else:
+    elif age_seconds < 86400:
         return f"{int(age_seconds / 3600)} hr ago"
+    # Without a day tier the hour tier was terminal, so Recently Added's 30-day
+    # window rendered "696 hr ago". int() truncation matches the tiers above.
+    days = int(age_seconds / 86400)
+    return f"{days} day ago" if days == 1 else f"{days} days ago"
 
 
 def format_time_of_day(time_str: str, time_format: str) -> str:

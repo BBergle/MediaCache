@@ -1861,7 +1861,9 @@ footer {
 }
 .ra-w-size .ra-size-chip { margin-left: 0; }
 .ra-w-age {
-    width: 4.5rem;
+    /* 5rem, matching .ra-w-size above: "30 days ago" overflows 4.5rem (72px)
+       at this font size now that format_cache_age has a day tier. */
+    width: 5rem;
     flex-shrink: 0;
     text-align: right;
     white-space: nowrap;

@@ -6,6 +6,7 @@ filters by an added-within-N-days cutoff, emits one RecentlyAddedItem per media
 file, and returns the newest first capped at max_items.
 """
 
+import logging
 import os
 import sys
 from datetime import datetime, timedelta
@@ -284,3 +285,94 @@ class TestGetRecentlyAddedMedia:
         items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
 
         assert [i.file_path for i in items] == ["/data/movies/Ok.mkv"]
+
+
+class TestPartialObjectResilience:
+    """One bad item must not discard every library already collected.
+
+    Section listings return plexapi *partial* objects, which reload on any
+    None/[] value — so reading an unnumbered special's `index` fires a live
+    metadata GET. When that 5xx'd, the exception escaped
+    get_recently_added_media() and the service rendered a full-page error.
+    """
+
+    class _RaisesOn:
+        """An episode whose named attribute raises, as a failing reload would."""
+
+        def __init__(self, name, rating_key=99, title="Special"):
+            self._name = name
+            self.type = 'episode'
+            self.ratingKey = rating_key
+            self.title = title
+            self.grandparentTitle = "Show"
+            self.grandparentRatingKey = 500
+            self.addedAt = datetime.now()
+            self.parentIndex = 1
+            self.index = 1
+            self.media = [_media(_part("/data/tv/Show/Special.mkv"))]
+
+        def __getattribute__(self, item):
+            if item != "_name" and item == object.__getattribute__(self, "_name"):
+                raise RuntimeError("(503) reload failed")
+            return object.__getattribute__(self, item)
+
+    def test_bad_item_does_not_discard_the_section(self, caplog):
+        bad = self._RaisesOn('index')
+        api = _api([
+            _section(1, "TV Shows", [
+                _episode(1, "Good1", "Show", 1, 1, added_days_ago=1),
+                bad,
+                _episode(2, "Good2", "Show", 1, 2, added_days_ago=1),
+            ]),
+            _section(2, "Movies", [_movie(3, "Dune", added_days_ago=1)]),
+        ])
+
+        with caplog.at_level(logging.WARNING):
+            items = api.get_recently_added_media(valid_sections=[1, 2], days_to_monitor=7)
+
+        # All four survive — including the raising item, degraded rather than dropped.
+        assert len(items) == 4
+        degraded = [i for i in items if i.title == "Special"]
+        assert len(degraded) == 1
+        # A healthy server with a genuinely unnumbered special produces exactly
+        # this, so the degraded path is byte-identical to the healthy one.
+        assert degraded[0].episode_info is None
+        assert any("could not read 'index'" in r.message for r in caplog.records)
+
+    def test_unreadable_media_is_skipped_but_the_rest_survive(self, caplog):
+        api = _api([_section(1, "TV Shows", [
+            _episode(1, "Good1", "Show", 1, 1, added_days_ago=1),
+            self._RaisesOn('media', rating_key=98, title="Unanalyzed"),
+            _episode(2, "Good2", "Show", 1, 2, added_days_ago=1),
+        ])])
+
+        with caplog.at_level(logging.WARNING):
+            items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
+
+        # No media means no file to show, so this one is correctly skipped —
+        # but it takes only itself down. Compared as a set: both survivors share
+        # an addedAt, so their relative order is sort noise, not behaviour.
+        assert {i.title for i in items} == {"Good1", "Good2"}
+        assert any("could not read 'media'" in r.message for r in caplog.records)
+
+    def test_lazy_reload_is_disabled_on_listing_objects(self):
+        """Guards the _autoReload opt-out from silently regressing."""
+        ep = _episode(1, "Ep", "Show", 1, 1, added_days_ago=1)
+        api = _api([_section(1, "TV Shows", [ep])])
+        api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
+        assert ep._autoReload is False
+
+
+class TestShowIdentity:
+    def test_show_rating_key_is_captured_as_a_string(self):
+        ep = _episode(1, "Ep", "Show", 1, 1, added_days_ago=1)
+        ep.grandparentRatingKey = 500          # plexapi casts this to int
+        api = _api([_section(1, "TV Shows", [ep])])
+        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
+        assert items[0].show_rating_key == "500"
+
+    def test_missing_show_rating_key_degrades_to_empty(self):
+        ep = _episode(1, "Ep", "Show", 1, 1, added_days_ago=1)
+        api = _api([_section(1, "TV Shows", [ep])])
+        items = api.get_recently_added_media(valid_sections=[1], days_to_monitor=7)
+        assert items[0].show_rating_key == ""

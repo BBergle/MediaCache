@@ -339,3 +339,31 @@ class TestCreateDirWithOwnership:
         assert mock_chown.call_args_list, "chown should be attempted"
         for call in mock_chown.call_args_list:
             assert call.args[1:] == (src_stat.st_uid, src_stat.st_gid)
+
+
+class TestFormatCacheAgeDayTier:
+    """The hour tier used to be terminal, so a 30-day-old item read "696 hr ago"."""
+
+    def test_boundary_at_24_hours(self):
+        from core.system_utils import format_cache_age
+        assert format_cache_age(datetime.now() - timedelta(hours=23, minutes=59)) == "23 hr ago"
+        assert "day" in format_cache_age(datetime.now() - timedelta(hours=24, minutes=1))
+
+    def test_singular_day(self):
+        from core.system_utils import format_cache_age
+        assert format_cache_age(datetime.now() - timedelta(hours=25)) == "1 day ago"
+
+    def test_plural_days(self):
+        from core.system_utils import format_cache_age
+        assert format_cache_age(datetime.now() - timedelta(days=3)) == "3 days ago"
+
+    def test_the_window_that_motivated_this(self):
+        from core.system_utils import format_cache_age
+        # Recently Added's widest window is 30 days (ALLOWED_DAYS).
+        assert format_cache_age(datetime.now() - timedelta(days=29)) == "29 days ago"
+
+    def test_shorter_tiers_are_unchanged(self):
+        from core.system_utils import format_cache_age
+        assert format_cache_age(datetime.now() - timedelta(seconds=5)) == "just now"
+        assert format_cache_age(datetime.now() - timedelta(minutes=5)) == "5 min ago"
+        assert format_cache_age(datetime.now() - timedelta(hours=2)) == "2 hr ago"

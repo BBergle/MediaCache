@@ -148,7 +148,7 @@
         <p class="text-muted" style="margin: 0;">{{ error or "Could not load recently added media." }}</p>
     </div>
     {# Keep the days input present so Refresh still works in the error state. #}
-    <input type="hidden" id="ra-days-input" value="{{ days }}">
+    <input type="hidden" id="ra-days-input" name="days" value="{{ days }}">
 </div>
 {% else %}
 

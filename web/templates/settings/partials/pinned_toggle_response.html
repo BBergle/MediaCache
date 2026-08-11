@@ -1,3 +1,4 @@
+{% from "macros/pin_button.html" import pin_button %}
 {#
   Response to POST /api/pinned/toggle.
 
@@ -16,20 +17,23 @@
     <strong>Cannot pin:</strong> {{ error }}
 </div>
 {% else %}
-<form hx-post="/api/pinned/toggle"
-      hx-target="this"
-      hx-swap="outerHTML"
-      class="pinned-toggle-form"
-      data-rating-key="{{ rating_key }}"
-      data-is-pinned="{{ 'true' if is_pinned else 'false' }}"
-      style="margin: 0; display: inline-block;">
-    <input type="hidden" name="rating_key" value="{{ rating_key }}">
-    <input type="hidden" name="pin_type" value="{{ pin_type }}">
-    <input type="hidden" name="title" value="{{ title }}">
-    <button type="submit" class="btn btn-sm {% if is_pinned %}btn-secondary{% else %}btn-primary{% endif %}"
-            title="{% if is_pinned %}Unpin — allow this item to be evicted or moved back to the array{% else %}Pin — always keep this item on cache (never evicted){% endif %}">
-        <i data-lucide="{% if is_pinned %}pin-off{% else %}pin{% endif %}" style="width: 14px; height: 14px; vertical-align: middle;"></i>
-        {% if is_pinned %}Unpin{% else %}Pin{% endif %}
-    </button>
-</form>
+{#
+  Rendered through the shared macro rather than a hand-copy of its markup. The
+  copy had drifted: it accepted no label/confirm, so after unpinning a show from
+  a Recently Added episode row the swapped-in control came back as a bare,
+  confirm-less "Pin" still bound to pin_type=show — one stray click re-pinned the
+  whole series.
+
+  A show- or season-scoped control keeps its confirm here for the same reason it
+  has one on the originating row: the click affects every episode the scope
+  covers, not just the row it sits in.
+#}
+{% if pin_type in ('show', 'season') %}
+{{ pin_button(rating_key, pin_type, title, is_pinned,
+              label=('Unpin ' ~ pin_type) if is_pinned else '',
+              confirm=('Unpinning this ' ~ pin_type ~ ' releases every episode it covers. Continue?')
+                      if is_pinned else '') }}
+{% else %}
+{{ pin_button(rating_key, pin_type, title, is_pinned) }}
+{% endif %}
 {% endif %}

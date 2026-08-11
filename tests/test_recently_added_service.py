@@ -150,7 +150,7 @@ class TestEnrichState:
 
 def _make_row(rating_key="1", title="X", media_type="movie", library_title="Movies",
               size=1000, location="cache", state="on_cache_not_pinned",
-              is_pinned=False, episode_info=None):
+              is_pinned=False, episode_info=None, show_rating_key=""):
     return RecentlyAddedRow(
         rating_key=rating_key, title=title, media_type=media_type,
         library_title=library_title, file_path=f"/data/{title}.mkv",
@@ -158,6 +158,7 @@ def _make_row(rating_key="1", title="X", media_type="movie", library_title="Movi
         added_display="now", location=location, state=state, is_pinned=is_pinned,
         pin_type="episode" if media_type == "episode" else "movie",
         episode_info=episode_info,
+        show_rating_key=show_rating_key,
     )
 
 
@@ -496,3 +497,56 @@ class TestMoverOutcomes:
                        exclude=["/mnt/cache/movies/OD.mkv"])
 
         assert rows[0].outcome == "returns_when_done"
+
+
+class TestShowIdentityGrouping:
+    """Groups key on the show's rating key, not its display title.
+
+    Two distinct shows can share a title — "The Office" (US) and "The Office"
+    (UK) — and keying on the title merged them into one group with interleaved
+    children and a nonsense season range.
+    """
+
+    def test_same_titled_shows_in_one_library_stay_separate(self):
+        rows = [
+            _make_row("101", "US-E1", "episode", "TV Shows", show_rating_key="10",
+                      episode_info={"show": "The Office", "season": 9, "episode": 1}),
+            _make_row("102", "US-E2", "episode", "TV Shows", show_rating_key="10",
+                      episode_info={"show": "The Office", "season": 9, "episode": 2}),
+            _make_row("201", "UK-E5", "episode", "TV Shows", show_rating_key="20",
+                      episode_info={"show": "The Office", "season": 2, "episode": 5}),
+        ]
+        display = RecentlyAddedService.group_rows_for_display(rows)
+
+        # US groups (2 eps); the lone UK episode stays its own row.
+        assert [d["kind"] for d in display] == ["show", "row"]
+        assert display[0]["episode_count"] == 2
+        # The header shows the title, not the rating key it now groups on.
+        assert display[0]["show"] == "The Office"
+        # Previously "Seasons 2–9" — the merge's most visible symptom.
+        assert display[0]["season_display"] == "Season 9"
+
+    def test_missing_show_rating_key_falls_back_to_the_title(self):
+        # A Plex server that omits grandparentRatingKey keeps today's behaviour,
+        # so this change can only split merged groups, never merge separate ones.
+        rows = [
+            _make_row("1", "E1", "episode", "TV Shows",
+                      episode_info={"show": "Show", "season": 1, "episode": 1}),
+            _make_row("2", "E2", "episode", "TV Shows",
+                      episode_info={"show": "Show", "season": 1, "episode": 2}),
+        ]
+        display = RecentlyAddedService.group_rows_for_display(rows)
+        assert [d["kind"] for d in display] == ["show"]
+        assert display[0]["episode_count"] == 2
+        assert display[0]["show"] == "Show"
+
+    def test_same_show_key_across_libraries_still_separate(self):
+        # library_title remains part of the key.
+        rows = [
+            _make_row("1", "E1", "episode", "TV Shows", show_rating_key="10",
+                      episode_info={"show": "Show", "season": 1, "episode": 1}),
+            _make_row("2", "E2", "episode", "Anime", show_rating_key="10",
+                      episode_info={"show": "Show", "season": 1, "episode": 2}),
+        ]
+        display = RecentlyAddedService.group_rows_for_display(rows)
+        assert [d["kind"] for d in display] == ["row", "row"]

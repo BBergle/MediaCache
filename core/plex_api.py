@@ -155,10 +155,37 @@ class RecentlyAddedItem:
     library_section_id: Optional[int] = None
     size: int = 0
     episode_info: Optional[Dict[str, any]] = None
+    # For episodes, the *show's* rating key. Stable identity for grouping —
+    # two distinct shows can share a title ("The Office" US and UK), and
+    # grouping on the display title merges them into one nonsense group.
+    show_rating_key: str = ""
     # Every file behind this item, across all versions:
     # [{file_path, size, is_preferred, label}]. ``file_path``/``size`` above
     # describe the PREFERRED version only — the one PlexCache caches and pins.
     version_files: List[Dict[str, any]] = field(default_factory=list)
+
+
+def _partial_attr(obj: Any, name: str, default: Any = None) -> Any:
+    """Read an attribute off a plexapi *listing* object without failing the caller.
+
+    Section listings hand back partial objects, and plexapi reloads on any
+    ``None``/``[]`` value — so reading an unnumbered special's ``index`` or an
+    unanalyzed item's ``media`` fires a live metadata GET that can 5xx or time
+    out. ``getattr``'s 3-arg default only swallows ``AttributeError``, not
+    transport errors, so one bad item would otherwise abort the whole fetch and
+    discard every library already collected.
+    """
+    try:
+        return getattr(obj, name, default)
+    except Exception as e:
+        # Read the label out of __dict__ so this can't re-enter __getattribute__
+        # and raise a second time; plexapi's own error path does the same.
+        label = obj.__dict__.get('title') or obj.__dict__.get('ratingKey') or '?'
+        logging.warning(
+            f"Recently added: could not read '{name}' for '{label}': "
+            f"{type(e).__name__}: {e}"
+        )
+        return default
 
 
 def _media_version_label(media: Any) -> str:
@@ -397,11 +424,13 @@ class PlexManager:
 
     def __init__(self, plex_url: str, plex_token: str, retry_limit: int = 3, delay: int = 5,
                  token_cache_file: Optional[str] = None, rss_cache_file: Optional[str] = None,
-                 plex_db_path: str = "", watchlist_enabled: bool = True):
+                 plex_db_path: str = "", watchlist_enabled: bool = True,
+                 timeout: Optional[int] = None):
         self.plex_url = plex_url
         self.plex_token = plex_token
         self.retry_limit = retry_limit
         self.delay = delay
+        self.timeout = timeout
         self.plex = None
         self._token_cache = UserTokenCache(cache_file=token_cache_file, cache_expiry_hours=24)
         self._rss_cache_file = rss_cache_file  # Path to RSS cache file
@@ -425,7 +454,7 @@ class PlexManager:
         logging.debug(f"Connecting to Plex server: {self.plex_url}")
 
         try:
-            self.plex = PlexServer(self.plex_url, self.plex_token)
+            self.plex = PlexServer(self.plex_url, self.plex_token, timeout=self.timeout)
             logging.debug(f"Plex server version: {self.plex.version}")
         except Exception as e:
             # Extract the root cause from nested exception chains
@@ -1699,6 +1728,15 @@ class PlexManager:
 
             section_kept = 0
             for video in recent:
+                # Read-only view over listing fields: opt out of plexapi's lazy
+                # reload so a null `index` (unnumbered special) or empty `media`
+                # (unanalyzed item) costs no per-item metadata GET, and so it
+                # can't 5xx mid-fetch. Best-effort — older plexapi lacks the attr.
+                try:
+                    video._autoReload = False
+                except Exception:
+                    pass
+
                 media_type = getattr(video, 'type', None)
                 if media_type not in ('movie', 'episode'):
                     # Skip season/show wrappers — we surface individual files.
@@ -1710,8 +1748,10 @@ class PlexManager:
 
                 episode_info = None
                 if media_type == 'episode':
-                    season = getattr(video, 'parentIndex', None)
-                    episode = getattr(video, 'index', None)
+                    # _partial_attr, not getattr: these are the two reads that
+                    # legitimately hold None and so trigger the reload above.
+                    season = _partial_attr(video, 'parentIndex')
+                    episode = _partial_attr(video, 'index')
                     if season is not None and episode is not None:
                         episode_info = {
                             'show': getattr(video, 'grandparentTitle', None),
@@ -1732,7 +1772,7 @@ class PlexManager:
                 # where the second reads "Pin" but unpins. Multi-PART items
                 # (cd1/cd2) are parts of ONE Media and are all cached together,
                 # so they stay folded into this item's file list.
-                medias = list(getattr(video, 'media', None) or [])
+                medias = list(_partial_attr(video, 'media') or [])
                 if not medias:
                     continue
                 try:
@@ -1771,6 +1811,8 @@ class PlexManager:
                     # the item's footprint is their sum.
                     size=sum(f['size'] for f in preferred_files),
                     episode_info=episode_info,
+                    # plexapi casts this to int; grouping keys on it as a string.
+                    show_rating_key=str(_partial_attr(video, 'grandparentRatingKey') or ''),
                     version_files=version_files,
                 ))
                 section_kept += 1

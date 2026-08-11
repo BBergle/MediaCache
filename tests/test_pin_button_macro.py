@@ -162,3 +162,46 @@ class TestFileTableRowMarkup:
         html = self._render_file_table([f])
         assert 'badge-pinned' in html
         assert '>\n                Pinned\n' in html
+
+
+class TestToggleResponseUsesTheSharedMacro:
+    """The toggle response used to hand-copy the pin button's markup.
+
+    The copy accepted no label/confirm, so after unpinning a show from a
+    Recently Added episode row the swapped-in control came back as a bare,
+    confirm-less "Pin" still bound to pin_type=show — one stray click re-pinned
+    the entire series.
+    """
+
+    TEMPLATE = "settings/partials/pinned_toggle_response.html"
+
+    def _render(self, **ctx):
+        from web.config import templates
+        base = {"error": None, "rating_key": "1", "pin_type": "movie",
+                "title": "Dune", "is_pinned": False}
+        base.update(ctx)
+        return templates.get_template(self.TEMPLATE).render(**base)
+
+    def test_it_imports_the_macro_rather_than_duplicating_markup(self):
+        from pathlib import Path
+        src = (Path(__file__).resolve().parent.parent / "web" / "templates" /
+               "settings" / "partials" / "pinned_toggle_response.html").read_text(encoding="utf-8")
+        assert 'import pin_button' in src
+        assert '<button type="submit"' not in src, "markup is hand-copied again"
+
+    def test_movie_toggle_is_unchanged(self):
+        out = self._render(pin_type="movie", is_pinned=False)
+        assert "/api/pinned/toggle" in out
+        assert ">Pin<" in out.replace("\n", "").replace(" ", "") or "Pin" in out
+        assert "hx-confirm" not in out
+
+    def test_unpinning_a_show_keeps_its_scope_label_and_confirm(self):
+        out = self._render(pin_type="show", title="The Office", is_pinned=True)
+        assert "Unpin show" in out
+        assert "hx-confirm" in out
+        assert "releases every episode it covers" in out
+
+    def test_pinning_a_show_needs_no_confirm(self):
+        # Adding protection is not destructive; only releasing it is.
+        out = self._render(pin_type="show", title="The Office", is_pinned=False)
+        assert "hx-confirm" not in out
