@@ -264,18 +264,22 @@ function diPillClick() {
 // Toggle a grouped show row in the completed-state detail view.
 // Hides/shows the adjacent .di-file-row--ep sub-rows without re-rendering
 // (which would require replaying the IIFE that built detailHtml).
+// `data-show` carries the group id minted by core.media_grouping — not the show
+// name — so two groups for the same show (cached vs restored in one run) toggle
+// independently. The id is stable across the 2s poll re-renders, which is what
+// lets the expanded state below survive.
 function bannerToggleShow(evt, el) {
     if (evt && evt.stopPropagation) evt.stopPropagation();
-    var show = el.getAttribute('data-show');
+    var groupId = el.getAttribute('data-show');
     var chev = el.querySelector('.di-expand-chev');
     var expand = !chev.classList.contains('open');
     chev.classList.toggle('open');
 
-    var subs = document.querySelectorAll('.di-file-row--ep[data-parent-show="' + (show || '').replace(/"/g, '\\"') + '"]');
+    var subs = document.querySelectorAll('.di-file-row--ep[data-parent-show="' + (groupId || '') + '"]');
     subs.forEach(function(s) { s.style.display = expand ? 'flex' : 'none'; });
 
     if (!window.__bannerExpandedShows) window.__bannerExpandedShows = {};
-    window.__bannerExpandedShows[show] = expand;
+    window.__bannerExpandedShows[groupId] = expand;
 }
 
 // Preserve window scroll position across banner swaps.
@@ -1002,7 +1006,7 @@ function dismissMaintCompletionBanner() {
     var recentFiles = [
         {% for f in status.recent_files|default([]) %}
         {%- if f.is_group is defined and f.is_group %}
-        { action: '{{ f.action }}', isGroup: true, showName: {{ f.show_name|tojson }}, episodeCount: {{ f.episode_count }}, size: '{{ f.size }}', episodes: [
+        { action: '{{ f.action }}', isGroup: true, groupId: '{{ f.group_id }}', showName: {{ f.show_name|tojson }}, episodeCount: {{ f.episode_count }}, size: '{{ f.size }}', episodes: [
             {%- for ep in f.episodes %}
             { filename: '{{ ep.filename|truncate_filename(45)|e }}', fullFilename: '{{ ep.filename|e }}', size: '{{ ep.size }}', associatedFiles: [
                 {%- if ep.associated_files %}{% for af in ep.associated_files %}{ filename: '{{ af.filename|truncate_filename(45)|e }}', fullFilename: '{{ af.filename|e }}', size: '{{ af.size }}' },{% endfor %}{% endif -%}
@@ -1041,10 +1045,14 @@ function dismissMaintCompletionBanner() {
             var tagClass = f.action === 'Cached' ? 'di-action-tag--cached' : 'di-action-tag--restored';
 
             if (f.isGroup) {
-                var isExpanded = expandedShows[f.showName] === true;
+                // Keyed on groupId, not showName: one run can both cache and
+                // restore episodes of the same show, which the grouper emits as
+                // two rows sharing a name. The id also keeps user-supplied
+                // titles (which can contain quotes) out of the attribute.
+                var isExpanded = expandedShows[f.groupId] === true;
                 var chevClass = isExpanded ? 'di-expand-chev open' : 'di-expand-chev';
                 var epLabel = f.episodeCount + ' ep' + (f.episodeCount !== 1 ? 's' : '');
-                detailHtml += '<div class="di-file-row di-file-row--group" data-show="' + f.showName + '" onclick="bannerToggleShow(event, this)" style="cursor:pointer">' +
+                detailHtml += '<div class="di-file-row di-file-row--group" data-show="' + f.groupId + '" onclick="bannerToggleShow(event, this)" style="cursor:pointer">' +
                     '<span class="di-action-tag ' + tagClass + '">' + f.action.toUpperCase() + '</span>' +
                     '<span class="di-file-row__name">' + f.showName + '</span>' +
                     '<span class="di-file-row__assoc-badge">' + epLabel + '</span>' +
@@ -1053,7 +1061,7 @@ function dismissMaintCompletionBanner() {
                     '</div>';
                 f.episodes.forEach(function(ep) {
                     var epAssoc = ep.associatedFiles.length > 0 ? '<span class="di-file-row__assoc-badge">+' + ep.associatedFiles.length + '</span>' : '';
-                    detailHtml += '<div class="di-file-row di-file-row--sub di-file-row--ep" data-parent-show="' + f.showName + '" style="display:' + (isExpanded ? 'flex' : 'none') + '">' +
+                    detailHtml += '<div class="di-file-row di-file-row--sub di-file-row--ep" data-parent-show="' + f.groupId + '" style="display:' + (isExpanded ? 'flex' : 'none') + '">' +
                         '<span class="di-sub-arrow">&#8627;</span>' +
                         '<span class="di-file-row__name" title="' + ep.fullFilename + '">' + ep.filename + '</span>' +
                         epAssoc +

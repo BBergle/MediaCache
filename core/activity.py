@@ -13,7 +13,6 @@ All run paths write to the same files:
 import json
 import logging
 import os
-import re
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -22,6 +21,7 @@ from dataclasses import dataclass, field
 
 from core.system_utils import format_bytes
 from core.file_operations import save_json_atomically
+from core.media_grouping import group_ordered, show_name_from_filename, stable_group_id
 
 
 # ---------------------------------------------------------------------------
@@ -302,12 +302,6 @@ def record_file_activity(
 # Show-episode grouping (shared by completion banner + dashboard)
 # ---------------------------------------------------------------------------
 
-# Matches "<show> - S##E##" — the Sonarr/Plex TV naming convention.
-# Non-TV files (movies, specials without episode numbering) don't match
-# and pass through as singletons.
-_SHOW_EPISODE_PATTERN = re.compile(r'^(.+?) - S\d+E\d+', re.IGNORECASE)
-
-
 def group_episodes_by_show(files: List[dict]) -> List[dict]:
     """Collapse multi-episode TV runs into a single parent row per show.
 
@@ -315,28 +309,43 @@ def group_episodes_by_show(files: List[dict]) -> List[dict]:
     individual rows (grouping a single entry offers no compression).
     Preserves first-seen order so re-renders don't reshuffle.
 
+    Activity entries carry a filename but no Plex metadata, so show identity
+    comes from the filename. The bucketing itself is `core.media_grouping`'s
+    shared rule — the same one the Recently Added views use with Plex-derived
+    keys, so both surfaces group a burst of episodes identically.
+
     Used by both the completion banner (`OperationRunner`) and the
     Recent Activity grouping service (`web/services/activity_grouping.py`).
     """
-    groups: dict = {}
-    order: list = []
+    def key_fn(f: dict):
+        show_name = show_name_from_filename(f.get("filename", ""))
+        # Action is part of the key: a show that was partly cached and partly
+        # restored in one run must not collapse into a single ambiguous row.
+        return (f.get("action", ""), show_name) if show_name else None
 
-    for idx, f in enumerate(files):
-        match = _SHOW_EPISODE_PATTERN.match(f.get("filename", ""))
-        if match:
-            show_name = match.group(1).strip()
-            key = (f.get("action", ""), show_name)
-            if key not in groups:
-                groups[key] = {
-                    "action": f.get("action", ""),
-                    "show_name": show_name,
-                    "episodes": [],
-                    "total_bytes": 0,
-                }
-                order.append(key)
+    result: List[dict] = []
+    for key, members in group_ordered(files, key_fn):
+        if key is None or len(members) == 1:
+            result.extend(members)
+            continue
+
+        total_bytes = sum(f.get("size_bytes", 0) for f in members)
+        # Use the newest episode's time as the group's representative time
+        # (episodes arrive newest-first when called from the dashboard path).
+        head = members[0]
+        result.append({
+            "action": key[0],
+            "is_group": True,
+            "show_name": key[1],
+            # Identity for the rendered group. Derived from the same (action,
+            # show) key the grouping used, so a show that was partly cached and
+            # partly restored in one run gets two distinct ids — keying the DOM
+            # on the show name alone made those two groups collide.
+            "group_id": stable_group_id(key[0], key[1]),
+            "episode_count": len(members),
             # Preserve per-episode metadata the dashboard renders (time, users)
             # in addition to the fields the completion banner consumes.
-            groups[key]["episodes"].append({
+            "episodes": [{
                 "filename": f.get("filename", ""),
                 "size": f.get("size", ""),
                 "size_bytes": f.get("size_bytes", 0),
@@ -344,45 +353,12 @@ def group_episodes_by_show(files: List[dict]) -> List[dict]:
                 "timestamp": f.get("timestamp", ""),
                 "time_display": f.get("time_display", ""),
                 "users": f.get("users", []),
-            })
-            groups[key]["total_bytes"] += f.get("size_bytes", 0)
-        else:
-            key = ("__singleton__", idx)
-            groups[key] = f
-            order.append(key)
-
-    result: List[dict] = []
-    for key in order:
-        entry = groups[key]
-        if key[0] == "__singleton__":
-            result.append(entry)
-        elif len(entry["episodes"]) == 1:
-            ep = entry["episodes"][0]
-            result.append({
-                "action": entry["action"],
-                "filename": ep["filename"],
-                "size": ep.get("size", ""),
-                "size_bytes": ep.get("size_bytes", 0),
-                "associated_files": ep.get("associated_files", []),
-                "timestamp": ep.get("timestamp", ""),
-                "time_display": ep.get("time_display", ""),
-                "users": ep.get("users", []),
-            })
-        else:
-            # Use the newest episode's time as the group's representative time
-            # (episodes arrive newest-first when called from the dashboard path).
-            head_ep = entry["episodes"][0]
-            result.append({
-                "action": entry["action"],
-                "is_group": True,
-                "show_name": entry["show_name"],
-                "episode_count": len(entry["episodes"]),
-                "episodes": entry["episodes"],
-                "size_bytes": entry["total_bytes"],
-                "size": format_bytes(entry["total_bytes"]) if entry["total_bytes"] > 0 else "",
-                "time_display": head_ep.get("time_display", ""),
-                "users": head_ep.get("users", []),
-            })
+            } for f in members],
+            "size_bytes": total_bytes,
+            "size": format_bytes(total_bytes) if total_bytes > 0 else "",
+            "time_display": head.get("time_display", ""),
+            "users": head.get("users", []),
+        })
 
     return result
 

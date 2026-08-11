@@ -74,7 +74,10 @@
 
 {% for entry in run.entries %}
 {% if entry.is_group %}
-{% set show_id = run.run_id ~ '-show-' ~ loop.index %}
+{# Group id from core.media_grouping, namespaced by run: the id is unique per
+   (action, show) within one run, but the page renders many runs and the same
+   show can appear in several of them. #}
+{% set show_id = run.run_id ~ '-' ~ entry.group_id %}
 <tr class="run-row run-show-parent{% if is_newest %} is-visible{% endif %}"
     data-run-member="{{ run.run_id }}"
     data-show-id="{{ show_id }}"

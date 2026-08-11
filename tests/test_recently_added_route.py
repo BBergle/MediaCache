@@ -9,6 +9,7 @@ Test isolation: earlier tests sometimes replace ``web.config`` (and friends) in
 run against the real templates instance.
 """
 
+import re
 import sys
 from datetime import datetime
 from unittest.mock import MagicMock, patch
@@ -246,7 +247,10 @@ class TestGrouping:
         # One group header for the show + child rows
         assert 'class="ra-group-header"' in r.text
         assert "3 new episodes" in r.text
-        assert 'data-group-id="rag0"' in r.text
+        # Header id and child rows agree (id format is opaque — minted by
+        # core.media_grouping, not positional).
+        gid = re.search(r'data-group-id="([^"]+)"', r.text).group(1)
+        assert f'data-group="{gid}"' in r.text
         assert r.text.count('ra-group-child') >= 3
         # Episode codes appear in child rows
         assert "S02E01" in r.text and "S02E03" in r.text
@@ -260,6 +264,19 @@ class TestGrouping:
             r = client.get("/recently-added/list")
         assert 'class="ra-group-header"' not in r.text
         assert "Severance" in r.text
+
+    def test_group_header_spanning_seasons_shows_range(self, client):
+        rows = [
+            _episode("1", "Sugar (2024)", 2, 3),
+            _episode("2", "Sugar (2024)", 1, 5),
+            _episode("3", "Sugar (2024)", 1, 7),
+        ]
+        p_svc, p_set, _ = _patch(_result(rows))
+        with p_svc, p_set:
+            r = client.get("/recently-added/list")
+        assert 'class="ra-group-header"' in r.text
+        assert "Seasons 1–2" in r.text
+        assert "3 new episodes" in r.text
 
 
 class TestExpandDetail:
@@ -319,6 +336,49 @@ class TestWidget:
         assert "ra-w-detail" in r.text
         assert "Dune.2021.2160p.mkv" in r.text
         assert "28.00 GB" in r.text
+
+    def test_widget_groups_multi_episode_show(self, client):
+        # The dashboard card must group like the full page — six episodes of one
+        # show are one line, not six.
+        rows = [_episode(str(i), "Sugar (2024)", 1, i) for i in range(1, 7)]
+        p_svc, p_set, _ = _patch(_result(rows), settings={"recently_added_days": 7})
+        with p_svc, p_set:
+            r = client.get("/recently-added/widget")
+        assert r.status_code == 200
+        assert r.text.count('class="ra-w-row"') == 1
+        assert "6 eps" in r.text
+        assert "Season 1" in r.text
+
+    def test_widget_grouping_frees_slots_for_other_titles(self, client):
+        # Before grouping, a burst of episodes filled all five widget slots and
+        # pushed newer movies off the card entirely.
+        rows = [_episode(str(i), "Sugar (2024)", 1, i) for i in range(1, 7)]
+        rows += [_row(rating_key="m1", title="Dune"), _row(rating_key="m2", title="Civil War")]
+        p_svc, p_set, _ = _patch(_result(rows), settings={"recently_added_days": 7})
+        with p_svc, p_set:
+            r = client.get("/recently-added/widget")
+        assert r.status_code == 200
+        assert r.text.count('class="ra-w-row"') == 3
+        assert "Dune" in r.text and "Civil War" in r.text
+
+    def test_widget_group_expands_to_episode_files(self, client):
+        rows = [
+            _episode("1", "Sugar (2024)", 1, 1, filename="Sugar (2024) - S01E01.mkv"),
+            _episode("2", "Sugar (2024)", 1, 2, filename="Sugar (2024) - S01E02.mkv"),
+        ]
+        p_svc, p_set, _ = _patch(_result(rows), settings={"recently_added_days": 7})
+        with p_svc, p_set:
+            r = client.get("/recently-added/widget")
+        assert "raWidgetToggle(this)" in r.text
+        assert "Sugar (2024) - S01E01.mkv" in r.text
+        assert "Sugar (2024) - S01E02.mkv" in r.text
+
+    def test_widget_caps_display_rows(self, client):
+        rows = [_row(rating_key=str(i), title=f"Movie {i}") for i in range(10)]
+        p_svc, p_set, _ = _patch(_result(rows), settings={"recently_added_days": 7})
+        with p_svc, p_set:
+            r = client.get("/recently-added/widget")
+        assert r.text.count('class="ra-w-row"') == 5
 
     def test_widget_unavailable(self, client):
         p_svc, p_set, _ = _patch(_result([], available=False, error="No Plex."))

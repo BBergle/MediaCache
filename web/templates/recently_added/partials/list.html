@@ -211,13 +211,13 @@
                                     <i data-lucide="tv" style="width: 15px; height: 15px; color: var(--plex-text-muted);"></i>
                                 </span>
                                 <div>
-                                    <div style="font-weight: 500;">{{ item.show }}{% if item.season is not none %} — Season {{ item.season }}{% endif %}</div>
+                                    <div style="font-weight: 500;">{{ item.show }}{% if item.season_display %} — {{ item.season_display }}{% endif %}</div>
                                     <div class="text-muted" style="font-size: 0.76rem;">{{ item.episode_count }} new episode{{ 's' if item.episode_count != 1 else '' }}</div>
                                 </div>
                             </div>
                         </td>
                         <td class="text-muted">{{ item.library_title }}</td>
-                        <td class="text-muted">—</td>
+                        <td class="text-muted" style="white-space: nowrap;">{{ item.added_display or '—' }}</td>
                         <td style="white-space: nowrap;">{{ item.total_size_display or '—' }}</td>
                         <td>
                             {% if item.locations|length == 1 %}{{ ra_location_badge(item.locations[0]) }}

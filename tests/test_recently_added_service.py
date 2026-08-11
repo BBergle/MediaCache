@@ -200,7 +200,7 @@ class TestGroupRowsForDisplay:
         assert display[1]["episode_count"] == 2
         assert display[2]["row"].title == "Civil War"
 
-    def test_different_seasons_are_separate_groups(self):
+    def test_seasons_merge_into_one_show_group(self):
         rows = [
             _make_row("1", "S1E1", "episode", "TV Shows",
                       episode_info={"show": "Show", "season": 1, "episode": 1}),
@@ -210,9 +210,52 @@ class TestGroupRowsForDisplay:
                       episode_info={"show": "Show", "season": 2, "episode": 1}),
         ]
         display = RecentlyAddedService.group_rows_for_display(rows)
-        # Season 1 (2 eps) groups; Season 2 (1 ep) stays a row
-        kinds = sorted(d["kind"] for d in display)
-        assert kinds == ["row", "show"]
+        # A season rollover must not split one show into two adjacent rows.
+        assert [d["kind"] for d in display] == ["show"]
+        g = display[0]
+        assert g["episode_count"] == 3
+        assert g["seasons"] == [1, 2]
+        assert g["season_display"] == "Seasons 1–2"
+        # No single season to name → the plain `season` field is None
+        assert g["season"] is None
+        # Sorted by (season, episode) so the rollover reads in order
+        assert [(e.episode_info["season"], e.episode_info["episode"]) for e in g["episodes"]] == [
+            (1, 1), (1, 2), (2, 1)
+        ]
+
+    def test_single_season_group_names_that_season(self):
+        rows = [
+            _make_row("1", "E1", "episode", "TV Shows",
+                      episode_info={"show": "Show", "season": 3, "episode": 1}),
+            _make_row("2", "E2", "episode", "TV Shows",
+                      episode_info={"show": "Show", "season": 3, "episode": 2}),
+        ]
+        g = RecentlyAddedService.group_rows_for_display(rows)[0]
+        assert g["season"] == 3
+        assert g["season_display"] == "Season 3"
+
+    def test_same_show_in_two_libraries_stays_separate(self):
+        rows = [
+            _make_row("1", "E1", "episode", "TV Shows",
+                      episode_info={"show": "Show", "season": 1, "episode": 1}),
+            _make_row("2", "E2", "episode", "Anime",
+                      episode_info={"show": "Show", "season": 1, "episode": 2}),
+        ]
+        display = RecentlyAddedService.group_rows_for_display(rows)
+        assert [d["kind"] for d in display] == ["row", "row"]
+
+    def test_group_added_display_is_newest_episode(self):
+        # Rows arrive newest-first, so the group's age is the first member's.
+        rows = [
+            _make_row("1", "E2", "episode", "TV Shows",
+                      episode_info={"show": "Show", "season": 1, "episode": 2}),
+            _make_row("2", "E1", "episode", "TV Shows",
+                      episode_info={"show": "Show", "season": 1, "episode": 1}),
+        ]
+        rows[0].added_display = "1 hr ago"
+        rows[1].added_display = "9 hr ago"
+        g = RecentlyAddedService.group_rows_for_display(rows)[0]
+        assert g["added_display"] == "1 hr ago"
 
 
 class TestScanAssociatedFiles:

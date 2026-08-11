@@ -329,6 +329,45 @@ class TestGetStatusDictCompleted:
         status = runner.get_status_dict()
         assert status["error_count"] == 3
 
+    def test_completion_banner_groups_episodes(self, runner):
+        runner._current_run_files = [
+            {"action": "Cached", "filename": f"Entourage - S01E0{i}.mkv", "size_bytes": 100,
+             "size": "100 B"} for i in range(1, 4)
+        ]
+        entries = runner.get_status_dict()["recent_files"]
+        assert len(entries) == 1
+        assert entries[0]["is_group"] is True
+        assert entries[0]["episode_count"] == 3
+
+    def test_completion_banner_same_show_two_actions_get_distinct_ids(self, runner):
+        # The banner keys its expand state on group_id. If both rows shared an
+        # id, expanding one would reveal the other's episodes under it.
+        runner._current_run_files = [
+            {"action": "Cached", "filename": "Entourage - S02E01.mkv", "size_bytes": 1, "size": "1 B"},
+            {"action": "Cached", "filename": "Entourage - S02E02.mkv", "size_bytes": 1, "size": "1 B"},
+            {"action": "Moved", "filename": "Entourage - S01E01.mkv", "size_bytes": 1, "size": "1 B"},
+            {"action": "Moved", "filename": "Entourage - S01E02.mkv", "size_bytes": 1, "size": "1 B"},
+        ]
+        entries = runner.get_status_dict()["recent_files"]
+        assert len(entries) == 2
+        ids = [e["group_id"] for e in entries]
+        assert len(set(ids)) == 2
+        assert all(ids)
+
+    def test_completion_banner_caps_at_fifteen_groups(self, runner):
+        # The cap counts rows, not files — 40 episodes of one show is one row.
+        runner._current_run_files = [
+            {"action": "Cached", "filename": f"Entourage - S01E{i:02d}.mkv", "size_bytes": 1, "size": "1 B"}
+            for i in range(1, 41)
+        ] + [
+            {"action": "Cached", "filename": f"Movie {i}.mkv", "size_bytes": 1, "size": "1 B"}
+            for i in range(20)
+        ]
+        entries = runner.get_status_dict()["recent_files"]
+        assert len(entries) == 15
+        assert entries[0]["is_group"] is True
+        assert entries[0]["episode_count"] == 40
+
 
 # ============================================================================
 # get_status_dict() — byte-level progress

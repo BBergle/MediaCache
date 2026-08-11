@@ -16,6 +16,7 @@ from typing import Callable, Dict, List, Optional, Set, Any, Tuple
 from web.config import DATA_DIR, CONFIG_DIR, SETTINGS_FILE
 from core.system_utils import get_array_direct_path, format_bytes, translate_container_to_host_path, translate_host_to_container_path, remove_from_exclude_file, remove_from_timestamps_file, create_dir_with_ownership, sweep_empty_folders
 from core.file_operations import PLEXCACHED_EXTENSION, VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS, MEDIA_EXTENSIONS
+from core.media_grouping import group_ordered
 
 
 def _strip_plexcached(path: str) -> str:
@@ -541,15 +542,17 @@ class MaintenanceService:
         return None
 
     def _group_unprotected_by_directory(self, files: List[UnprotectedFile]) -> List[dict]:
-        """Group unprotected files by directory, with video as primary and sidecars as children."""
-        from collections import OrderedDict
-        groups: OrderedDict[str, List[UnprotectedFile]] = OrderedDict()
-        for f in files:
-            directory = os.path.dirname(f.cache_path)
-            groups.setdefault(directory, []).append(f)
+        """Group unprotected files by directory, with video as primary and sidecars as children.
 
+        Keys on directory rather than show — this table pairs a video with its
+        own sidecars for remediation, not episodes with each other — but the
+        bucketing itself is the app-wide rule from ``core.media_grouping``, so
+        ordering behaves the same as every other grouped list.
+        """
         result = []
-        for directory, dir_files in groups.items():
+        for directory, dir_files in group_ordered(
+            files, lambda f: os.path.dirname(f.cache_path)
+        ):
             # Find the video file (if any) to use as primary
             video = None
             children = []

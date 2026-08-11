@@ -30,6 +30,9 @@ DEFAULT_DAYS = 7
 # cap generous enough that recent movies aren't crowded out by a burst of
 # episodes. Users with very large libraries can raise it in Settings (up to 500).
 DEFAULT_MAX_ITEMS = 250
+# Display rows on the compact dashboard card. Counted *after* grouping, so a
+# six-episode show spends one slot rather than six.
+WIDGET_ROWS = 5
 
 
 def _resolve_days(requested: int) -> int:
@@ -115,6 +118,10 @@ def recently_added_widget(request: Request):
     service = get_recently_added_service()
     result = service.get_recently_added(days=default_days, max_items=max_items)
 
+    # Same grouping as the full page — collapse first, then take the top rows,
+    # so a multi-episode show doesn't crowd everything else off the card.
+    groups = service.group_rows_for_display(result["rows"])
+
     return templates.TemplateResponse(
         request,
         "recently_added/partials/widget.html",
@@ -122,7 +129,7 @@ def recently_added_widget(request: Request):
             "available": result["available"],
             "error": result["error"],
             "summary": result["summary"],
-            "rows": result["rows"][:5],
+            "groups": groups[:WIDGET_ROWS],
             "days": default_days,
         },
     )

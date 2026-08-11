@@ -167,6 +167,63 @@ class TestShowGrouping:
         # Single episode passes through as a singleton, not a group of 1
         assert runs[0]["entries"][0].get("is_group") is None
 
+    def test_same_show_different_actions_stay_separate(self):
+        # One run can cache some episodes of a show and restore others; merging
+        # them would produce a row whose action is a lie.
+        now = datetime(2026, 4, 25, 10, 0, 0)
+        activities = [
+            _entry(now + timedelta(seconds=3), "Cached", "Entourage - S02E01.mkv", run_id="r1", run_source="web"),
+            _entry(now + timedelta(seconds=2), "Cached", "Entourage - S02E02.mkv", run_id="r1", run_source="web"),
+            _entry(now + timedelta(seconds=1), "Moved", "Entourage - S01E01.mkv", run_id="r1", run_source="web"),
+            _entry(now, "Moved", "Entourage - S01E02.mkv", run_id="r1", run_source="web"),
+        ]
+        entries = group_activity_into_runs(activities)[0]["entries"]
+        assert len(entries) == 2
+        assert [e["action"] for e in entries] == ["Cached", "Moved"]
+        assert all(e["episode_count"] == 2 for e in entries)
+        # Distinct DOM ids, or expanding one would expand the other — the banner
+        # and Recent Activity both key their toggle on this.
+        assert entries[0]["group_id"] != entries[1]["group_id"]
+
+    def test_group_id_is_stable_across_renders(self):
+        # The banner re-renders every 2s and restores expand state by id, so the
+        # same run must produce the same ids each time.
+        now = datetime(2026, 4, 25, 10, 0, 0)
+        activities = [
+            _entry(now + timedelta(seconds=1), "Cached", "Entourage - S01E01.mkv", run_id="r1", run_source="web"),
+            _entry(now, "Cached", "Entourage - S01E02.mkv", run_id="r1", run_source="web"),
+        ]
+        first = group_activity_into_runs(activities)[0]["entries"][0]["group_id"]
+        second = group_activity_into_runs(activities)[0]["entries"][0]["group_id"]
+        assert first == second
+
+    def test_group_id_survives_a_new_file_arriving(self):
+        # Position-derived ids would shift when a newer file lands on top,
+        # silently collapsing an expanded group on the next poll.
+        now = datetime(2026, 4, 25, 10, 0, 0)
+        base = [
+            _entry(now + timedelta(seconds=1), "Cached", "Entourage - S01E01.mkv", run_id="r1", run_source="web"),
+            _entry(now, "Cached", "Entourage - S01E02.mkv", run_id="r1", run_source="web"),
+        ]
+        before = group_activity_into_runs(base)[0]["entries"][0]["group_id"]
+        newer = [_entry(now + timedelta(seconds=5), "Cached", "Dune (2021).mkv", run_id="r1", run_source="web")] + base
+        entries = group_activity_into_runs(newer)[0]["entries"]
+        after = next(e["group_id"] for e in entries if e.get("is_group"))
+        assert before == after
+
+    def test_seasons_merge_into_one_show_group(self):
+        # Matches the Recently Added views: a season rollover is still one show.
+        now = datetime(2026, 4, 25, 10, 0, 0)
+        activities = [
+            _entry(now + timedelta(seconds=2), "Cached", "Sugar (2024) - S02E03.mkv", run_id="r1", run_source="web"),
+            _entry(now + timedelta(seconds=1), "Cached", "Sugar (2024) - S01E05.mkv", run_id="r1", run_source="web"),
+            _entry(now, "Cached", "Sugar (2024) - S01E07.mkv", run_id="r1", run_source="web"),
+        ]
+        entries = group_activity_into_runs(activities)[0]["entries"]
+        assert len(entries) == 1
+        assert entries[0]["show_name"] == "Sugar (2024)"
+        assert entries[0]["episode_count"] == 3
+
 
 class TestAggregates:
     def test_byte_totals_per_action(self):

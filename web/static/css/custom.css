@@ -1839,6 +1839,13 @@ footer {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+/* Season/episode-count qualifier on a grouped show line. Inline (not a second
+   line) so grouped and ungrouped rows keep the same row height. */
+.ra-w-sub {
+    color: var(--plex-text-muted);
+    font-size: 0.76rem;
+    margin-left: 0.35rem;
+}
 .ra-w-size {
     width: 5rem;
     flex-shrink: 0;

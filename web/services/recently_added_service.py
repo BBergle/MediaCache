@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from web.config import DATA_DIR, SETTINGS_FILE
 from core.system_utils import get_array_direct_path, format_bytes, format_cache_age
+from core.media_grouping import format_season_range, group_ordered, stable_group_id
 
 logger = logging.getLogger(__name__)
 
@@ -214,59 +215,76 @@ class RecentlyAddedService:
     def group_rows_for_display(rows: List[RecentlyAddedRow]) -> List[Dict[str, Any]]:
         """Collapse multi-episode TV runs into expandable show groups.
 
+        Uses the app-wide bucketing rule from ``core.media_grouping`` — the same
+        one behind Recent Activity and the completion banner — so a burst of
+        episodes collapses identically everywhere. Only the *key* differs: here
+        it comes from Plex metadata (library + show) rather than a filename.
+
+        A show groups across seasons. A mid-season rollover would otherwise
+        split one show into two adjacent rows, which is exactly the fragmenting
+        the grouping exists to remove; ``season_display`` names the span.
+
         Returns an ordered list of display items, each either:
 
         * ``{"kind": "row", "row": RecentlyAddedRow}`` — a movie or a standalone
-          episode (a show+season with only one episode in the window), or
-        * ``{"kind": "show", "group_id", "show", "season", "library_title",
-          "episodes": [...], "episode_count", "total_size", "total_size_display",
-          "locations": [...], "not_pinned_count", "pinned_count"}``.
+          episode (a show with only one episode in the window), or
+        * ``{"kind": "show", "group_id", "show", "season", "seasons",
+          "season_display", "library_title", "episodes": [...], "episode_count",
+          "total_size", "total_size_display", "added_display", "locations": [...],
+          "not_pinned_count", "pinned_count"}``.
 
         Order follows first-seen position (rows arrive newest-first), so a show
         group anchors where its first episode appeared.
         """
-        groups: Dict[Any, List[RecentlyAddedRow]] = {}
-        order: List[Any] = []
-        for idx, row in enumerate(rows):
+        def key_fn(row: RecentlyAddedRow):
             info = row.episode_info or {}
             if row.media_type == "episode" and info.get("show"):
-                key = ("show", row.library_title, info.get("show"), info.get("season"))
-            else:
-                key = ("single", idx)
-            if key not in groups:
-                groups[key] = []
-                order.append(key)
-            groups[key].append(row)
+                return ("show", row.library_title, info.get("show"))
+            return None
 
         display: List[Dict[str, Any]] = []
-        gid = 0
-        for key in order:
-            members = groups[key]
-            if key[0] == "show" and len(members) > 1:
-                eps = sorted(members, key=lambda r: ((r.episode_info or {}).get("episode") or 0))
-                total_size = sum(r.size for r in eps)
-                locations: List[str] = []
-                for r in eps:
-                    if r.location not in locations:
-                        locations.append(r.location)
-                display.append({
-                    "kind": "show",
-                    "group_id": f"rag{gid}",
-                    "show": key[2],
-                    "season": key[3],
-                    "library_title": key[1],
-                    "episodes": eps,
-                    "episode_count": len(eps),
-                    "total_size": total_size,
-                    "total_size_display": format_bytes(total_size) if total_size else "",
-                    "locations": locations,
-                    "not_pinned_count": sum(1 for r in eps if r.state == "on_cache_not_pinned"),
-                    "pinned_count": sum(1 for r in eps if r.is_pinned),
-                })
-                gid += 1
-            else:
-                for r in members:
-                    display.append({"kind": "row", "row": r})
+        for key, members in group_ordered(rows, key_fn):
+            if key is None or len(members) == 1:
+                display.extend({"kind": "row", "row": r} for r in members)
+                continue
+
+            eps = sorted(members, key=lambda r: (
+                (r.episode_info or {}).get("season") or 0,
+                (r.episode_info or {}).get("episode") or 0,
+            ))
+            seasons = sorted({
+                s for s in ((r.episode_info or {}).get("season") for r in eps)
+                if s is not None
+            })
+            total_size = sum(r.size for r in eps)
+            locations: List[str] = []
+            for r in eps:
+                if r.location not in locations:
+                    locations.append(r.location)
+            display.append({
+                "kind": "show",
+                # Same minting as the activity/banner groups — derived from the
+                # key, not from list position, and free of user content that
+                # could break the data-* attribute it lands in.
+                "group_id": stable_group_id("ra", key[1], key[2]),
+                "show": key[2],
+                # Kept for callers that want a plain season number; None once a
+                # group spans more than one season. Prefer season_display.
+                "season": seasons[0] if len(seasons) == 1 else None,
+                "seasons": seasons,
+                "season_display": format_season_range(seasons),
+                "library_title": key[1],
+                "episodes": eps,
+                "episode_count": len(eps),
+                "total_size": total_size,
+                "total_size_display": format_bytes(total_size) if total_size else "",
+                # Rows arrive newest-first, so the first member is the newest
+                # episode — the group's "added" age.
+                "added_display": members[0].added_display,
+                "locations": locations,
+                "not_pinned_count": sum(1 for r in eps if r.state == "on_cache_not_pinned"),
+                "pinned_count": sum(1 for r in eps if r.is_pinned),
+            })
         return display
 
     def _scan_associated_files(self, video_cache_path: Optional[str]) -> List[Dict[str, str]]:
