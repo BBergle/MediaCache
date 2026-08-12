@@ -678,6 +678,10 @@ class WebhookHandler(logging.Handler):
 # able to occupy the entire log budget.
 ROTATION_BACKUPS_PER_RUN = 2
 
+# Convenience pointer to the newest run's log. Matches the cleanup glob, so the
+# retention count has to exclude it by name.
+LATEST_LOG_NAME = "plexcache_log_latest.log"
+
 
 class LoggingManager:
     """Manages logging configuration and setup."""
@@ -778,7 +782,7 @@ class LoggingManager:
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = self.logs_folder / f"plexcache_log_{current_time}.log"
         self.current_log_file = log_file  # Track for error preservation
-        latest_log_file = self.logs_folder / "plexcache_log_latest.log"
+        latest_log_file = self.logs_folder / LATEST_LOG_NAME
 
         datefmt = self._get_log_datefmt()
         log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt=datefmt)
@@ -851,7 +855,10 @@ class LoggingManager:
         Tying a backup's lifetime to its base file keeps one rule rather than
         two: when the run's log goes, its overflow goes with it.
         """
-        existing_log_files = list(self.logs_folder.glob(self.log_file_pattern))
+        # plexcache_log_latest.log matches the glob but is a pointer to the
+        # newest run, not a run of its own. Counting it meant "keep 24" kept 23.
+        existing_log_files = [p for p in self.logs_folder.glob(self.log_file_pattern)
+                              if p.name != LATEST_LOG_NAME]
         existing_log_files.sort(key=lambda x: x.stat().st_mtime)
 
         while len(existing_log_files) > self.max_log_files:

@@ -85,3 +85,21 @@ class TestRotationBackupCleanup:
 
         remaining = sorted(p.name for p in logs.glob("plexcache_log_*.log"))
         assert len(remaining) == 3, remaining
+
+
+class TestLatestPointerIsNotCounted:
+
+    def test_symlink_does_not_consume_a_retention_slot(self, tmp_path):
+        """"Keep 3" should keep 3 runs, not 2 runs plus the pointer."""
+        logs = tmp_path / "logs"
+        logs.mkdir()
+        for i in range(3):
+            _make(logs, f"plexcache_log_2026010{i}_000000.log", 1_000 + i)
+        _make(logs, "plexcache_log_latest.log", 9_999)
+
+        _manager(logs, max_log_files=3)._clean_old_log_files()
+
+        runs = sorted(p.name for p in logs.glob("plexcache_log_*.log")
+                      if p.name != "plexcache_log_latest.log")
+        assert len(runs) == 3, runs
+        assert (logs / "plexcache_log_latest.log").exists()
