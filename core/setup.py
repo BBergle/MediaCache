@@ -1094,12 +1094,24 @@ def _configure_eviction_settings():
             settings_data['cache_eviction_threshold_percent'] = 90
 
         if eviction_mode == 'smart':
-            min_pri = input('Min priority to evict (0-100) [60]: ').strip() or '60'
+            from core.file_operations import PRIORITY_RANGE_WATCHLIST_MIN
+            floor = PRIORITY_RANGE_WATCHLIST_MIN
+            print('')
+            print(f'Files are scored from about {floor} (an old watchlist item) to 100')
+            print('(the episode you are on). Anything scoring below your threshold')
+            print('is evicted when the cache fills up.')
+            min_pri = input(f'Min priority to keep ({floor}-100) [60]: ').strip() or '60'
             try:
-                settings_data['eviction_min_priority'] = int(min_pri)
+                value = int(min_pri)
             except ValueError:
                 print(f"Invalid number '{min_pri}', using default 60")
-                settings_data['eviction_min_priority'] = 60
+                value = 60
+            if value < floor:
+                # Nothing scores below the floor, so this would keep everything.
+                print(f"{value} is below the lowest score a file can have, so nothing")
+                print(f"would ever be evicted. Using {floor} instead.")
+                value = floor
+            settings_data['eviction_min_priority'] = min(value, 100)
 
 
 def _detect_webhook_platform(url: str) -> str:

@@ -500,6 +500,43 @@ class ConfigManager:
         self.plex.per_user_ondeck_days = per_user_ondeck_days or None
         self.plex.per_user_watchlist_days = per_user_watchlist_days or None
     
+    def _validate_eviction_settings(self) -> None:
+        """Range-check the eviction trio, and flag a threshold that cannot act.
+
+        Out-of-range values fall back to their defaults. The priority threshold
+        gets an extra check that a range test cannot express: scores start at a
+        floor rather than at 0, because ``calculate_priority()`` begins at 50 and
+        its negative factors are bounded. ``get_eviction_candidates()`` keeps
+        anything scoring at or above the threshold, so a threshold below that
+        floor keeps every file and eviction frees nothing while still reporting
+        itself as enabled.
+
+        That case is reported, not corrected. Raising a stored threshold would
+        start deleting cache copies on the next run, which is not a decision to
+        make on the user's behalf while loading their config. The web input and
+        the setup wizard stop new values from landing there.
+        """
+        if self.cache.cache_eviction_mode not in ("smart", "fifo", "none"):
+            logging.warning(f"Invalid cache_eviction_mode '{self.cache.cache_eviction_mode}', using 'none'")
+            self.cache.cache_eviction_mode = "none"
+
+        if not 1 <= self.cache.cache_eviction_threshold_percent <= 100:
+            logging.warning(f"Invalid cache_eviction_threshold_percent '{self.cache.cache_eviction_threshold_percent}', using 90")
+            self.cache.cache_eviction_threshold_percent = 90
+
+        if not 0 <= self.cache.eviction_min_priority <= 100:
+            logging.warning(f"Invalid eviction_min_priority '{self.cache.eviction_min_priority}', using 60")
+            self.cache.eviction_min_priority = 60
+        elif self.cache.cache_eviction_mode == "smart":
+            from core.file_operations import PRIORITY_RANGE_WATCHLIST_MIN
+            if self.cache.eviction_min_priority < PRIORITY_RANGE_WATCHLIST_MIN:
+                logging.warning(
+                    f"eviction_min_priority is {self.cache.eviction_min_priority}, but the lowest "
+                    f"score any file can have is about {PRIORITY_RANGE_WATCHLIST_MIN}, so smart "
+                    f"eviction will never select anything. Raise it (60 is the default) or set "
+                    f"cache_eviction_mode to 'none'."
+                )
+
     def _load_cache_config(self) -> None:
         """Load cache-related configuration."""
         self.cache.watchlist_toggle = self.settings_data['watchlist_toggle']
@@ -547,16 +584,7 @@ class ConfigManager:
         self.cache.cache_eviction_threshold_percent = self.settings_data.get('cache_eviction_threshold_percent', 90)
         self.cache.eviction_min_priority = self.settings_data.get('eviction_min_priority', 60)
 
-        # Validate eviction settings
-        if self.cache.cache_eviction_mode not in ("smart", "fifo", "none"):
-            logging.warning(f"Invalid cache_eviction_mode '{self.cache.cache_eviction_mode}', using 'none'")
-            self.cache.cache_eviction_mode = "none"
-        if not 1 <= self.cache.cache_eviction_threshold_percent <= 100:
-            logging.warning(f"Invalid cache_eviction_threshold_percent '{self.cache.cache_eviction_threshold_percent}', using 90")
-            self.cache.cache_eviction_threshold_percent = 90
-        if not 0 <= self.cache.eviction_min_priority <= 100:
-            logging.warning(f"Invalid eviction_min_priority '{self.cache.eviction_min_priority}', using 60")
-            self.cache.eviction_min_priority = 60
+        self._validate_eviction_settings()
 
         # Load .plexcached backup setting (default True for safety)
         self.cache.create_plexcached_backups = self.settings_data.get('create_plexcached_backups', True)
