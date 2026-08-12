@@ -942,13 +942,16 @@ def _setup_advanced_settings():
         print('=== When to Disable Backups ===')
         print('')
         print('Only disable if you have:')
-        print('  - Hard-linked files (from seeding/torrents or jdupes)')
-        print('    (FUSE cannot rename hard-linked files properly)')
         print('  - Mover Tuning with cache:prefer shares')
         print('    (.plexcached files could be moved back to cache)')
         print('')
+        print('Hard-linked files (seeding/torrents, jdupes) do not need this')
+        print('turned off. PlexCache deletes the array link for those files')
+        print('either way, so the seed copy is preserved.')
+        print('')
         print('  Yes - Create .plexcached backups (safer, recommended)')
-        print('  No  - Delete array files after caching (required for hard links)')
+        print('  No  - Delete array files after caching (no recovery if the')
+        print('        cache drive fails)')
         backup_choice = input('Create .plexcached backups? [Y/n] ') or 'yes'
         settings_data['create_plexcached_backups'] = backup_choice.lower() in ['y', 'yes']
 

@@ -920,7 +920,7 @@ class PlexCacheApp:
                             "CRITICAL: /mnt/user0 is not mounted but .plexcached backups are enabled. "
                             "Without /mnt/user0, file renames will operate through FUSE (/mnt/user/) "
                             "which can corrupt cached files. Add -v /mnt/user0:/mnt/user0 to your "
-                            "Docker configuration, or disable .plexcached backups in settings."
+                            "Docker configuration."
                         )
                     else:
                         logging.warning(
@@ -1813,22 +1813,21 @@ class PlexCacheApp:
         old_plexcached = find_matching_plexcached(old_array_dir, old_identity, old_path)
 
         if old_plexcached and os.path.isfile(old_plexcached):
-            # Delete outdated backup (content has been superseded by upgrade)
-            try:
-                os.remove(old_plexcached)
-                logging.info(f"[UPGRADE] Deleted outdated array backup: {os.path.basename(old_plexcached)} "
-                             f"(superseded by upgrade, rating_key={rating_key})")
-            except OSError as e:
-                logging.warning(f"[UPGRADE] Failed to delete old backup {os.path.basename(old_plexcached)}: "
-                                f"{type(e).__name__}: {e}")
-                return
+            # Create the replacement backup BEFORE removing the outdated one.
+            # Deleting first means an ENOSPC or permission error on the copy
+            # leaves the file with no backup at all, which is the one state
+            # this whole subsystem exists to prevent. Mirrors the ordering in
+            # CacheService._handle_upgrade_plexcached().
+            new_backup_ok = False
 
-            # Create new backup if setting enabled
             if self.config_manager.cache.backup_upgraded_files and new_cache_path:
                 new_array_path = get_array_direct_path(new_path)
                 new_plexcached = new_array_path + '.plexcached'
 
-                if not os.path.isfile(new_plexcached) and os.path.isfile(new_cache_path):
+                if os.path.isfile(new_plexcached):
+                    # Already there from an earlier run.
+                    new_backup_ok = True
+                elif os.path.isfile(new_cache_path):
                     try:
                         new_array_dir = os.path.dirname(new_array_path)
                         create_dir_with_ownership(new_array_dir, new_cache_path)
@@ -1839,12 +1838,28 @@ class PlexCacheApp:
                         if src_size == dst_size:
                             logging.info(f"[UPGRADE] Created new array backup: {os.path.basename(new_plexcached)} "
                                          f"({format_bytes(src_size)}, rating_key={rating_key})")
+                            new_backup_ok = True
                         else:
                             logging.warning(f"[UPGRADE] Backup size mismatch for {os.path.basename(new_plexcached)}: "
                                             f"source={src_size}, dest={dst_size}")
                             os.remove(new_plexcached)
                     except OSError as e:
                         logging.warning(f"[UPGRADE] Failed to create new backup: {type(e).__name__}: {e}")
+            else:
+                # No replacement wanted, so the old backup is merely outdated.
+                new_backup_ok = True
+
+            if new_backup_ok:
+                try:
+                    os.remove(old_plexcached)
+                    logging.info(f"[UPGRADE] Deleted outdated array backup: {os.path.basename(old_plexcached)} "
+                                 f"(superseded by upgrade, rating_key={rating_key})")
+                except OSError as e:
+                    logging.warning(f"[UPGRADE] Failed to delete old backup {os.path.basename(old_plexcached)}: "
+                                    f"{type(e).__name__}: {e}")
+            else:
+                logging.warning(f"[UPGRADE] Keeping old backup, new one could not be created: "
+                                f"{os.path.basename(old_plexcached)} (rating_key={rating_key})")
         else:
             logging.debug(f"[UPGRADE] No existing .plexcached backup found for {os.path.basename(old_path)}, "
                           f"skipping backup handling (rating_key={rating_key})")
