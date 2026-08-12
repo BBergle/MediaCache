@@ -830,12 +830,40 @@ class LoggingManager:
             self.logger.setLevel(logging.INFO)
     
     def _clean_old_log_files(self) -> None:
-        """Clean old log files to maintain the maximum count."""
+        """Clean old log files to maintain the maximum count.
+
+        Also removes rotation backups whose log file has been cleaned up.
+        Each run writes its own timestamped file, so RotatingFileHandler only
+        rolls over when a single run exceeds maxBytes, and the backup it leaves
+        is named ``plexcache_log_<stamp>.log.1``. That does not match the
+        ``*.log`` glob above, so nothing in the product removed them.
+
+        Tying a backup's lifetime to its base file keeps one rule rather than
+        two: when the run's log goes, its overflow goes with it.
+        """
         existing_log_files = list(self.logs_folder.glob(self.log_file_pattern))
         existing_log_files.sort(key=lambda x: x.stat().st_mtime)
-        
+
         while len(existing_log_files) > self.max_log_files:
             os.remove(existing_log_files.pop(0))
+
+        kept = {p.name for p in existing_log_files}
+        orphaned = 0
+        for backup in self.logs_folder.glob(f"{self.log_file_pattern}.*"):
+            # Only numeric rollover suffixes: .log.1, .log.2, ...
+            if not backup.suffix[1:].isdigit():
+                continue
+            if backup.with_suffix("").name in kept:
+                continue
+            try:
+                os.remove(backup)
+                orphaned += 1
+            except OSError:
+                pass
+
+        if orphaned:
+            logging.info(f"[LOGS] Removed {orphaned} rotation backup file(s) "
+                         f"left by oversized runs")
     
     def setup_notification_handlers(self, notification_config, is_unraid: bool, is_docker: bool) -> None:
         """Set up notification handlers based on configuration."""

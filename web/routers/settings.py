@@ -337,16 +337,31 @@ def save_user_settings(request: Request, form_data: ImmutableMultiDict = Depends
             try:
                 user["days_to_monitor"] = int(ondeck_days_str)
             except ValueError:
+                # Dropping the override falls back to the global default, which
+                # looks identical to never having set one. Say so.
                 user.pop("days_to_monitor", None)
+                logger.warning(
+                    "Per-user Days to Monitor for '%s' could not be read as a whole "
+                    "number ('%s'); using the global default for that user.",
+                    title, ondeck_days_str
+                )
         else:
             user.pop("days_to_monitor", None)
 
         watchlist_days_str = form_data.get(f"watchlist_days_{title}", "").strip()
         if watchlist_days_str:
             try:
-                user["watchlist_retention_days"] = int(watchlist_days_str)
+                # float, not int: the global is a float and the input offers
+                # step="0.5", so int() rejected every half-day value the form
+                # invites (core/config.py casts the per-user value with float()).
+                user["watchlist_retention_days"] = float(watchlist_days_str)
             except ValueError:
                 user.pop("watchlist_retention_days", None)
+                logger.warning(
+                    "Per-user Watchlist Retention for '%s' could not be read as a "
+                    "number ('%s'); using the global default for that user.",
+                    title, watchlist_days_str
+                )
         else:
             user.pop("watchlist_retention_days", None)
 
