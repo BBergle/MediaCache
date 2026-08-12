@@ -746,8 +746,12 @@ class MaintenanceService:
         # Find stale exclude entries (in exclude but not on cache)
         results.stale_exclude_entries = sorted(list(exclude_files - cache_files))
 
-        # Check if stale entries are actually media upgrades (Sonarr/Radarr file swaps)
-        if results.stale_exclude_entries:
+        # Check if stale entries are actually media upgrades (Sonarr/Radarr file swaps).
+        # Honours auto_transfer_upgrades: the audit runs on a schedule, so this is
+        # the automatic behaviour the setting names. The manual endpoint
+        # (POST /api/check-upgrades) stays available either way, since clicking it
+        # is an explicit request rather than something happening on its own.
+        if results.stale_exclude_entries and self._load_settings().get('auto_transfer_upgrades', True):
             try:
                 from web.services.cache_service import get_cache_service
                 cache_service = get_cache_service()
