@@ -907,53 +907,14 @@ def _setup_advanced_settings():
         settings_data['cache_limit'] = cache_limit
 
     # .plexcached Backup Files
+    #
+    # No longer prompted for. Backups are how a cached file survives a cache
+    # drive failure, and the only reason to turn them off (Mover Tuning on a
+    # cache:prefer share) is narrow enough that it does not belong in the
+    # first-run path. It stays configurable in Settings > Cache, where the copy
+    # states the consequence. Defaults on, as it always did.
     if 'create_plexcached_backups' not in settings_data:
-        print('\n--- Backup Settings ---')
-        print('When caching files, PlexCache can create .plexcached backups on the array.')
-        print('')
-        print('=== How Caching Works ===')
-        print('')
-        print('With backups ENABLED (default, recommended):')
-        print('  1. File is copied from array to cache drive')
-        print('  2. Array file is renamed to .plexcached (preserves backup on array)')
-        print('  3. File path is added to exclude list (prevents Unraid mover conflicts)')
-        print('  4. Files are removed from cache when:')
-        print('     - "Move watched files" is enabled AND content is watched, OR')
-        print('     - "Cache eviction" is enabled AND cache is full')
-        print('  5. On removal: .plexcached is renamed back to original (fast, no copy)')
-        print('  6. If cache drive fails: run --restore-plexcached to recover all files')
-        print('')
-        print('With backups DISABLED:')
-        print('  1. File is copied from array to cache drive')
-        print('  2. Array file is DELETED (no backup exists)')
-        print('  3. File path is added to exclude list')
-        print('  4. Files are removed from cache when:')
-        print('     - "Move watched files" is enabled AND content is watched, OR')
-        print('     - "Cache eviction" is enabled AND cache is full')
-        print('  5. On removal: file must be copied back to array (slower)')
-        print('  6. If cache drive fails: FILES ARE PERMANENTLY LOST')
-        print('')
-        print('=== Important Notes ===')
-        print('')
-        print('- The exclude list is managed automatically by PlexCache')
-        print('- You should enable "Move watched files" OR "Cache eviction" (or both)')
-        print('  to prevent cache from filling up indefinitely')
-        print('')
-        print('=== When to Disable Backups ===')
-        print('')
-        print('Only disable if you have:')
-        print('  - Mover Tuning with cache:prefer shares')
-        print('    (.plexcached files could be moved back to cache)')
-        print('')
-        print('Hard-linked files (seeding/torrents, jdupes) do not need this')
-        print('turned off. PlexCache deletes the array link for those files')
-        print('either way, so the seed copy is preserved.')
-        print('')
-        print('  Yes - Create .plexcached backups (safer, recommended)')
-        print('  No  - Delete array files after caching (no recovery if the')
-        print('        cache drive fails)')
-        backup_choice = input('Create .plexcached backups? [Y/n] ') or 'yes'
-        settings_data['create_plexcached_backups'] = backup_choice.lower() in ['y', 'yes']
+        settings_data['create_plexcached_backups'] = True
 
     # Hard-linked Files Handling
     if 'hardlinked_files' not in settings_data:

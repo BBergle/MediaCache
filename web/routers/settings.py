@@ -950,6 +950,23 @@ def save_cache_settings(request: Request, form_data: ImmutableMultiDict = Depend
     success = settings_service.save_cache_settings(settings_dict)
 
     if success:
+        # Eviction sizes itself as a percentage of Cache Limit, so with no limit
+        # set it is fully configured and will never evict anything. Saved rather
+        # than refused — setting the two in either order is reasonable — but said
+        # now, on the page, instead of only in the log on the next run.
+        saved = settings_service.get_cache_settings()
+        inert_eviction = (saved.get("cache_eviction_mode", "none") != "none"
+                          and not str(saved.get("cache_limit", "")).strip())
+        if inert_eviction:
+            return templates.TemplateResponse(
+                request,
+                "partials/alert.html",
+                {
+                    "type": "warning",
+                    "message": ("Saved, but cache eviction has nothing to measure: "
+                                "set a Cache Limit, or nothing will ever be evicted.")
+                }
+            )
         return templates.TemplateResponse(
             request,
             "partials/alert.html",

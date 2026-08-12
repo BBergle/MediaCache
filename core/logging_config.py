@@ -673,6 +673,12 @@ class WebhookHandler(logging.Handler):
         return {"content": message, "text": message}
 
 
+# How many 20MB rollovers a single run may leave behind. Separate from
+# max_log_files, which counts whole runs: one pathological run should not be
+# able to occupy the entire log budget.
+ROTATION_BACKUPS_PER_RUN = 2
+
+
 class LoggingManager:
     """Manages logging configuration and setup."""
 
@@ -781,7 +787,11 @@ class LoggingManager:
         file_handler = RotatingFileHandler(
             log_file,
             maxBytes=20*1024*1024,
-            backupCount=self.max_log_files
+            # Not max_log_files: that setting counts *runs* to keep, and each run
+            # writes its own timestamped file. Reusing it here let a single
+            # oversized run keep as many 20MB backups as the user wanted whole
+            # logs. A small constant bounds one run's overflow instead.
+            backupCount=ROTATION_BACKUPS_PER_RUN
         )
         file_handler.setFormatter(log_format)
         file_handler.addFilter(VerboseMessageFilter())  # Apply filter to handler

@@ -153,7 +153,7 @@ _INDEX: List[Dict[str, Any]] = [
     {
         "tab": "cache", "setting_id": "days_to_monitor",
         "label": "Days to Monitor",
-        "hint": "How far back to check OnDeck for recently watched items.",
+        "hint": "How far back to check OnDeck for recently watched items. A per-user override also sets that user's OnDeck retention threshold.",
         "section": "Cache", "subsection": "Content Discovery",
         "icon": "clock", "tone": "tone-ok",
         "keywords": ["days", "monitor", "ondeck", "window", "lookback", "history", "range"],
@@ -221,7 +221,7 @@ _INDEX: List[Dict[str, Any]] = [
     {
         "tab": "cache", "setting_id": "ondeck_retention_days",
         "label": "OnDeck Retention (days)",
-        "hint": "Auto-expire OnDeck items after this period (0 = never).",
+        "hint": "Stop holding an item on cache once every user who has it OnDeck has had it this long (0 = never). Moves it back later, does not delete it.",
         "section": "Cache", "subsection": "Retention",
         "icon": "clock", "tone": "tone-info",
         "keywords": ["ondeck", "retention", "expire", "days", "cleanup"],
@@ -278,8 +278,8 @@ _INDEX: List[Dict[str, Any]] = [
     },
     {
         "tab": "cache", "setting_id": "hardlinked_files",
-        "label": "Hardlinked Files Handling",
-        "hint": "Files with multiple hardlinks (e.g., seeding torrents). Skip preserves links; Move copies.",
+        "label": "Files you are seeding",
+        "hint": "Files shared with your torrent client. Leave them on the array until seeding finishes, or cache them anyway.",
         "section": "Cache", "subsection": "File Handling",
         "icon": "link", "tone": "tone-warn",
         "keywords": ["hardlink", "hardlinks", "torrent", "seeding", "links"],
