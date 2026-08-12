@@ -335,6 +335,10 @@ def parse_size_bytes(size_str: str) -> int:
         else:
             return int(float(size_str) * 1024**3)  # Default to GB
     except ValueError:
+        # 0 means "no limit" to every caller, so an unparseable value silently
+        # removes the cap the user thought they set. Say so; callers that can
+        # name the setting add their own message on top.
+        logging.warning(f"Could not read '{size_str}' as a size. Expected e.g. 500GB, 1.5T or 250. Treating as unset.")
         return 0
 
 

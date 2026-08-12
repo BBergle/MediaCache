@@ -1591,13 +1591,20 @@ class PlexCacheApp:
                         plex_path_to_info[file_path] = episode_info
 
                     if rss_expired_count > 0:
+                        # Stays DEBUG: this is a per-source breakdown that is
+                        # folded into expired_count and reported by the INFO
+                        # summary below. Promoting it would report twice.
                         expired_count += rss_expired_count
                         logging.debug(f"Skipped {rss_expired_count} RSS watchlist items due to retention expiry")
                 except Exception as e:
                     logging.error(f"Failed to fetch remote watchlist via RSS: {str(e)}")
 
             if expired_count > 0:
-                logging.debug(f"Skipped {expired_count} watchlist items due to retention expiry ({retention_days} days)")
+                # INFO, matching the OnDeck twin above: items dropping out of
+                # the watchlist is a user-visible outcome, not operational
+                # detail, and at DEBUG the only sign was media quietly not
+                # being cached.
+                logging.info(f"[FILTER] Skipped {expired_count} watchlist items due to retention expiry ({retention_days} days)")
 
             # Log watchlist summary (show unique item count - raw counts include duplicates across users)
             total_watchlist = len(result_set)

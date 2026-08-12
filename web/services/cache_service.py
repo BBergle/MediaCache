@@ -1168,9 +1168,14 @@ class CacheService:
 
         # Files nearing watchlist expiration
         # Show files within N days of expiring OR already expired (still on cache)
-        watchlist_retention_days = settings.get("watchlist_retention_days", 14)
+        # 0 means retention is off, so nothing expires. Without this the
+        # subtraction below made days_remaining negative for every watchlist
+        # file and listed them all as already expired. The default matches
+        # core rather than inventing 14 days for someone who never set it.
+        watchlist_retention_days = settings.get(
+            "watchlist_retention_days", CacheConfig.watchlist_retention_days)
         expiring_soon = []
-        for f in all_files:
+        for f in all_files if watchlist_retention_days else []:
             if f.is_watchlist:
                 # Find watchlist entry to get watchlisted_at date
                 for plex_path, info in watchlist.items():
