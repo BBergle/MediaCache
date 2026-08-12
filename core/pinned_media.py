@@ -559,8 +559,14 @@ def get_active_cache_total_bytes(settings: Dict[str, Any]) -> int:
     Returns 0 if no active cache mapping has a probeable size, which degrades
     percent values to 0 (disabling the budget guard). Soft-fail by design —
     the budget is an optional safety net, not a hard invariant.
+
+    Honours the ``cache_drive_size`` override, which exists because ZFS reports
+    a dataset's size rather than the pool's. Without it a percent-based budget
+    here resolves against a different total than the engine uses.
     """
-    from core.system_utils import get_disk_usage
+    from core.system_utils import get_disk_usage, parse_size_bytes
+
+    override = parse_size_bytes(settings.get("cache_drive_size", "")) or 0
     mappings = settings.get("path_mappings", [])
     if not isinstance(mappings, list):
         return 0
@@ -573,7 +579,7 @@ def get_active_cache_total_bytes(settings: Dict[str, Any]) -> int:
         if not cache_path:
             continue
         try:
-            disk = get_disk_usage(cache_path)
+            disk = get_disk_usage(cache_path, override)
             if disk and getattr(disk, "total", 0) > 0:
                 return int(disk.total)
         except Exception:
@@ -671,20 +677,37 @@ def compute_budget_state(
     min_free_space_bytes: int,
     current_pinned_bytes: int,
     additional_bytes: int = 0,
+    plexcache_quota_bytes: int = 0,
 ) -> Dict[str, Any]:
     """Compute the pinned-bytes budget state — pure math, no side effects.
 
-    ``effective_budget = max(0, cache_limit - min_free_space)`` unless
-    ``cache_limit`` is 0 (budget disabled). When disabled, ``over_budget`` and
+    Two possible ceilings, and the tighter one wins:
+
+    * ``plexcache_quota`` bounds what PlexCache may hold. It is the natural
+      ceiling here, because ``current_pinned_bytes`` is also a count of
+      PlexCache-managed files. Comparing pinned bytes against a whole-drive
+      limit measures one thing against a denominator that includes everything
+      else on the drive.
+    * ``cache_limit - min_free_space`` is that whole-drive ceiling. Kept as the
+      fallback so an install that sets only those two keeps today's guard.
+
+    When neither is set the budget is disabled, and ``over_budget`` and
     ``would_exceed`` are always False — the guard never hard-blocks without an
     explicit limit.
     """
-    effective_budget = max(0, cache_limit_bytes - min_free_space_bytes) if cache_limit_bytes > 0 else 0
+    ceilings = []
+    if plexcache_quota_bytes > 0:
+        ceilings.append(plexcache_quota_bytes)
+    if cache_limit_bytes > 0:
+        ceilings.append(max(0, cache_limit_bytes - min_free_space_bytes))
+
+    effective_budget = min(ceilings) if ceilings else 0
     over_budget = bool(effective_budget) and current_pinned_bytes > effective_budget
     would_exceed = bool(effective_budget) and (current_pinned_bytes + additional_bytes) > effective_budget
     return {
         "total_pinned_bytes": current_pinned_bytes,
         "budget_bytes": cache_limit_bytes,
+        "quota_bytes": plexcache_quota_bytes,
         "effective_budget_bytes": effective_budget,
         "headroom_bytes": min_free_space_bytes,
         "additional_bytes": additional_bytes,
