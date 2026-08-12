@@ -3,6 +3,10 @@
 from typing import Optional, List
 from pydantic import BaseModel, Field
 
+# Defaults come from core's dataclass rather than repeated literals: the engine
+# reads CacheConfig, so anything hardcoded here can disagree with what runs.
+from core.config import CacheConfig
+
 
 class PathMappingModel(BaseModel):
     """Single path mapping configuration"""
@@ -34,13 +38,13 @@ class CacheSettingsModel(BaseModel):
     watched_move: bool = True
     remote_watchlist_toggle: bool = False
     remote_watchlist_rss_url: str = ""
-    cache_retention_hours: int = 12
-    watchlist_retention_days: float = 14.0
-    ondeck_retention_days: float = 0
-    cache_limit: str = "250GB"
-    cache_eviction_mode: str = "smart"
-    cache_eviction_threshold_percent: int = 90
-    eviction_min_priority: int = 60
+    cache_retention_hours: int = CacheConfig.cache_retention_hours
+    watchlist_retention_days: float = CacheConfig.watchlist_retention_days
+    ondeck_retention_days: float = CacheConfig.ondeck_retention_days
+    cache_limit: str = CacheConfig.cache_limit
+    cache_eviction_mode: str = CacheConfig.cache_eviction_mode
+    cache_eviction_threshold_percent: int = CacheConfig.cache_eviction_threshold_percent
+    eviction_min_priority: int = CacheConfig.eviction_min_priority
 
 
 class NotificationSettingsModel(BaseModel):

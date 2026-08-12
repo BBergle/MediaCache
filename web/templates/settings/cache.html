@@ -300,7 +300,7 @@
                     <label for="cache_limit">Cache Limit</label>
                     <input type="text" id="cache_limit" name="cache_limit"
                            class="input-medium"
-                           value="{{ settings.cache_limit | default('250GB') }}"
+                           value="{{ settings.cache_limit | default('') }}"
                            placeholder="500GB or 75%"
                            oninput="updateCacheCalculations()">
                     <div class="form-hint">Maximum <strong>total drive usage</strong> before PlexCache stops caching (e.g., 500GB or 75%). Includes all files on the drive, not just PlexCache-managed files. Leave empty for no cap.</div>

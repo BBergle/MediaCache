@@ -11,6 +11,9 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 
 from web.config import DATA_DIR, CONFIG_DIR, SETTINGS_FILE
+# Defaults come from core's dataclass rather than repeated literals: the engine
+# reads CacheConfig, so anything hardcoded here can disagree with what runs.
+from core.config import CacheConfig
 from core.system_utils import get_disk_usage, detect_zfs, get_array_direct_path, parse_size_bytes, format_bytes, translate_container_to_host_path, translate_host_to_container_path, remove_from_exclude_file, remove_from_timestamps_file, create_dir_with_ownership, cleanup_empty_parent_folders, resolve_cache_boundary
 from core.file_operations import get_media_identity, find_matching_plexcached, save_json_atomically, SUBTITLE_EXTENSIONS, is_video_file
 
@@ -901,7 +904,7 @@ class CacheService:
         eviction_over_threshold = False
         eviction_over_by = 0
         eviction_over_by_display = None
-        eviction_mode = settings.get("cache_eviction_mode", "none")
+        eviction_mode = settings.get("cache_eviction_mode", CacheConfig.cache_eviction_mode)
         cache_limit_bytes = 0
 
         if eviction_mode != "none" and disk_total > 0:
@@ -929,7 +932,7 @@ class CacheService:
                     logging.warning(f"Could not parse cache_limit '{cache_limit_setting}': {e}")
 
             if cache_limit_bytes > 0:
-                eviction_threshold_percent = settings.get("cache_eviction_threshold_percent", 95)
+                eviction_threshold_percent = settings.get("cache_eviction_threshold_percent", CacheConfig.cache_eviction_threshold_percent)
                 eviction_threshold_bytes = int(cache_limit_bytes * eviction_threshold_percent / 100)
 
                 if disk_used > eviction_threshold_bytes:
@@ -1006,7 +1009,7 @@ class CacheService:
         configured_limit_percent = 0
         if cache_limit_bytes > 0:
             configured_limit_display = format_bytes(cache_limit_bytes)
-            eviction_threshold_percent = settings.get("cache_eviction_threshold_percent", 95)
+            eviction_threshold_percent = settings.get("cache_eviction_threshold_percent", CacheConfig.cache_eviction_threshold_percent)
             eviction_threshold_bytes_val = int(cache_limit_bytes * eviction_threshold_percent / 100)
             eviction_threshold_display = format_bytes(eviction_threshold_bytes_val)
             if disk_total > 0:
@@ -1246,7 +1249,7 @@ class CacheService:
                 plexcache_quota_warning = True
 
         # Calculate eviction threshold (for visual display)
-        eviction_threshold_setting = settings.get("cache_eviction_threshold_percent", 95)
+        eviction_threshold_setting = settings.get("cache_eviction_threshold_percent", CacheConfig.cache_eviction_threshold_percent)
         eviction_threshold_bytes = 0
         eviction_threshold_display = None
         eviction_threshold_percent_of_drive = 0
@@ -1281,7 +1284,7 @@ class CacheService:
             cache_bar_status = "safe"
 
         # Configuration
-        eviction_mode = settings.get("cache_eviction_mode", "none")
+        eviction_mode = settings.get("cache_eviction_mode", CacheConfig.cache_eviction_mode)
         # Use display path (host path) for UI, not container path
         display_cache_dir = self._get_cache_dir_for_display(settings)
         config = {
@@ -1292,8 +1295,8 @@ class CacheService:
             "number_episodes": settings.get("number_episodes", 5),
             "eviction_mode": eviction_mode,
             "eviction_enabled": eviction_mode != "none",
-            "eviction_threshold_percent": settings.get("cache_eviction_threshold_percent", 95),
-            "eviction_min_priority": settings.get("eviction_min_priority", 60)
+            "eviction_threshold_percent": settings.get("cache_eviction_threshold_percent", CacheConfig.cache_eviction_threshold_percent),
+            "eviction_min_priority": settings.get("eviction_min_priority", CacheConfig.eviction_min_priority)
         }
 
         return {
@@ -1536,9 +1539,9 @@ class CacheService:
         }
 
         # Eviction settings and current status
-        eviction_mode = settings.get("cache_eviction_mode", "none")
-        eviction_threshold = settings.get("cache_eviction_threshold_percent", 95)
-        eviction_min_priority = settings.get("eviction_min_priority", 60)
+        eviction_mode = settings.get("cache_eviction_mode", CacheConfig.cache_eviction_mode)
+        eviction_threshold = settings.get("cache_eviction_threshold_percent", CacheConfig.cache_eviction_threshold_percent)
+        eviction_min_priority = settings.get("eviction_min_priority", CacheConfig.eviction_min_priority)
 
         # Calculate current drive usage (use path_mappings cache_path for consistency)
         cache_dir = self._get_cache_dir(settings)
