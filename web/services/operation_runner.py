@@ -91,6 +91,14 @@ class OperationResult:
     cumulative_bytes_copied: int = 0
     cumulative_bytes_total: int = 0
     _prev_batch_cumulative: int = 0  # internal: snapshot at batch start
+    # Best sustained transfer rate seen this run, in bytes/sec. Copy time is
+    # bytes/rate PLUS a fixed cost per file (open, verify, chown, tracker
+    # write), so the batch average conflates the two and reads high while big
+    # files dominate. Tracking the peak separates them: the residual between
+    # elapsed and bytes/peak_rate is what the per-file cost has to explain.
+    peak_byte_rate: float = 0.0
+    _rate_last_time: Optional[float] = None
+    _rate_last_bytes: int = 0
 
 
 class WebLogHandler(logging.Handler):
@@ -1038,14 +1046,28 @@ class OperationRunner:
             def _bytes_cb(bytes_copied: int, bytes_total: int):
                 with self._lock:
                     r = self._current_result
+                    now = time.time()
                     if bytes_copied == 0:
                         # New batch starting — snapshot cumulative progress
-                        r.batch_copy_start_time = time.time()
+                        r.batch_copy_start_time = now
                         r._prev_batch_cumulative = r.cumulative_bytes_copied
                         r.cumulative_bytes_total = r._prev_batch_cumulative + bytes_total
+                        r._rate_last_time = now
+                        r._rate_last_bytes = 0
                     r.batch_bytes_copied = bytes_copied
                     r.batch_bytes_total = bytes_total
                     r.cumulative_bytes_copied = r._prev_batch_cumulative + bytes_copied
+
+                    # Sample the sustained rate over >=2s windows. Shorter ones
+                    # are dominated by scheduling noise and would inflate the
+                    # peak, which then hides the per-file cost in the ETA.
+                    if r._rate_last_time is not None:
+                        dt = now - r._rate_last_time
+                        db = bytes_copied - r._rate_last_bytes
+                        if dt >= 2.0 and db > 0:
+                            r.peak_byte_rate = max(r.peak_byte_rate, db / dt)
+                            r._rate_last_time = now
+                            r._rate_last_bytes = bytes_copied
 
             # Create and run the app
             app = PlexCacheApp(
@@ -1328,6 +1350,50 @@ class OperationRunner:
         self._current_run_files = rebuilt
 
     @staticmethod
+    def _estimate_remaining_seconds(*, elapsed: float, bytes_done: int,
+                                    bytes_remaining: int, files_done: int,
+                                    files_remaining: int,
+                                    peak_rate: float) -> Optional[float]:
+        """Seconds left, priced per byte and per file.
+
+        A pure bytes/second model assumes every remaining byte costs the same
+        as the ones already copied. That holds while the queue is video files
+        and breaks at the tail, where artwork and NFOs are thousands of times
+        smaller but still cost a copy, a size verify, a chown and a tracker
+        write each. The estimate then reads far too low exactly when a user is
+        watching it, and the run appears stuck near the end.
+
+        Two terms instead:
+
+            remaining = bytes_remaining / rate + files_remaining * per_file
+
+        ``rate`` is the best sustained rate seen, which is the throughput of
+        bulk transfer with per-file costs mostly excluded. Whatever elapsed
+        time that does not explain is attributed to the files completed so
+        far, giving ``per_file``. Both are measured from this run, so a slow
+        array or a busy mover is reflected without any tuning constant.
+
+        Falls back to the plain byte rate when there is not enough to fit,
+        and returns None when there is nothing to estimate from.
+        """
+        if elapsed <= 0 or bytes_done <= 0:
+            return None
+
+        average_rate = bytes_done / elapsed
+        rate = peak_rate if peak_rate > average_rate else average_rate
+        if rate <= 0:
+            return None
+
+        # Time the bytes alone cannot account for is per-file cost.
+        per_file = 0.0
+        if files_done > 0:
+            unexplained = elapsed - (bytes_done / rate)
+            if unexplained > 0:
+                per_file = unexplained / files_done
+
+        return (bytes_remaining / rate) + (files_remaining * per_file)
+
+    @staticmethod
     def _synthetic_sidecar_parent(key: tuple, entries: list) -> dict:
         """A header row for sidecars whose parent video was not part of this run.
 
@@ -1459,14 +1525,22 @@ class OperationRunner:
                 status["progress_percent"] = min(int(cumul_copied / cumul_total * 100), 100)
                 status["bytes_display"] = f"{self._format_bytes(cumul_copied)} / {self._format_bytes(cumul_total)}"
 
-                # ETA from current batch byte rate
+                status["has_byte_progress"] = True
+
+                # ETA from the batch, priced per byte AND per file.
                 if result.batch_bytes_copied > 0 and result.batch_copy_start_time:
                     copy_elapsed = time.time() - result.batch_copy_start_time
                     if copy_elapsed > 0:
-                        rate = result.batch_bytes_copied / copy_elapsed
-                        remaining = cumul_total - cumul_copied
-                        if rate > 0:
-                            status["eta_display"] = self._format_duration(remaining / rate)
+                        eta = self._estimate_remaining_seconds(
+                            elapsed=copy_elapsed,
+                            bytes_done=result.batch_bytes_copied,
+                            bytes_remaining=max(0, cumul_total - cumul_copied),
+                            files_done=completed_files,
+                            files_remaining=max(0, total_files - completed_files),
+                            peak_rate=result.peak_byte_rate,
+                        )
+                        if eta is not None:
+                            status["eta_display"] = self._format_duration(eta)
 
             # Recent log messages (last 5) for hover mini-log
             # Files completed so far in this run for detail panel

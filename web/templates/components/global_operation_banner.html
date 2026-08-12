@@ -829,11 +829,17 @@ function dismissMaintCompletionBanner() {
         </div>
         {% if status.total_files is defined and status.total_files > 0 %}
         <div class="di-progress-track"><div class="di-progress-fill" style="width: {{ status.progress_percent }}%;"></div></div>
+        {#- The bar and the ETA are both byte-based, so bytes lead. Showing the
+            file count first made them disagree: 43/199 files reads as a fifth
+            done while the same moment was 60% of the bytes, which made a
+            correct "9m left" look impossible. -#}
         <div class="di-progress-meta">
-            <span>{{ status.completed_files }}/{{ status.total_files }} file{{ 's' if status.total_files != 1 }}
+            <span>
+                {%- if status.has_byte_progress and status.bytes_display %}{{ status.bytes_display }}
+                {%- else %}{{ status.completed_files }}/{{ status.total_files }} file{{ 's' if status.total_files != 1 }}{% endif %}
                 {%- if status.last_completed_file %} &mdash; {{ status.last_completed_file|truncate(35, True, '...') }}{% endif %}</span>
             <span class="di-progress-meta__right">
-                {%- if status.bytes_display %}{{ status.bytes_display }} &middot; {% endif %}
+                {%- if status.has_byte_progress %}{{ status.completed_files }}/{{ status.total_files }} file{{ 's' if status.total_files != 1 }} &middot; {% endif %}
                 {{- status.elapsed_display }}
                 {%- if status.eta_display %} | ~{{ status.eta_display }} left{% endif %}</span>
         </div>
