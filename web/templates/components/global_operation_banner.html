@@ -860,7 +860,14 @@ function dismissMaintCompletionBanner() {
             <div class="di-divider"></div>
             {%- for f in status.recent_files %}
             <div class="di-file-row">
+                {#- A sidecars-only header names the video so its extras can be
+                    attributed, but the video did not move. Its own action badge
+                    would say otherwise, so it gets a neutral one instead. -#}
+                {% if f.sidecars_only is defined and f.sidecars_only %}
+                <span class="di-action-tag" title="Only this title's associated files moved. The video was already in place.">EXTRAS</span>
+                {% else %}
                 <span class="di-action-tag {{ 'di-action-tag--cached' if f.action == 'Cached' else 'di-action-tag--restored' }}">{{ f.action|upper }}</span>
+                {% endif %}
                 <span class="di-file-row__name" title="{{ f.filename }}">{{ f.filename|truncate_filename(55) }}</span>
                 {% if f.size and f.size != '-' %}<span class="di-file-row__size">{{ f.size }}</span>{% endif %}
                 {% if f.associated_files is defined and f.associated_files %}<span class="di-file-row__assoc-badge">+{{ f.associated_files|length }}</span>{% endif %}

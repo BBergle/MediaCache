@@ -123,6 +123,10 @@ class FileActivity:
     # (treated as legacy, bucketed by 15-min time windows by activity_grouping).
     run_id: Optional[str] = None
     run_source: str = "legacy"  # "scheduled" | "web" | "cli" | "maintenance" | "legacy"
+    # True when this row is a header gathering a title's associated files and the
+    # video itself did not move. Without it the action badge sits beside a .mkv
+    # name and reads as though the video was copied.
+    sidecars_only: bool = False
 
     def to_dict(self, time_format: Optional[str] = None) -> dict:
         """Serialize for the dashboard/API.
@@ -166,6 +170,8 @@ class FileActivity:
         }
         if self.associated_files:
             result["associated_files"] = self.associated_files
+        if self.sidecars_only:
+            result["sidecars_only"] = True
         return result
 
     def _format_size(self, size_bytes: int) -> str:
@@ -205,6 +211,7 @@ def _load_activity_unlocked() -> List[FileActivity]:
                         associated_files=item.get('associated_files', []),
                         run_id=item.get('run_id'),
                         run_source=item.get('run_source', 'legacy'),
+                        sidecars_only=item.get('sidecars_only', False),
                     ))
             except (KeyError, ValueError):
                 continue  # Skip malformed entries
@@ -243,6 +250,8 @@ def _save_activity_unlocked(activities: List[FileActivity]) -> None:
                     entry['run_id'] = activity.run_id
                 if activity.run_source and activity.run_source != "legacy":
                     entry['run_source'] = activity.run_source
+                if activity.sidecars_only:
+                    entry['sidecars_only'] = True
                 data.append(entry)
 
         save_json_atomically(str(ACTIVITY_FILE), data, label="activity")

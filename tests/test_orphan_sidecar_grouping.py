@@ -143,3 +143,55 @@ class TestSidecarsWithoutTheirVideo:
 
         actions = sorted(f["action"] for f in runner._current_run_files)
         assert actions == ["Cached", "Restored"], actions
+
+
+class TestTheHeaderDoesNotClaimTheVideoMoved:
+    """The header names a .mkv that was never copied — the badge must say so."""
+
+    def test_run_file_header_is_flagged(self):
+        files = [_sidecar(f"{STEM}-poster.jpg"), _sidecar(f"{STEM}.nfo")]
+        runner = _runner(list(files))
+
+        runner._merge_run_files(_parent_map(*[f["filename"] for f in files]), _COMPATIBLE)
+
+        assert runner._current_run_files[0]["sidecars_only"] is True
+
+    def test_activity_entries_round_trip_the_flag(self):
+        """It is persisted, so a reload must not turn it back into a Cached row."""
+        from core.activity import FileActivity
+
+        entry = FileActivity(timestamp=datetime.now(), action="Cached",
+                             filename=MOVIE, size_bytes=0, sidecars_only=True)
+
+        assert entry.to_dict().get("sidecars_only") is True
+
+    def test_normal_rows_carry_no_flag(self):
+        from core.activity import FileActivity
+
+        entry = FileActivity(timestamp=datetime.now(), action="Cached",
+                             filename=MOVIE, size_bytes=1024)
+
+        assert "sidecars_only" not in entry.to_dict()
+
+    def test_banner_renders_a_neutral_tag(self):
+        """Not the green CACHED tag, which would claim the video was copied."""
+        import pathlib, re
+        html = (pathlib.Path(__file__).resolve().parent.parent / "web" / "templates" /
+                "components" / "global_operation_banner.html").read_text(encoding="utf-8")
+
+        assert "f.sidecars_only" in html
+        # Only the truthy branch — the else branch legitimately styles real rows.
+        branch = html[html.index("f.sidecars_only"):]
+        branch = branch[:branch.index("{% else %}")]
+        assert "EXTRAS" in branch
+        assert "di-action-tag--cached" not in branch, (
+            "the sidecars-only header must not use the cached styling"
+        )
+
+    def test_activity_feed_renders_a_neutral_badge(self):
+        import pathlib
+        html = (pathlib.Path(__file__).resolve().parent.parent / "web" / "templates" /
+                "components" / "recent_activity.html").read_text(encoding="utf-8")
+
+        assert "entry.sidecars_only" in html
+        assert "Extras only" in html

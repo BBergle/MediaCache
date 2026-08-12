@@ -1245,6 +1245,7 @@ class OperationRunner:
                                 users=list(first.users),
                                 run_id=first.run_id,
                                 run_source=first.run_source,
+                                sidecars_only=True,
                                 associated_files=[{
                                     "filename": activities[j].filename,
                                     "size": (format_bytes(activities[j].size_bytes)
