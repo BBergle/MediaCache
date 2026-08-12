@@ -117,10 +117,25 @@ class TestInputsRejectDeadValues:
         tag = re.search(r'<input[^>]*?name="eviction_min_priority"[^>]*?>', html, re.S)
 
         assert tag, "eviction_min_priority input not found"
-        assert 'min="{{ priority_range.watchlist_min }}"' in tag.group(0), (
+        assert "priority_range.watchlist_min" in tag.group(0), (
             "the input should take its floor from the same constant the hint shows, "
             f"not a literal (currently {PRIORITY_RANGE_WATCHLIST_MIN})"
         )
+
+    def test_web_input_floor_applies_only_to_smart_mode(self):
+        """The form is hx-put, so HTML5 validation blocks the whole tab.
+
+        A leftover low threshold with eviction off harms nothing, and refusing
+        to save every other cache setting until it is corrected would be a
+        worse outcome than the dead value it guards against.
+        """
+        html = (REPO / "web" / "templates" / "settings" / "cache.html").read_text(encoding="utf-8")
+        tag = re.search(r'<input[^>]*?name="eviction_min_priority"[^>]*?>', html, re.S)
+
+        assert "cache_eviction_mode == 'smart'" in tag.group(0), (
+            "the floor should be conditional on smart eviction being active"
+        )
+        assert "else 0" in tag.group(0), "no floor when eviction is not smart"
 
     def test_wizard_clamps_below_floor_values(self):
         """New setups have no stored behaviour to preserve, so clamping is safe."""
