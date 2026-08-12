@@ -42,6 +42,11 @@ from core.activity import (
 
 SETTINGS_FILE = CONFIG_SETTINGS_FILE
 
+# Sidecars whose parent video is not in the run are gathered under a header row
+# naming that video. Two is the threshold: grouping a lone sidecar would turn one
+# row into two without telling the reader anything its own filename does not.
+_ORPHAN_GROUP_MIN = 2
+
 
 class OperationState(str, Enum):
     """Operation states"""
@@ -1187,25 +1192,67 @@ class OperationRunner:
                     parent_index[key] = i
 
             merged_indices: set = set()
+            orphans: Dict[tuple, list] = {}
+            orphan_key_at: Dict[int, tuple] = {}
+
             for i, act in enumerate(activities):
-                if act.filename in sibling_to_parent:
-                    parent_basename = sibling_to_parent[act.filename]
-                    # Try compatible actions (e.g. Moved sibling → Restored parent)
-                    compatible = _COMPATIBLE_ACTIONS.get(act.action, (act.action,))
-                    for try_action in compatible:
-                        parent_key = (parent_basename, try_action)
-                        if parent_key in parent_index:
-                            parent_idx = parent_index[parent_key]
-                            parent_act = activities[parent_idx]
-                            parent_act.associated_files.append({
-                                "filename": act.filename,
-                                "size": format_bytes(act.size_bytes) if act.size_bytes > 0 else "",
-                            })
-                            merged_indices.add(i)
-                            break
+                if act.filename not in sibling_to_parent:
+                    continue
+                parent_basename = sibling_to_parent[act.filename]
+                # Try compatible actions (e.g. Moved sibling → Restored parent)
+                compatible = _COMPATIBLE_ACTIONS.get(act.action, (act.action,))
+                merged = False
+                for try_action in compatible:
+                    parent_key = (parent_basename, try_action)
+                    if parent_key in parent_index:
+                        parent_idx = parent_index[parent_key]
+                        parent_act = activities[parent_idx]
+                        parent_act.associated_files.append({
+                            "filename": act.filename,
+                            "size": format_bytes(act.size_bytes) if act.size_bytes > 0 else "",
+                        })
+                        merged_indices.add(i)
+                        merged = True
+                        break
+                if not merged:
+                    key = (parent_basename, act.action)
+                    orphans.setdefault(key, []).append(i)
+                    orphan_key_at.setdefault(key, i)
+
+            # Sidecars copied without their video (already on cache) have no parent
+            # to fold into. Give them one, so the feed names the film instead of
+            # listing loose artwork.
+            orphans = {k: v for k, v in orphans.items() if len(v) >= _ORPHAN_GROUP_MIN}
+            for idxs in orphans.values():
+                merged_indices.update(idxs)
 
             if merged_indices:
-                activities = [a for i, a in enumerate(activities) if i not in merged_indices]
+                rebuilt: list = []
+                emitted: set = set()
+                for i, act in enumerate(activities):
+                    if i not in merged_indices:
+                        rebuilt.append(act)
+                        continue
+                    for key, first_i in orphan_key_at.items():
+                        if key in orphans and first_i == i and key not in emitted:
+                            emitted.add(key)
+                            first = activities[i]
+                            rebuilt.append(FileActivity(
+                                timestamp=first.timestamp,
+                                action=key[1],
+                                filename=key[0],
+                                size_bytes=0,  # the video did not move
+                                users=list(first.users),
+                                run_id=first.run_id,
+                                run_source=first.run_source,
+                                associated_files=[{
+                                    "filename": activities[j].filename,
+                                    "size": (format_bytes(activities[j].size_bytes)
+                                             if activities[j].size_bytes > 0 else ""),
+                                } for j in orphans[key]],
+                            ))
+                            break
+                activities = rebuilt
                 _save_activity_unlocked(activities)
 
         # Update in-memory list and merge _current_run_files for banner pill
@@ -1229,26 +1276,80 @@ class OperationRunner:
                 parent_index[key] = i
 
         merged_indices: set = set()
-        for i, f in enumerate(self._current_run_files):
-            if f["filename"] in sibling_to_parent:
-                parent_basename = sibling_to_parent[f["filename"]]
-                compatible = compatible_actions.get(f["action"], (f["action"],))
-                for try_action in compatible:
-                    parent_key = (parent_basename, try_action)
-                    if parent_key in parent_index:
-                        parent_idx = parent_index[parent_key]
-                        parent_entry = self._current_run_files[parent_idx]
-                        if "associated_files" not in parent_entry:
-                            parent_entry["associated_files"] = []
-                        parent_entry["associated_files"].append({
-                            "filename": f["filename"],
-                            "size": f.get("size", ""),
-                        })
-                        merged_indices.add(i)
-                        break
+        # Sidecars whose parent video is not in this run — see _group_orphan_sidecars.
+        orphans: Dict[tuple, list] = {}
+        orphan_key_at: Dict[int, tuple] = {}
 
-        if merged_indices:
-            self._current_run_files = [f for i, f in enumerate(self._current_run_files) if i not in merged_indices]
+        for i, f in enumerate(self._current_run_files):
+            if f["filename"] not in sibling_to_parent:
+                continue
+            parent_basename = sibling_to_parent[f["filename"]]
+            compatible = compatible_actions.get(f["action"], (f["action"],))
+            merged = False
+            for try_action in compatible:
+                parent_key = (parent_basename, try_action)
+                if parent_key in parent_index:
+                    parent_idx = parent_index[parent_key]
+                    parent_entry = self._current_run_files[parent_idx]
+                    if "associated_files" not in parent_entry:
+                        parent_entry["associated_files"] = []
+                    parent_entry["associated_files"].append({
+                        "filename": f["filename"],
+                        "size": f.get("size", ""),
+                    })
+                    merged_indices.add(i)
+                    merged = True
+                    break
+            if not merged:
+                key = (parent_basename, f["action"])
+                orphans.setdefault(key, []).append(f)
+                orphan_key_at.setdefault(key, i)
+
+        orphans = {k: v for k, v in orphans.items() if len(v) >= _ORPHAN_GROUP_MIN}
+        for key, entries in orphans.items():
+            for f in entries:
+                merged_indices.add(self._current_run_files.index(f))
+
+        if not merged_indices:
+            return
+
+        rebuilt: list = []
+        emitted: set = set()
+        for i, f in enumerate(self._current_run_files):
+            if i not in merged_indices:
+                rebuilt.append(f)
+                continue
+            for key, first_i in orphan_key_at.items():
+                if key in orphans and first_i == i and key not in emitted:
+                    emitted.add(key)
+                    rebuilt.append(self._synthetic_sidecar_parent(key, orphans[key]))
+                    break
+        self._current_run_files = rebuilt
+
+    @staticmethod
+    def _synthetic_sidecar_parent(key: tuple, entries: list) -> dict:
+        """A header row for sidecars whose parent video was not part of this run.
+
+        Artwork and NFOs are often copied on their own, because the video is
+        already on cache. Without a parent to fold into they rendered as
+        several unattributed rows — four "…-poster.jpg" lines with nothing
+        naming the film. This carries the parent's filename so the group reads
+        as what it is.
+
+        No size on the header: the video did not move, and showing the sidecar
+        total there would imply it did.
+        """
+        parent_basename, action = key
+        return {
+            "action": action,
+            "filename": parent_basename,
+            "size": "",
+            "size_bytes": 0,
+            "sidecars_only": True,
+            "associated_files": [
+                {"filename": e["filename"], "size": e.get("size", "")} for e in entries
+            ],
+        }
 
     # Show-episode grouping helper lives in core.activity (shared with the
     # Recent Activity dashboard grouping service). Imported as
