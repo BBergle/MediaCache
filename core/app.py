@@ -2607,6 +2607,12 @@ class PlexCacheApp:
                 logging.warning(f"PlexCache quota reached ({plexcache_tracked / (1024**3):.2f}GB tracked, quota is {quota_readable})")
             else:
                 logging.warning(f"Cache drive already at or over limit ({drive_usage_gb:.2f}GB used, limit is {limit_readable})")
+            # No room for anything, so the packing loop below never runs and
+            # never reaches its own flag-setting branch. This is the strongest
+            # evidence of space pressure there is — every candidate was
+            # dropped, not just the ones that did not fit — so the reclaim in
+            # _reclaim_released_if_constrained() has to see it too.
+            self._cache_space_constrained = True
             return []
         files_to_cache = []
         skipped_count = 0
@@ -2885,7 +2891,7 @@ class PlexCacheApp:
             total_drive_usage = plexcache_tracked  # Fallback if can't get disk usage
 
         if total_drive_usage < threshold_bytes and needed_space_bytes == 0:
-            logging.debug(f"Cache usage ({total_drive_usage/1e9:.2f}GB) below threshold ({threshold_bytes/1e9:.2f}GB), skipping eviction")
+            logging.debug(f"Cache usage ({total_drive_usage/(1024**3):.2f}GB) below threshold ({threshold_bytes/(1024**3):.2f}GB), skipping eviction")
             return (0, 0)
 
         # Calculate how much space to free based on total drive usage
@@ -2894,10 +2900,10 @@ class PlexCacheApp:
             return (0, 0)
 
         if needed_space_bytes > 0:
-            logging.info(f"[EVICTION] Smart eviction: drive over limit, need to free {space_to_free/1e9:.2f}GB")
+            logging.info(f"[EVICTION] Smart eviction: drive over limit, need to free {space_to_free/(1024**3):.2f}GB")
         else:
-            logging.info(f"[EVICTION] Smart eviction: drive usage ({total_drive_usage/1e9:.2f}GB) over threshold ({threshold_bytes/1e9:.2f}GB), need to free {space_to_free/1e9:.2f}GB")
-            logging.debug(f"PlexCache-tracked: {plexcache_tracked/1e9:.2f}GB, Other files: {(total_drive_usage-plexcache_tracked)/1e9:.2f}GB")
+            logging.info(f"[EVICTION] Smart eviction: drive usage ({total_drive_usage/(1024**3):.2f}GB) over threshold ({threshold_bytes/(1024**3):.2f}GB), need to free {space_to_free/(1024**3):.2f}GB")
+            logging.debug(f"PlexCache-tracked: {plexcache_tracked/(1024**3):.2f}GB, Other files: {(total_drive_usage-plexcache_tracked)/(1024**3):.2f}GB")
 
         # Get eviction candidates based on mode
         if eviction_mode == "smart":
@@ -2936,7 +2942,7 @@ class PlexCacheApp:
         # Check if candidates can free enough space
         candidate_bytes = sum(os.path.getsize(f) for f in candidates if os.path.exists(f))
         if candidate_bytes < space_to_free:
-            logging.warning(f"Can only evict {candidate_bytes/1e9:.2f}GB of {space_to_free/1e9:.2f}GB needed - non-PlexCache files may be filling the drive")
+            logging.warning(f"Can only evict {candidate_bytes/(1024**3):.2f}GB of {space_to_free/(1024**3):.2f}GB needed - non-PlexCache files may be filling the drive")
 
         # Log what we're evicting
         for cache_path in candidates:
@@ -3111,7 +3117,7 @@ class PlexCacheApp:
             except OSError as e:
                 logging.warning(f"Failed to evict {cache_path}: {e}")
 
-        logging.info(f"[EVICTION] Smart eviction complete: freed {bytes_freed/1e9:.2f}GB from {files_evicted} files")
+        logging.info(f"[EVICTION] Smart eviction complete: freed {bytes_freed/(1024**3):.2f}GB from {files_evicted} files")
         return (files_evicted, bytes_freed)
 
     def _backfill_empty_folder_cleanup(self) -> None:
@@ -3263,7 +3269,12 @@ class PlexCacheApp:
         if destination == 'cache':
             media_files_filtered = self._apply_cache_limit(media_files_filtered, cache_dir)
 
-        total_size, total_size_unit = self.file_utils.get_total_size_of_files(media_files_filtered)
+        # Array-destination paths are expected to be absent: the originals were
+        # renamed to .plexcached when the files were cached, so sizing them here
+        # misses every one. The fallback just below recovers the real total.
+        total_size, total_size_unit = self.file_utils.get_total_size_of_files(
+            media_files_filtered, warn_missing=(destination != 'array')
+        )
 
         # Fallback for array moves: on non-FUSE setups (e.g., ZFS with direct pool paths),
         # array paths don't exist because originals were renamed to .plexcached.

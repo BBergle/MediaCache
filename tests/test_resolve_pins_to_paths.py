@@ -13,6 +13,7 @@ Uses a minimal fake plexapi interface:
 import logging
 
 import pytest
+from plexapi.exceptions import NotFound
 
 from core.pinned_media import (
     PinnedMediaTracker,
@@ -25,9 +26,10 @@ from core.pinned_media import (
 # ---------------------------------------------------------------------------
 
 
-class FakeNotFound(Exception):
-    """Stand-in for plexapi.exceptions.NotFound."""
-    pass
+# The real exception, not a stand-in: conftest guarantees plexapi.exceptions
+# stays a real module, so resolve_pins_to_paths() resolves the same class it
+# catches and we exercise the genuine orphan path rather than its fallback.
+FakeNotFound = NotFound
 
 
 class FakePart:
@@ -84,19 +86,6 @@ class FakePlexServer:
         if key in self._items:
             return self._items[key]
         raise FakeNotFound(f"rating_key={key} not found")
-
-
-@pytest.fixture(autouse=True)
-def _patch_notfound(monkeypatch):
-    """Force resolve_pins_to_paths to treat FakeNotFound as the orphan signal.
-
-    The module does a lazy `from plexapi.exceptions import NotFound` inside
-    the function. We can't easily monkeypatch that, so the function already
-    falls back to `Exception` when plexapi is missing — meaning FakeNotFound
-    (a subclass of Exception) will be caught and trigger orphan removal.
-    """
-    # No-op — just documenting the behavior above.
-    yield
 
 
 @pytest.fixture

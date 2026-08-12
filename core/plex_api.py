@@ -22,7 +22,7 @@ from plexapi.server import PlexServer
 
 from plexapi.video import Episode, Movie
 from plexapi.myplex import MyPlexAccount
-from plexapi.exceptions import NotFound
+from plexapi.exceptions import BadRequest, NotFound
 import requests
 
 
@@ -184,13 +184,25 @@ def _derive_rss_fallback_url(url: str) -> Optional[str]:
 PLEXTV_MAX_RETRIES = 3
 PLEXTV_RETRY_BASE_WAIT = 2  # seconds (exponential: 2s, 4s)
 
+# plexapi collapses every non-2xx response that isn't 401/404 into BadRequest,
+# with the status code only present in the message text ("(503) service_unavailable;
+# https://..."). 5xx from plex.tv is a transient upstream hiccup and worth
+# retrying; 4xx means the request itself is wrong and never will be.
+_PLEXTV_RETRY_STATUS_RE = re.compile(r"^\((5\d\d)\)")
+
+
+def _is_transient_plextv_error(error: Exception) -> bool:
+    """True if `error` is a plex.tv 5xx that a retry could plausibly clear."""
+    return bool(_PLEXTV_RETRY_STATUS_RE.match(str(error)))
+
 
 def _retry_plextv_call(func, label: str, max_attempts: int = PLEXTV_MAX_RETRIES):
     """Call a plex.tv function, retrying on transient network errors.
 
-    Retries only `requests.Timeout` and `requests.ConnectionError` — other
-    exceptions (auth failures, parse errors, logic bugs) are raised immediately
-    so callers can distinguish retry-worthy failures from permanent ones.
+    Retries `requests.Timeout`, `requests.ConnectionError`, and 5xx responses
+    (which plexapi raises as `BadRequest`). Other exceptions — auth failures,
+    4xx, parse errors, logic bugs — are raised immediately so callers can
+    distinguish retry-worthy failures from permanent ones.
 
     Args:
         func: Zero-argument callable to invoke (wrap args via lambda).
@@ -208,13 +220,15 @@ def _retry_plextv_call(func, label: str, max_attempts: int = PLEXTV_MAX_RETRIES)
     for attempt in range(max_attempts):
         try:
             return func()
-        except (requests.Timeout, requests.ConnectionError) as e:
+        except (requests.Timeout, requests.ConnectionError, BadRequest) as e:
+            if isinstance(e, BadRequest) and not _is_transient_plextv_error(e):
+                raise
             last_error = e
             if attempt < max_attempts - 1:
                 wait_time = PLEXTV_RETRY_BASE_WAIT ** (attempt + 1)  # 2s, 4s
                 logging.warning(
                     f"plex.tv {label} attempt {attempt + 1}/{max_attempts} "
-                    f"timed out: {e}. Retrying in {wait_time}s..."
+                    f"failed: {e}. Retrying in {wait_time}s..."
                 )
                 time.sleep(wait_time)
     raise last_error
@@ -1488,45 +1502,73 @@ class PlexManager:
             )
             logging.debug(f"[USER:{current_username}] Found {len(watchlist)} watchlist items")
             for item in watchlist:
-                watchlisted_at = None
                 try:
-                    user_state = _retry_plextv_call(
-                        lambda: account.userState(item),
-                        label=f"userState for '{item.title}'",
+                    yield from self._process_watchlist_item(
+                        account, item, current_username, filtered_sections, watchlist_episodes
                     )
-                    watchlisted_at = getattr(user_state, 'watchlistedAt', None)
                 except Exception as e:
-                    logging.debug(f"Could not get userState for {item.title}: {e}")
-
-                # Extract GUID for accurate matching (prefer IMDB, then TVDB)
-                guid = None
-                item_guids = getattr(item, 'guids', [])
-                for g in item_guids:
-                    gid = getattr(g, 'id', str(g))
-                    if gid.startswith('imdb://') or gid.startswith('tvdb://'):
-                        guid = gid
-                        break
-
-                # Determine expected type from watchlist item
-                expected_type = getattr(item, 'type', None)
-
-                file = self.search_plex(item.title, guid=guid, expected_type=expected_type,
-                                       valid_sections=filtered_sections)
-                if file and (not filtered_sections or file.librarySectionID in filtered_sections):
-                    try:
-                        if file.TYPE == 'show':
-                            yield from self._process_watchlist_show(file, watchlist_episodes, current_username, watchlisted_at)
-                        elif file.TYPE == 'movie':
-                            yield from self._process_watchlist_movie(file, current_username, watchlisted_at)
-                        else:
-                            logging.debug(f"Ignoring item '{file.title}' of type '{file.TYPE}'")
-                    except Exception as e:
-                        logging.warning(f"Error processing '{file.title}': {e}")
-                elif file:
-                    logging.debug(f"Skipping watchlist item '{file.title}' — section {file.librarySectionID} not in valid_sections {filtered_sections}")
+                    # One unreadable item must not cost us the rest of the list.
+                    # plexapi resolves `guids` lazily against metadata.provider.plex.tv,
+                    # so a 5xx on a single item used to escape to the handler below and
+                    # drop every remaining item for this user.
+                    item_title = getattr(item, 'title', '<unknown>')
+                    logging.warning(
+                        f"[USER:{current_username}] Skipping watchlist item '{item_title}': {e}"
+                    )
+                    self.mark_watchlist_incomplete()
         except Exception as e:
             logging.error(f"[USER:{current_username}] Error fetching watchlist: {e}")
             self.mark_watchlist_incomplete()
+
+    def _process_watchlist_item(self, account, item, current_username: str,
+                                 filtered_sections: List[int],
+                                 watchlist_episodes: int) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str], str], None, None]:
+        """Resolve one plex.tv watchlist item to local media files.
+
+        Raises whatever plex.tv or the local server raises — the caller decides
+        whether a failure costs just this item or the whole watchlist.
+        """
+        watchlisted_at = None
+        try:
+            user_state = _retry_plextv_call(
+                lambda: account.userState(item),
+                label=f"userState for '{item.title}'",
+            )
+            watchlisted_at = getattr(user_state, 'watchlistedAt', None)
+        except Exception as e:
+            logging.debug(f"Could not get userState for {item.title}: {e}")
+
+        # Extract GUID for accurate matching (prefer IMDB, then TVDB). Reading
+        # `guids` on a watchlist item triggers a lazy plex.tv reload, so wrap it
+        # in the retry helper like every other plex.tv call.
+        guid = None
+        item_guids = _retry_plextv_call(
+            lambda: getattr(item, 'guids', []),
+            label=f"guids for '{item.title}'",
+        )
+        for g in item_guids:
+            gid = getattr(g, 'id', str(g))
+            if gid.startswith('imdb://') or gid.startswith('tvdb://'):
+                guid = gid
+                break
+
+        # Determine expected type from watchlist item
+        expected_type = getattr(item, 'type', None)
+
+        file = self.search_plex(item.title, guid=guid, expected_type=expected_type,
+                               valid_sections=filtered_sections)
+        if file and (not filtered_sections or file.librarySectionID in filtered_sections):
+            try:
+                if file.TYPE == 'show':
+                    yield from self._process_watchlist_show(file, watchlist_episodes, current_username, watchlisted_at)
+                elif file.TYPE == 'movie':
+                    yield from self._process_watchlist_movie(file, current_username, watchlisted_at)
+                else:
+                    logging.debug(f"Ignoring item '{file.title}' of type '{file.TYPE}'")
+            except Exception as e:
+                logging.warning(f"Error processing '{file.title}': {e}")
+        elif file:
+            logging.debug(f"Skipping watchlist item '{file.title}' — section {file.librarySectionID} not in valid_sections {filtered_sections}")
 
     def _process_rss_watchlist(self, rss_url: str, current_username: str,
                                 filtered_sections: List[int], watchlist_episodes: int,

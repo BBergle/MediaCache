@@ -1,7 +1,7 @@
 """Tests for _retry_plextv_call helper.
 
-Verifies that transient plex.tv network errors (timeouts, connection errors)
-are retried with backoff, while permanent errors raise immediately.
+Verifies that transient plex.tv failures (timeouts, connection errors, 5xx
+responses) are retried with backoff, while permanent errors raise immediately.
 """
 
 import os
@@ -23,8 +23,17 @@ for _mod in [
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import requests
+from plexapi.exceptions import BadRequest, NotFound, Unauthorized
 
 from core.plex_api import _retry_plextv_call, PLEXTV_MAX_RETRIES
+
+
+def _plexapi_error(status: int, codename: str, cls=BadRequest):
+    """Build the exact message shape plexapi raises for a non-2xx response."""
+    return cls(
+        f"({status}) {codename}; https://metadata.provider.plex.tv/library/metadata/abc123 "
+        f"upstream connect error or disconnect/reset before headers"
+    )
 
 
 class TestRetryPlexTvCall:
@@ -88,3 +97,66 @@ class TestRetryPlexTvCall:
             _retry_plextv_call(func, label="watchlist for Brandon")
         assert any("watchlist for Brandon" in rec.message for rec in caplog.records)
         assert any("1/3" in rec.message for rec in caplog.records)
+
+
+class TestRetryOnHttpStatus:
+    """plexapi collapses non-2xx into BadRequest with the code in the message.
+
+    5xx from plex.tv is a transient upstream hiccup worth retrying; 4xx means
+    the request is wrong and never will be.
+    """
+
+    def test_retries_on_503_then_succeeds(self):
+        """The failure mode from the 2026-07-31 log: a 503 on a watchlist item."""
+        func = MagicMock(side_effect=[
+            _plexapi_error(503, "service_unavailable"), "ok"
+        ])
+        with patch('core.plex_api.time.sleep'):
+            result = _retry_plextv_call(func, label="guids for 'Weeds'")
+        assert result == "ok"
+        assert func.call_count == 2
+
+    @pytest.mark.parametrize("status,codename", [
+        (500, "internal_server_error"),
+        (502, "bad_gateway"),
+        (503, "service_unavailable"),
+        (504, "gateway_timeout"),
+    ])
+    def test_retries_every_5xx(self, status, codename):
+        func = MagicMock(side_effect=[_plexapi_error(status, codename), "ok"])
+        with patch('core.plex_api.time.sleep'):
+            assert _retry_plextv_call(func, label="test") == "ok"
+        assert func.call_count == 2
+
+    def test_gives_up_after_max_attempts_on_persistent_5xx(self):
+        func = MagicMock(side_effect=_plexapi_error(503, "service_unavailable"))
+        with patch('core.plex_api.time.sleep'), pytest.raises(BadRequest):
+            _retry_plextv_call(func, label="test")
+        assert func.call_count == PLEXTV_MAX_RETRIES
+
+    @pytest.mark.parametrize("status,codename,cls", [
+        (400, "bad_request", BadRequest),
+        (401, "unauthorized", Unauthorized),
+        (403, "forbidden", BadRequest),
+        (429, "too_many_requests", BadRequest),
+    ])
+    def test_4xx_raises_immediately(self, status, codename, cls):
+        """A bad token or a rejected request won't fix itself — don't burn backoff."""
+        func = MagicMock(side_effect=_plexapi_error(status, codename, cls))
+        with pytest.raises(BadRequest):
+            _retry_plextv_call(func, label="test")
+        assert func.call_count == 1
+
+    def test_not_found_raises_immediately(self):
+        """NotFound is a sibling of BadRequest in plexapi, not a subclass."""
+        func = MagicMock(side_effect=NotFound("(404) not_found; https://plex.tv/x"))
+        with pytest.raises(NotFound):
+            _retry_plextv_call(func, label="test")
+        assert func.call_count == 1
+
+    def test_bad_request_without_status_prefix_raises_immediately(self):
+        """Only messages that actually start with a 5xx code are retriable."""
+        func = MagicMock(side_effect=BadRequest("something went sideways"))
+        with pytest.raises(BadRequest):
+            _retry_plextv_call(func, label="test")
+        assert func.call_count == 1

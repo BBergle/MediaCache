@@ -25,6 +25,34 @@ for _mod in [
 ]:
     sys.modules.setdefault(_mod, MagicMock())
 
+# Individual test modules mock the plexapi submodules they don't need, but
+# plexapi.exceptions must stay real: core code lists BadRequest / NotFound in
+# `except` clauses, and Python rejects a MagicMock there with "catching classes
+# that do not inherit from BaseException". Claiming the sys.modules slot here
+# (conftest is imported before any test module) makes their setdefault a no-op.
+try:  # pragma: no cover - exercised implicitly by every plexapi-touching test
+    import plexapi.exceptions  # noqa: F401
+except ImportError:  # plexapi absent - supply equivalent real classes
+    import types
+
+    _exc = types.ModuleType('plexapi.exceptions')
+
+    class PlexApiException(Exception):
+        """Base exception for all plexapi errors."""
+
+    class BadRequest(PlexApiException):
+        """An invalid request, or any non-2xx response other than 404."""
+
+    class NotFound(PlexApiException):
+        """Request media item or device is not found."""
+
+    class Unauthorized(BadRequest):
+        """Invalid username/password or token."""
+
+    for _cls in (PlexApiException, BadRequest, NotFound, Unauthorized):
+        setattr(_exc, _cls.__name__, _cls)
+    sys.modules['plexapi.exceptions'] = _exc
+
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
