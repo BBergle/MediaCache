@@ -16,6 +16,7 @@ from typing import Callable, Dict, List, Optional, Set, Any, Tuple
 from web.config import DATA_DIR, CONFIG_DIR, SETTINGS_FILE
 from core.system_utils import get_array_direct_path, format_bytes, translate_container_to_host_path, translate_host_to_container_path, remove_from_exclude_file, remove_from_timestamps_file, create_dir_with_ownership, sweep_empty_folders
 from core.file_operations import PLEXCACHED_EXTENSION, VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS, MEDIA_EXTENSIONS
+from core.media_grouping import group_ordered
 
 
 def _strip_plexcached(path: str) -> str:
@@ -38,7 +39,7 @@ def _strip_plexcached(path: str) -> str:
 
 
 @dataclass
-class UnprotectedFile:
+class UntrackedFile:
     """A cache file not in the exclude list (at risk from Unraid mover)"""
     cache_path: str
     filename: str
@@ -101,10 +102,14 @@ class AuditResults:
     cache_file_count: int
     exclude_entry_count: int
     timestamp_entry_count: int
+    # Exclude entries whose file is actually on cache. The stat card renders
+    # "N of M on cache", and exclude_entry_count includes stale lines for files
+    # that are gone — which made N exceed M and render impossible values.
+    excluded_on_cache_count: int = 0
 
     # Issues
-    unprotected_files: List[UnprotectedFile] = field(default_factory=list)
-    grouped_unprotected: List[dict] = field(default_factory=list)  # Grouped by directory
+    untracked_files: List[UntrackedFile] = field(default_factory=list)
+    grouped_untracked: List[dict] = field(default_factory=list)  # Grouped by directory
     orphaned_plexcached: List[OrphanedBackup] = field(default_factory=list)
     extensionless_files: List[ExtensionlessFile] = field(default_factory=list)
     stale_exclude_entries: List[str] = field(default_factory=list)
@@ -112,7 +117,7 @@ class AuditResults:
     duplicates: List[DuplicateFile] = field(default_factory=list)
     # Pinned cache files missing from the exclude list — would be eaten by the
     # Unraid mover on its next run. User declared these always-cached, so an
-    # unprotected pinned file is a user-visible contract violation, not just
+    # pinned file missing from the exclude list is a user-visible contract violation, not just
     # "untracked". Next run restores protection automatically.
     pinned_missing_from_exclude: List[str] = field(default_factory=list)
 
@@ -248,7 +253,7 @@ class MaintenanceService:
         Used as a safety net in the cleanup actions so a transiently-missing
         pinned file is never dropped from the exclude list or timestamps.
         Failure returns an empty set — the cleanups fall back to their
-        original (unprotected) behavior rather than aborting.
+        original (unfiltered) behavior rather than aborting.
         """
         try:
             from web.services import get_pinned_service
@@ -496,7 +501,7 @@ class MaintenanceService:
 
         A released file is deliberately absent from the exclude list: PlexCache
         handed relocation to the mover and stopped protecting it, without
-        moving any bytes. So it is neither an unprotected file that needs
+        moving any bytes. So it is neither an untracked file that needs
         fixing nor — once the mover finally takes it — a stale timestamp entry.
         Treating it as either turns the feature working correctly into a
         recurring health warning.
@@ -540,16 +545,18 @@ class MaintenanceService:
                 return array_file.replace(array_dir, cache_dirs[i], 1)
         return None
 
-    def _group_unprotected_by_directory(self, files: List[UnprotectedFile]) -> List[dict]:
-        """Group unprotected files by directory, with video as primary and sidecars as children."""
-        from collections import OrderedDict
-        groups: OrderedDict[str, List[UnprotectedFile]] = OrderedDict()
-        for f in files:
-            directory = os.path.dirname(f.cache_path)
-            groups.setdefault(directory, []).append(f)
+    def _group_untracked_by_directory(self, files: List[UntrackedFile]) -> List[dict]:
+        """Group untracked files by directory, with video as primary and sidecars as children.
 
+        Keys on directory rather than show — this table pairs a video with its
+        own sidecars for remediation, not episodes with each other — but the
+        bucketing itself is the app-wide rule from ``core.media_grouping``, so
+        ordering behaves the same as every other grouped list.
+        """
         result = []
-        for directory, dir_files in groups.items():
+        for directory, dir_files in group_ordered(
+            files, lambda f: os.path.dirname(f.cache_path)
+        ):
             # Find the video file (if any) to use as primary
             video = None
             children = []
@@ -636,7 +643,8 @@ class MaintenanceService:
         results = AuditResults(
             cache_file_count=len(cache_files),
             exclude_entry_count=len(exclude_files),
-            timestamp_entry_count=len(timestamp_files)
+            timestamp_entry_count=len(timestamp_files),
+            excluded_on_cache_count=len(exclude_files & cache_files),
         )
 
         # Walk the array exactly once: collects orphaned/extensionless files and
@@ -653,7 +661,7 @@ class MaintenanceService:
         # Cutoff for "invalid" timestamps - before year 2000 or in the future
         min_valid_date = datetime(2000, 1, 1)
 
-        # Single pass over cache files: detect unprotected + duplicate in one loop.
+        # Single pass over cache files: detect untracked + duplicate in one loop.
         phase_start = time.monotonic()
         for cache_path in cache_files:
             array_path = self._cache_to_array_path(cache_path)
@@ -675,8 +683,8 @@ class MaintenanceService:
                     size_display=format_bytes(dup_size)
                 ))
 
-            # Unprotected: on cache but not in exclude list. Released files are
-            # unprotected on purpose — flagging them would recommend
+            # Untracked: on cache but not in exclude list. Released files are
+            # untracked on purpose — flagging them would recommend
             # sync_to_array (the exact array write release avoids) and let the
             # bulk "Add to Exclude" action silently re-protect them.
             if cache_path in exclude_files or cache_path in released_files:
@@ -713,7 +721,7 @@ class MaintenanceService:
 
             recommended = "fix_with_backup" if (has_backup or has_dup) else "sync_to_array"
 
-            results.unprotected_files.append(UnprotectedFile(
+            results.untracked_files.append(UntrackedFile(
                 cache_path=cache_path,
                 filename=filename,
                 size=size,
@@ -729,11 +737,11 @@ class MaintenanceService:
             ))
         main_loop_duration = time.monotonic() - phase_start
 
-        # Sort unprotected files by filename (default)
-        results.unprotected_files.sort(key=lambda f: f.filename.lower())
+        # Sort untracked files by filename (default)
+        results.untracked_files.sort(key=lambda f: f.filename.lower())
 
         # Group by directory: video file as primary, sidecars as children
-        results.grouped_unprotected = self._group_unprotected_by_directory(results.unprotected_files)
+        results.grouped_untracked = self._group_untracked_by_directory(results.untracked_files)
 
         # Find stale exclude entries (in exclude but not on cache)
         results.stale_exclude_entries = sorted(list(exclude_files - cache_files))
@@ -775,9 +783,9 @@ class MaintenanceService:
 
         total_duration = time.monotonic() - audit_start
         logging.info(
-            "run_full_audit: %d cache files, %d unprotected, %d duplicates, "
+            "run_full_audit: %d cache files, %d untracked, %d duplicates, "
             "%d orphaned .plexcached in %.2fs",
-            len(cache_files), len(results.unprotected_files),
+            len(cache_files), len(results.untracked_files),
             len(results.duplicates), len(results.orphaned_plexcached),
             total_duration,
         )
@@ -1076,7 +1084,7 @@ class MaintenanceService:
         return {
             "status": results.health_status,
             "total_issues": results.total_issues,
-            "unprotected_count": len(results.unprotected_files),
+            "untracked_count": len(results.untracked_files),
             "orphaned_count": len(results.orphaned_plexcached),
             "stale_exclude_count": len(results.stale_exclude_entries),
             "stale_timestamp_count": len(results.stale_timestamp_entries),
@@ -1437,7 +1445,7 @@ class MaintenanceService:
                         bytes_progress_callback: Optional[Callable] = None,
                         max_workers: int = 1,
                         active_callback: Optional[Callable] = None) -> ActionResult:
-        """Fix unprotected files that have .plexcached backup - delete cache copy, restore backup"""
+        """Fix untracked files that have .plexcached backup - delete cache copy, restore backup"""
         if not paths:
             return ActionResult(success=False, message="No paths provided")
 
@@ -1758,7 +1766,7 @@ class MaintenanceService:
         )
 
     def add_to_exclude(self, paths: List[str], dry_run: bool = True) -> ActionResult:
-        """Add unprotected cache files to exclude list (no backup created)"""
+        """Add untracked cache files to exclude list (no backup created)"""
         if not paths:
             return ActionResult(success=False, message="No paths provided")
 

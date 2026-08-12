@@ -61,13 +61,15 @@ class TestPinButtonMacroShape:
         assert 'name="title" value="Show - S01E05"' in html
         assert 'data-lucide="pin"' in html
         assert 'btn-primary' in html
-        assert 'Pin this item' in html  # button title, unambiguous
+        # Tooltip makes the "always cached" semantics explicit (distinguishes
+        # Pin from Maintenance's one-time "Keep on Cache" action).
+        assert 'Pin — always keep this item on cache (never evicted)' in html
 
     def test_pinned_state_renders_unpin_button(self):
         html = _render_macro(is_pinned=True)
         assert 'data-lucide="pin-off"' in html
         assert 'btn-secondary' in html
-        assert 'Unpin this item' in html
+        assert 'Unpin — allow this item to be evicted or moved back to the array' in html
         assert 'data-is-pinned="true"' in html
 
     def test_macro_matches_toggle_response_attributes(self):
@@ -85,6 +87,18 @@ class TestPinButtonMacroShape:
         ):
             assert attr in macro_html, f"macro missing {attr}"
             assert attr in response_html, f"toggle response missing {attr}"
+
+    def test_macro_and_toggle_response_share_tooltip_wording(self):
+        """The button tooltip must match between the macro and its HTMX
+        swap-response in the SAME state — otherwise the "always cached"
+        wording reverts to the old copy after the first toggle."""
+        pin_tip = 'Pin — always keep this item on cache (never evicted)'
+        unpin_tip = 'Unpin — allow this item to be evicted or moved back to the array'
+
+        assert pin_tip in _render_macro(is_pinned=False)
+        assert pin_tip in _render_toggle_response(is_pinned=False)
+        assert unpin_tip in _render_macro(is_pinned=True)
+        assert unpin_tip in _render_toggle_response(is_pinned=True)
 
 
 class TestFileTableRowMarkup:
@@ -148,3 +162,46 @@ class TestFileTableRowMarkup:
         html = self._render_file_table([f])
         assert 'badge-pinned' in html
         assert '>\n                Pinned\n' in html
+
+
+class TestToggleResponseUsesTheSharedMacro:
+    """The toggle response used to hand-copy the pin button's markup.
+
+    The copy accepted no label/confirm, so after unpinning a show from a
+    Recently Added episode row the swapped-in control came back as a bare,
+    confirm-less "Pin" still bound to pin_type=show — one stray click re-pinned
+    the entire series.
+    """
+
+    TEMPLATE = "settings/partials/pinned_toggle_response.html"
+
+    def _render(self, **ctx):
+        from web.config import templates
+        base = {"error": None, "rating_key": "1", "pin_type": "movie",
+                "title": "Dune", "is_pinned": False}
+        base.update(ctx)
+        return templates.get_template(self.TEMPLATE).render(**base)
+
+    def test_it_imports_the_macro_rather_than_duplicating_markup(self):
+        from pathlib import Path
+        src = (Path(__file__).resolve().parent.parent / "web" / "templates" /
+               "settings" / "partials" / "pinned_toggle_response.html").read_text(encoding="utf-8")
+        assert 'import pin_button' in src
+        assert '<button type="submit"' not in src, "markup is hand-copied again"
+
+    def test_movie_toggle_is_unchanged(self):
+        out = self._render(pin_type="movie", is_pinned=False)
+        assert "/api/pinned/toggle" in out
+        assert ">Pin<" in out.replace("\n", "").replace(" ", "") or "Pin" in out
+        assert "hx-confirm" not in out
+
+    def test_unpinning_a_show_keeps_its_scope_label_and_confirm(self):
+        out = self._render(pin_type="show", title="The Office", is_pinned=True)
+        assert "Unpin show" in out
+        assert "hx-confirm" in out
+        assert "releases every episode it covers" in out
+
+    def test_pinning_a_show_needs_no_confirm(self):
+        # Adding protection is not destructive; only releasing it is.
+        out = self._render(pin_type="show", title="The Office", is_pinned=False)
+        assert "hx-confirm" not in out

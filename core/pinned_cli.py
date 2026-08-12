@@ -124,7 +124,12 @@ def handle_list_pins(config_manager: ConfigManager) -> None:
         if resolved:
             print(f"\n  Resolved to {len(resolved)} file(s) (preference: {preference})")
         if orphaned:
-            print(f"  {len(orphaned)} orphaned pin(s) were auto-removed (items no longer in Plex)")
+            # Listing is read-only: it reports unresolvable pins but does not
+            # remove them. The next full run prunes (prune=True there).
+            print(
+                f"  {len(orphaned)} pin(s) could not be resolved in Plex "
+                f"(removed on the next run if still missing)"
+            )
 
 
 def handle_pin(config_manager: ConfigManager, rating_key: str) -> None:

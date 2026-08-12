@@ -2,15 +2,55 @@
 {% from "macros/associated_files.html" import af_expand_badge, af_expand_rows, af_expand_onclick %}
 {% from "macros/user_badge.html" import user_badge %}
 
+{#
+  Activity action badge.
+
+  These describe HISTORY — what already happened to a file — so the tooltips say
+  what was done and why, unlike the Recently Added outcome badges which predict
+  what happens next.
+
+  Every action written to the feed gets an explicit arm. The writers are
+  FileMover (Cached/Restored/Moved), PlexCacheApp._release_files (Released),
+  MaintenanceRunner.ACTION_ACTIVITY_LABELS, and the pin router. `Moved` and
+  `Released` previously fell through to the muted default, which made them
+  indistinguishable from an unrecognised action.
+
+  ACTION_LABELS re-labels at RENDER time only. The action string is persisted in
+  data/recent_activity.json, so rewriting it on disk would need a migration and
+  would rewrite history; mapping here keeps old and new entries reading the same.
+#}
+{#
+  Tooltip rule: say the thing that changes the reader's understanding, then
+  stop. Mechanism earns a place only when it explains a difference they can
+  actually see — Restored vs Moved is the case that does, since both appear in
+  one run and otherwise look arbitrary.
+#}
+{% set ACTION_LABELS = {'Protected': 'Kept on Cache'} %}
+{% set ACTION_TOOLTIPS = {
+    'Cached':          'Copied to the cache pool.',
+    'Restored':        'Moved back to the array using its .plexcached backup.',
+    'Moved':           'Copied back to the array. No .plexcached backup existed.',
+    'Released':        'Handed to the Unraid mover, which relocates it on its own schedule.',
+    'Protected':       'Kept on cache so the Unraid mover leaves it alone.',
+    'Moved to Array':  'Copied to the array by a maintenance action.',
+    'Fixed':           'Cache copy removed and its .plexcached backup restored.',
+    'Restored Backup': 'A .plexcached backup was restored to its original name.',
+    'Deleted Backup':  'An orphaned .plexcached backup was deleted.'
+} %}
+
 {% macro action_badge(action) -%}
+{%- set label = ACTION_LABELS.get(action, action) -%}
+{%- set tip = ACTION_TOOLTIPS.get(action, '') -%}
 {%- if action in ('Cached', 'Protected', 'Fixed') -%}
-<span class="badge badge-success">{{ action }}</span>
-{%- elif action in ('Restored', 'Moved to Array', 'Restored Backup') -%}
-<span class="badge badge-info">{{ action }}</span>
+<span class="badge badge-success" title="{{ tip }}">{{ label }}</span>
+{%- elif action in ('Restored', 'Moved', 'Moved to Array', 'Restored Backup') -%}
+<span class="badge badge-info" title="{{ tip }}">{{ label }}</span>
+{%- elif action == 'Released' -%}
+<span class="badge badge-released" title="{{ tip }}">{{ label }}</span>
 {%- elif action == 'Deleted Backup' -%}
-<span class="badge badge-warning">{{ action }}</span>
+<span class="badge badge-warning" title="{{ tip }}">{{ label }}</span>
 {%- else -%}
-<span class="badge badge-muted">{{ action }}</span>
+<span class="badge badge-muted" title="{{ tip }}">{{ label }}</span>
 {%- endif -%}
 {%- endmacro %}
 
@@ -74,7 +114,10 @@
 
 {% for entry in run.entries %}
 {% if entry.is_group %}
-{% set show_id = run.run_id ~ '-show-' ~ loop.index %}
+{# Group id from core.media_grouping, namespaced by run: the id is unique per
+   (action, show) within one run, but the page renders many runs and the same
+   show can appear in several of them. #}
+{% set show_id = run.run_id ~ '-' ~ entry.group_id %}
 <tr class="run-row run-show-parent{% if is_newest %} is-visible{% endif %}"
     data-run-member="{{ run.run_id }}"
     data-show-id="{{ show_id }}"

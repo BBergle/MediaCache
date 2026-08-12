@@ -584,6 +584,12 @@ class SettingsService:
             # Content discovery (moved from Plex tab)
             "number_episodes": raw.get("number_episodes", 5),
             "days_to_monitor": raw.get("days_to_monitor", 183),
+            # Recently Added view (display-only; see issue #174). Defaults must
+            # match web/routers/recently_added.py DEFAULT_DAYS / DEFAULT_MAX_ITEMS —
+            # the Cache tab renders these, so omitting them here made the form show
+            # a default and write it back over the stored value on the next save.
+            "recently_added_days": raw.get("recently_added_days", 7),
+            "recently_added_max_items": raw.get("recently_added_max_items", 250),
             "watchlist_toggle": raw.get("watchlist_toggle", True),
             "watchlist_episodes": raw.get("watchlist_episodes", 3),
             "prefetch_minimum_minutes": raw.get("prefetch_minimum_minutes", 0),
@@ -630,6 +636,9 @@ class SettingsService:
             # Content discovery (moved from Plex tab)
             "number_episodes": ("number_episodes", safe_int),
             "days_to_monitor": ("days_to_monitor", safe_int),
+            # Recently Added view (display-only; see issue #174)
+            "recently_added_days": ("recently_added_days", safe_int),
+            "recently_added_max_items": ("recently_added_max_items", safe_int),
             "watchlist_toggle": ("watchlist_toggle", lambda x: x == "on" or x is True),
             "watchlist_episodes": ("watchlist_episodes", safe_int),
             "prefetch_minimum_minutes": ("prefetch_minimum_minutes", safe_int),

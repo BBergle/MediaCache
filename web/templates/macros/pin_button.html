@@ -17,10 +17,26 @@
 
   See PINNED_MEDIA_PLAN.md → Phase 4 discovery #6 for the rationale behind this shape.
 #}
-{% macro pin_button(rating_key, pin_type, title, is_pinned) %}
+{% macro pin_button(rating_key, pin_type, title, is_pinned, label='', confirm='', disabled=False, disabled_reason='') %}
+{#
+  Optional params (all default to reproducing the original output byte-for-byte):
+    label           — override the button text, e.g. "Unpin show"
+    confirm         — hx-confirm text; use when the click affects more than this row
+    disabled        — render a non-submitting button (pin state indeterminate)
+    disabled_reason — tooltip explaining why
+#}
+{% if disabled %}
+<button type="button" class="btn btn-sm btn-secondary" disabled
+        title="{{ disabled_reason or 'Pin state could not be checked.' }}"
+        style="margin: 0; opacity: 0.55; cursor: not-allowed;">
+    <i data-lucide="pin" style="width: 14px; height: 14px; vertical-align: middle;"></i>
+    Pin
+</button>
+{% else %}
 <form hx-post="/api/pinned/toggle"
       hx-target="this"
       hx-swap="outerHTML"
+      {% if confirm %}hx-confirm="{{ confirm }}"{% endif %}
       class="pinned-toggle-form"
       data-rating-key="{{ rating_key }}"
       data-is-pinned="{{ 'true' if is_pinned else 'false' }}"
@@ -29,9 +45,10 @@
     <input type="hidden" name="pin_type" value="{{ pin_type }}">
     <input type="hidden" name="title" value="{{ title }}">
     <button type="submit" class="btn btn-sm {% if is_pinned %}btn-secondary{% else %}btn-primary{% endif %}"
-            title="{% if is_pinned %}Unpin this item{% else %}Pin this item{% endif %}">
+            title="{% if is_pinned %}Unpin — allow this item to be evicted or moved back to the array{% else %}Pin — always keep this item on cache (never evicted){% endif %}">
         <i data-lucide="{% if is_pinned %}pin-off{% else %}pin{% endif %}" style="width: 14px; height: 14px; vertical-align: middle;"></i>
-        {% if is_pinned %}Unpin{% else %}Pin{% endif %}
+        {% if label %}{{ label }}{% elif is_pinned %}Unpin{% else %}Pin{% endif %}
     </button>
 </form>
+{% endif %}
 {% endmacro %}

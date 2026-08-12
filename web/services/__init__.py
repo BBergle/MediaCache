@@ -7,7 +7,7 @@ from web.services.scheduler_service import SchedulerService, ScheduleConfig, get
 from web.services.maintenance_service import (
     MaintenanceService,
     AuditResults,
-    UnprotectedFile,
+    UntrackedFile,
     OrphanedBackup,
     DuplicateFile,
     ActionResult,
@@ -19,6 +19,11 @@ from web.services.maintenance_runner import (
 )
 from web.services.import_service import ImportService, ImportSummary, get_import_service
 from web.services.pinned_service import PinnedService, get_pinned_service
+from web.services.recently_added_service import (
+    RecentlyAddedService,
+    RecentlyAddedRow,
+    get_recently_added_service,
+)
 
 __all__ = [
     "CacheService",
@@ -34,7 +39,7 @@ __all__ = [
     "get_scheduler_service",
     "MaintenanceService",
     "AuditResults",
-    "UnprotectedFile",
+    "UntrackedFile",
     "OrphanedBackup",
     "DuplicateFile",
     "ActionResult",
@@ -50,4 +55,7 @@ __all__ = [
     "get_import_service",
     "PinnedService",
     "get_pinned_service",
+    "RecentlyAddedService",
+    "RecentlyAddedRow",
+    "get_recently_added_service",
 ]

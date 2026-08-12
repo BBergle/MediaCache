@@ -51,7 +51,7 @@
                     <input type="hidden" name="pin_type" value="{{ child.type }}">
                     <input type="hidden" name="title" value="{{ child.title }}">
                     <button type="submit" class="btn btn-sm {% if child.already_pinned %}btn-secondary{% else %}btn-primary{% endif %}"
-                            title="{% if child.already_pinned %}Unpin this item{% else %}Pin this item{% endif %}">
+                            title="{% if child.already_pinned %}Unpin — allow this item to be evicted or moved back to the array{% else %}Pin — always keep this item on cache (never evicted){% endif %}">
                         <i data-lucide="{% if child.already_pinned %}pin-off{% else %}pin{% endif %}" style="width: 14px; height: 14px; vertical-align: middle;"></i>
                         {% if child.already_pinned %}Unpin{% else %}Pin{% endif %}
                     </button>

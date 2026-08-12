@@ -24,6 +24,7 @@ from core.file_operations import (
     is_video_file,
     is_directory_level_file,
     name_matches_video_stem,
+    is_sidecar_candidate,
     is_season_like_folder,
     _get_file_category,
     find_matching_plexcached,
@@ -352,6 +353,54 @@ class TestNameMatchesVideoStem:
 
     def test_non_matching_prefix(self):
         assert not name_matches_video_stem("The Revenant 2015.srt", "Deadwood - The Movie (2019)")
+
+
+class TestIsSidecarCandidate:
+    """The app-wide admission rule shared by every sidecar-hunting scan."""
+
+    @pytest.mark.parametrize("name", [
+        "Movie (2012).en.srt", "Movie (2012).nfo", "Movie (2012)-poster.jpg",
+        "Movie (2012).idx", "Movie (2012).sub", "Movie (2012).sup",
+        "Movie (2012).en.ass", "Movie (2012).bif", "English.srt", "poster.jpg",
+    ])
+    def test_admits_every_sidecar_shape(self, name):
+        assert is_sidecar_candidate(name)
+
+    @pytest.mark.parametrize("name", [
+        "Movie (2012)-trailer.mkv", "Movie (2012)-behindthescenes.mkv",
+        "Movie (2012).mkv", "Other Movie.mp4",
+    ])
+    def test_rejects_videos_including_plex_local_extras(self, name):
+        # Plex stores local extras beside the feature; each is its own media
+        # item, never a sidecar of the film it sits next to.
+        assert not is_sidecar_candidate(name)
+
+    def test_rejects_plexcached_backups(self):
+        # The reason this clause exists: splitext() leaves the real extension
+        # behind, so a naive stem test accepts these.
+        assert os.path.splitext("Movie (2012).mkv.plexcached")[0] == "Movie (2012).mkv"
+        assert not is_sidecar_candidate("Movie (2012).mkv.plexcached")
+        assert not is_sidecar_candidate("Movie (2012).en.srt.plexcached")
+
+    def test_rejects_dotfiles(self):
+        assert not is_sidecar_candidate(".DS_Store")
+
+    def test_agrees_with_the_scanner_it_was_extracted_from(self, temp_dir):
+        """The predicate must reproduce _find_sibling_files' filter exactly."""
+        names = [
+            "Movie.mkv", "Movie-trailer.mkv", "Movie.en.srt", "Movie.nfo",
+            "Movie-poster.jpg", "Movie.mkv.plexcached", ".DS_Store", "poster.jpg",
+        ]
+        for n in names:
+            with open(os.path.join(temp_dir, n), "w") as f:
+                f.write("x")
+        finder = SiblingFileFinder()
+        scanned = {
+            os.path.basename(p)
+            for p in finder._find_sibling_files(temp_dir, os.path.join(temp_dir, "Movie.mkv"))
+        }
+        expected = {n for n in names if is_sidecar_candidate(n) and n != "Movie.mkv"}
+        assert scanned == expected
 
 
 # ============================================================

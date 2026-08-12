@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi.templating import Jinja2Templates
 
 from web import __version__
-from core.system_utils import SystemDetector
+from core.system_utils import SystemDetector, check_cache_share_alignment
 
 # Paths
 WEB_DIR = Path(__file__).parent
@@ -69,12 +69,43 @@ templates.env.globals["is_docker"] = IS_DOCKER
 templates.env.globals["web_version"] = __version__
 templates.env.globals["product_version"] = PLEXCACHE_PRODUCT_VERSION
 
+# Share alignment check — exposed as a template global so every code path that
+# renders a mapping card gets it, rather than each route remembering to attach it.
+def _share_warning(mapping) -> dict:
+    """Return a share-alignment warning for a path mapping dict, or None."""
+    if not mapping:
+        return None
+    return check_cache_share_alignment(
+        mapping.get("real_path", ""),
+        mapping.get("cache_path", ""),
+        mapping.get("host_cache_path"),
+    )
+
+
+templates.env.globals["share_warning"] = _share_warning
+
 # Searchable Settings index — exposed as JSON for client-side search.
 # See web/settings_search_index.py for the source of truth. Module lives outside
 # web/services/ to avoid a circular import (services/__init__.py loads cache_service
 # which re-imports web.config).
 from web.settings_search_index import get_search_index
 templates.env.globals["settings_search_index_json"] = json.dumps(get_search_index())
+
+# Outcome vocabulary for Recently Added. Same reason as above for living outside
+# web/services/ — see web/outcome_vocabulary.py.
+from web.outcome_vocabulary import outcome_tooltip as _outcome_tooltip, PROTECTED_SENTENCE
+templates.env.globals["outcome_tooltip"] = _outcome_tooltip
+# The reserved "protected from eviction" sentence, so the pages that assert it
+# can't drift apart — the Cached Files badge and Recently Added already differed
+# by a trailing period before this was shared.
+templates.env.globals["protected_sentence"] = PROTECTED_SENTENCE
+
+# SxxEyy formatting, shared with the Python callers in pinned_service so a
+# template cannot fabricate an S00E00 for an episode whose numbering Plex did
+# not supply — and so a malformed index (which plexapi casts to NaN, not None)
+# cannot raise inside a format filter.
+from core.media_grouping import format_season_episode as _format_season_episode
+templates.env.globals["format_season_episode"] = _format_season_episode
 
 
 def get_time_format() -> str:

@@ -1,0 +1,46 @@
+{#
+  Shared "why is this on cache" badges.
+
+  Both the Cached Files table and the Recently Added rows answer the same
+  question — what put this file on the cache pool, and does that still hold —
+  so the wording lives here rather than being hand-copied. Hand-copied copy is
+  how "Protected" ended up meaning three different things across the app.
+
+  Tooltip rule (same as the outcome badges): say the thing that changes the
+  reader's understanding, then stop.
+
+  The load-bearing claim in these is that OnDeck and Watchlist are NOT eviction
+  protection. They add +15 to the priority score (core/file_operations.py) and
+  defer the move back to the array; only a pin exempts a file from eviction.
+  Keep that distinction in any rewording.
+#}
+
+{% set SOURCE_TOOLTIPS = {
+    'ondeck':          'On a Plex user\'s OnDeck, so PlexCache keeps it on cache for now.',
+    'watchlist':       'On a Plex user\'s Watchlist, so PlexCache keeps it on cache for now.',
+    'stale_ondeck':    'Cached for OnDeck, but it has since dropped off. The next run moves it back to the array.',
+    'stale_watchlist': 'Cached for a Watchlist, but it has since dropped off. The next run moves it back to the array.',
+    'other':           'On cache, but PlexCache no longer has a reason to keep it. The next run moves it back to the array.'
+} %}
+
+{% macro ondeck_badge() -%}
+<span class="badge badge-info" title="{{ SOURCE_TOOLTIPS['ondeck'] }}">OnDeck</span>
+{%- endmacro %}
+
+{% macro watchlist_badge() -%}
+<span class="badge badge-muted" title="{{ SOURCE_TOOLTIPS['watchlist'] }}">Watchlist</span>
+{%- endmacro %}
+
+{#
+  A file on cache that nothing currently justifies. `source` is the tracker that
+  originally cached it, used only to say which reason lapsed.
+#}
+{% macro lapsed_badge(source) -%}
+{%- if source == 'ondeck' -%}
+<span class="badge badge-warning" title="{{ SOURCE_TOOLTIPS['stale_ondeck'] }}">Stale OnDeck</span>
+{%- elif source == 'watchlist' -%}
+<span class="badge badge-warning" title="{{ SOURCE_TOOLTIPS['stale_watchlist'] }}">Stale Watchlist</span>
+{%- else -%}
+<span class="badge badge-warning" title="{{ SOURCE_TOOLTIPS['other'] }}">Other</span>
+{%- endif -%}
+{%- endmacro %}

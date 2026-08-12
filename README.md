@@ -32,7 +32,7 @@ The original PlexCache app only worked for local users for most features, due to
 - (New v3) - **Smart Error Handling** - Migration stops early on critical errors (disk full, permissions).
 - (New v3) - **Async Maintenance** - Background thread execution for maintenance actions (restore, sync, protect, delete, fix) with real-time progress.
 - (New v3) - **Parallel File Operations** - Concurrent file moves/copies with configurable worker count.
-- (New v3) - **Cache Health Audit** - Detect unprotected files, orphaned backups, stale entries with one-click fixes.
+- (New v3) - **Cache Health Audit** - Detect untracked files, orphaned backups, stale entries with one-click fixes.
 - (New v3) - **ZFS Support** - Automatic detection of ZFS pool-only shares with correct path resolution.
 - (New v3) - **Min Free Space** - Safety floor setting to prevent caching when cache drive space is low.
 - (New v3) - **Docker Support** - Official container with Unraid template, auto-setup, and path translation.
@@ -114,7 +114,7 @@ python3 plexcache.py --web --port 8080     # Custom port
 - **Dashboard** - Real-time cache stats, Plex connection status, recent activity feed
 - **Cached Files** - Sortable file browser with filters, eviction controls
 - **Storage** - Drive analytics, breakdowns by source, largest/oldest files
-- **Maintenance** - Cache health audit, unprotected file detection, one-click fixes
+- **Maintenance** - Cache health audit, untracked file detection, one-click fixes
 - **Settings** - Full configuration UI with Plex OAuth, library selection, user toggles, test connection
 - **Schedule** - Automatic runs with interval or cron expressions
 - **Logs** - Real-time log viewer with search, filters, and live streaming

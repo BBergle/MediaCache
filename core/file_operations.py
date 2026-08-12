@@ -140,6 +140,36 @@ def name_matches_video_stem(name: str, stem: str) -> bool:
     return not name[len(stem)].isalnum()
 
 
+def is_sidecar_candidate(name: str) -> bool:
+    """Check whether a directory entry is eligible to be a media sidecar.
+
+    The app-wide admission rule, shared by every directory scan that looks for
+    subtitles, artwork or NFOs. Three exclusions, each for its own reason:
+
+    * a dotfile is OS or editor noise (``.DS_Store``, ``.nfo.swp``);
+    * a ``.plexcached`` name is the array backup of a cached file, not a
+      sidecar — and it slips a naive stem test, because
+      ``splitext("Movie.mkv.plexcached")[0]`` is ``"Movie.mkv"``, which starts
+      with ``"Movie."``;
+    * another video is its own media item. Plex local extras land beside the
+      feature as ``<stem>-trailer.mkv`` / ``<stem>-behindthescenes.mkv`` and
+      would otherwise be attached to it.
+
+    Says nothing about ownership. Pair with :func:`name_matches_video_stem`
+    when the caller needs "does this sidecar belong to *that* video".
+
+    Args:
+        name: A directory entry's basename. No stat call required, so this can
+            be applied before ``entry.is_file()``.
+
+    Returns:
+        True if the entry is eligible to be some video's sidecar.
+    """
+    return not (name.startswith('.')
+                or name.endswith(PLEXCACHED_EXTENSION)
+                or is_video_file(name))
+
+
 def is_season_like_folder(folder_name: str) -> bool:
     """Check if a folder name looks like a TV season directory.
 
@@ -3151,6 +3181,11 @@ class SiblingFileFinder:
                 if is_video_file(name):
                     video_stems.add(os.path.splitext(name)[0])
                 else:
+                    # Reaching here means is_sidecar_candidate(name) is True. The
+                    # branches stay explicit rather than calling it: this is a
+                    # partition, not a filter — every name the predicate rejects
+                    # still has to be classified (a .plexcached video contributes
+                    # a stem above), and a boolean cannot carry that.
                     sibling_paths.append(entry.path)
         except PermissionError as e:
             logging.error(f"Cannot access directory {directory_path}. Permission denied. {type(e).__name__}: {e}")
@@ -3179,10 +3214,8 @@ class SiblingFileFinder:
                 entry.path
                 for entry in os.scandir(directory_path)
                 if entry.is_file()
-                and not entry.name.startswith('.')
-                and not entry.name.endswith('.plexcached')
+                and is_sidecar_candidate(entry.name)
                 and entry.name != file_basename
-                and not is_video_file(entry.name)
             ]
         except PermissionError as e:
             logging.error(f"Cannot access directory {directory_path}. Permission denied. {type(e).__name__}: {e}")
@@ -3860,7 +3893,7 @@ class FileFilter:
                 # The file may not be in ondeck/watchlist API response but is actively being played
                 if files_to_skip and check_path in files_to_skip:
                     display_name = self._extract_display_name(cache_file)
-                    logging.debug(f"Active session, keeping protected: {display_name}")
+                    logging.debug(f"Active session, keeping in cache: {display_name}")
                     continue
 
                 # Skip files with active hard links

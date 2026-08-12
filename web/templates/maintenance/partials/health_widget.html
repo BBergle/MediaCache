@@ -12,7 +12,7 @@
         <span class="stat-label">Tracking Health</span>
         <span class="stat-value">
             {% if health.status == 'critical' %}
-            {{ health.unprotected_count + health.orphaned_count }} issues
+            {{ health.untracked_count + health.orphaned_count }} issues
             {% elif health.status == 'warnings' %}
             {{ health.stale_exclude_count + health.stale_timestamp_count }} warnings
             {% else %}

@@ -716,7 +716,7 @@ class TestFullAuditWithReleasedFiles:
                           return_value=([], [], set(), set())), \
              patch.object(MaintenanceService, "_cache_to_array_path", return_value=None), \
              patch.object(MaintenanceService, "_get_pinned_cache_paths", return_value=set()), \
-             patch.object(MaintenanceService, "_group_unprotected_by_directory", return_value=[]):
+             patch.object(MaintenanceService, "_group_untracked_by_directory", return_value=[]):
             return service.run_full_audit()
 
     def test_mover_relocated_a_released_file_is_not_stale(self):
@@ -734,10 +734,10 @@ class TestFullAuditWithReleasedFiles:
 
         assert results.stale_timestamp_entries == ["/mnt/cache/Genuine.mkv"]
 
-    def test_released_file_still_on_cache_is_not_unprotected(self, tmp_path):
+    def test_released_file_still_on_cache_is_not_untracked(self, tmp_path):
         """A released file is absent from the exclude list on purpose.
 
-        Listing it as unprotected recommends sync_to_array — the exact array
+        Listing it as untracked recommends sync_to_array — the exact array
         write release exists to avoid — and exposes it to the bulk
         "Add to Exclude" action.
         """
@@ -751,7 +751,7 @@ class TestFullAuditWithReleasedFiles:
             released_files={released},
         )
 
-        flagged = {f.cache_path for f in results.unprotected_files}
+        flagged = {f.cache_path for f in results.untracked_files}
         assert flagged == {genuine}
 
     def test_released_files_do_not_affect_health(self, tmp_path):

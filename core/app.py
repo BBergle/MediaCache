@@ -27,7 +27,7 @@ except ImportError:
 from core import __version__
 from core.config import ConfigManager
 from core.logging_config import LoggingManager, reset_warning_error_flag
-from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock, get_disk_usage, get_array_direct_path, detect_zfs, set_zfs_prefixes, format_bytes, create_dir_with_ownership, cleanup_empty_parent_folders, resolve_cache_boundary, sweep_empty_folders
+from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock, get_disk_usage, get_array_direct_path, detect_zfs, set_zfs_prefixes, format_bytes, create_dir_with_ownership, check_cache_share_alignment, cleanup_empty_parent_folders, resolve_cache_boundary, sweep_empty_folders
 from core.plex_api import PlexManager, OnDeckItem
 from core.file_operations import MultiPathModifier, SiblingFileFinder, FileFilter, FileMover, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration, get_media_identity, find_matching_plexcached, is_directory_level_file, is_video_file, save_json_atomically
 from core.pinned_media import PinnedMediaTracker, resolve_pins_to_paths
@@ -579,7 +579,34 @@ class PlexCacheApp:
         enabled_mappings = [m for m in all_mappings if m.enabled]
         logging.info(f"[CONFIG] Using multi-path mode with {len(all_mappings)} mappings ({len(enabled_mappings)} enabled)")
         self.file_path_modifier = MultiPathModifier(mappings=all_mappings)
+        self._warn_on_share_misalignment(enabled_mappings)
 
+        self._check_legacy_path_arrays()
+
+    def _warn_on_share_misalignment(self, mappings) -> None:
+        """Warn when a mapping caches into a different Unraid share than its media.
+
+        Unraid merges a share's pool and array tiers under one /mnt/user/ path, so
+        caching only works when both tiers belong to the same share. Pointing the
+        cache at a different share leaves Plex reading a .plexcached stub and
+        reporting the file missing (issues #189, #196). This is advisory only —
+        unusual but valid layouts exist, and the check stays quiet when it can't
+        resolve a share.
+        """
+        for mapping in mappings:
+            if not getattr(mapping, "cacheable", True):
+                continue
+            warning = check_cache_share_alignment(
+                getattr(mapping, "real_path", "") or "",
+                getattr(mapping, "cache_path", "") or "",
+                getattr(mapping, "host_cache_path", None),
+            )
+            if warning:
+                name = getattr(mapping, "name", None) or getattr(mapping, "real_path", "mapping")
+                logging.warning(f"[CONFIG] '{name}': {warning['message']}")
+
+    def _check_legacy_path_arrays(self) -> None:
+        """Log guidance when deprecated legacy path arrays are still configured."""
         if self.config_manager.has_legacy_path_arrays():
             legacy_info = self.config_manager.get_legacy_array_info()
             logging.info(f"[CONFIG] Legacy path arrays detected: {legacy_info}")
@@ -1333,6 +1360,10 @@ class PlexCacheApp:
                 self.plex_manager.plex,
                 self.pinned_tracker,
                 preference=preference,
+                # The one caller that prunes. Read-only render paths pass the
+                # default (False) so loading a page can't delete a pin whose
+                # item is only transiently missing from Plex.
+                prune=True,
             )
         except Exception as e:
             logging.error(

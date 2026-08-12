@@ -10,11 +10,11 @@ import re
 import threading
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional, Generator, Tuple, Dict, Set
-from dataclasses import dataclass
+from typing import Any, List, Optional, Generator, Tuple, Dict, Set
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from plexapi.server import PlexServer
@@ -124,6 +124,101 @@ class OnDeckItem:
     episode_info: Optional[Dict[str, any]] = None
     is_current_ondeck: bool = False
     rating_key: Optional[str] = None
+
+
+@dataclass
+class RecentlyAddedItem:
+    """Represents a recently-added library item with metadata.
+
+    Unlike OnDeck/Watchlist items, recently-added media is server-wide
+    (library-level), so there is no per-user ``username`` field. One item is
+    emitted per media file (part).
+
+    Attributes:
+        file_path: Plex path to the media file.
+        rating_key: Plex rating key (for pin lookups and version grouping).
+        title: The item's own title — episode title for episodes, movie title
+            for movies. Use ``episode_info`` for show/season context.
+        media_type: "movie" or "episode".
+        added_at: When the item was added to the library (None if unavailable).
+        library_title: Display name of the source library section.
+        library_section_id: The library section id (matches ``valid_sections``).
+        size: File size in bytes for this part (0 if unavailable).
+        episode_info: For episodes, dict with 'show', 'season', 'episode' keys.
+    """
+    file_path: str
+    rating_key: Optional[str] = None
+    title: str = ""
+    media_type: str = "movie"
+    added_at: Optional[datetime] = None
+    library_title: str = ""
+    library_section_id: Optional[int] = None
+    size: int = 0
+    episode_info: Optional[Dict[str, any]] = None
+    # For episodes, the *show's* rating key. Stable identity for grouping —
+    # two distinct shows can share a title ("The Office" US and UK), and
+    # grouping on the display title merges them into one nonsense group.
+    show_rating_key: str = ""
+    # Every file behind this item, across all versions:
+    # [{file_path, size, is_preferred, label}]. ``file_path``/``size`` above
+    # describe the PREFERRED version only — the one PlexCache caches and pins.
+    version_files: List[Dict[str, any]] = field(default_factory=list)
+
+
+@dataclass
+class RecentlyAddedResult:
+    """What a recently-added sweep found, and what it could not read.
+
+    A per-library fetch can fail on its own — a section that times out or 5xxes
+    while its neighbours answer. Returning only the items would make that
+    library indistinguishable from one that genuinely had nothing new, so the
+    page would state "Nothing added" about media it never managed to look at.
+
+    Attributes:
+        items: Recently-added items, newest first, one entry per Plex item.
+        unreadable_libraries: Titles of sections that were attempted and
+            failed. Empty on a clean sweep. A total failure — no section
+            readable at all — raises instead, since there is no partial
+            result to report.
+    """
+    items: List[RecentlyAddedItem] = field(default_factory=list)
+    unreadable_libraries: List[str] = field(default_factory=list)
+
+
+def _partial_attr(obj: Any, name: str, default: Any = None) -> Any:
+    """Read an attribute off a plexapi *listing* object without failing the caller.
+
+    Section listings hand back partial objects, and plexapi reloads on any
+    ``None``/``[]`` value — so reading an unnumbered special's ``index`` or an
+    unanalyzed item's ``media`` fires a live metadata GET that can 5xx or time
+    out. ``getattr``'s 3-arg default only swallows ``AttributeError``, not
+    transport errors, so one bad item would otherwise abort the whole fetch and
+    discard every library already collected.
+    """
+    try:
+        return getattr(obj, name, default)
+    except Exception as e:
+        # Read the label out of __dict__ so this can't re-enter __getattribute__
+        # and raise a second time; plexapi's own error path does the same.
+        label = obj.__dict__.get('title') or obj.__dict__.get('ratingKey') or '?'
+        logging.warning(
+            f"Recently added: could not read '{name}' for '{label}': "
+            f"{type(e).__name__}: {e}"
+        )
+        return default
+
+
+def _media_version_label(media: Any) -> str:
+    """Short human label for a Plex Media version, e.g. "4k" or "1080p".
+
+    Used to distinguish rows in the multi-version expand detail. Falls back to
+    an empty string when Plex reports no resolution.
+    """
+    res = getattr(media, 'videoResolution', None)
+    if not res:
+        return ""
+    res = str(res).strip().lower()
+    return res if res.endswith('k') else f"{res}p"
 
 
 # API delay between plex.tv calls (seconds)
@@ -363,11 +458,13 @@ class PlexManager:
 
     def __init__(self, plex_url: str, plex_token: str, retry_limit: int = 3, delay: int = 5,
                  token_cache_file: Optional[str] = None, rss_cache_file: Optional[str] = None,
-                 plex_db_path: str = "", watchlist_enabled: bool = True):
+                 plex_db_path: str = "", watchlist_enabled: bool = True,
+                 timeout: Optional[int] = None):
         self.plex_url = plex_url
         self.plex_token = plex_token
         self.retry_limit = retry_limit
         self.delay = delay
+        self.timeout = timeout
         self.plex = None
         self._token_cache = UserTokenCache(cache_file=token_cache_file, cache_expiry_hours=24)
         self._rss_cache_file = rss_cache_file  # Path to RSS cache file
@@ -391,7 +488,7 @@ class PlexManager:
         logging.debug(f"Connecting to Plex server: {self.plex_url}")
 
         try:
-            self.plex = PlexServer(self.plex_url, self.plex_token)
+            self.plex = PlexServer(self.plex_url, self.plex_token, timeout=self.timeout)
             logging.debug(f"Plex server version: {self.plex.version}")
         except Exception as e:
             # Extract the root cause from nested exception chains
@@ -1639,6 +1736,194 @@ class PlexManager:
 
         if unknown_user_ids:
             logging.debug(f"[PLEX API] {len(unknown_user_ids)} unknown user ID(s) in RSS feed: {', '.join(sorted(unknown_user_ids))}. Run 'python3 plexcache_setup.py' and refresh users to resolve.")
+
+    def get_recently_added_media(self, valid_sections: List[int], days_to_monitor: int,
+                                 max_items: int = 100,
+                                 version_preference: str = "highest") -> 'RecentlyAddedResult':
+        """Get recently-added media across enabled libraries (server-wide).
+
+        Recently-added is a library-level view, so this uses the main account
+        only — there is no per-user token machinery (unlike OnDeck/Watchlist).
+
+        Args:
+            valid_sections: Library section ids to include (matches enabled
+                path mappings). An empty list means all available sections.
+            days_to_monitor: Only include items added within this many days.
+            max_items: Cap on the number of items returned (newest first).
+            version_preference: ``pinned_preferred_resolution`` value used to
+                pick which version represents a multi-version item — the same
+                choice the pin and caching paths make.
+
+        Returns:
+            RecentlyAddedResult. ``items`` is newest first, one entry per Plex
+            item (not per file) — ``version_files`` carries every underlying
+            file. ``unreadable_libraries`` names any section that was attempted
+            and failed, so the caller can say so instead of reporting an empty
+            library as empty.
+
+        Raises:
+            Exception: If the library list itself cannot be read. Nothing was
+                enumerated in that case, so there is no partial result and the
+                caller must render the failure rather than an empty view.
+        """
+        items: List[RecentlyAddedItem] = []
+        unreadable: List[str] = []
+        read_sections: List[str] = []
+        cutoff = datetime.now() - timedelta(days=days_to_monitor)
+
+        try:
+            sections = self.plex.library.sections()
+        except Exception as e:
+            # Nothing was enumerated, so there is no partial result to report.
+            # Returning [] here would render as "Nothing added", stating a fact
+            # about libraries that were never contacted.
+            _log_api_error("list library sections for recently added", e)
+            raise
+
+        # plexapi exposes section.key as a string ("1"), while valid_sections
+        # from config are ints — compare as strings so the filter actually matches.
+        section_ids = {str(s) for s in (valid_sections or [])}
+        for section in sections:
+            if section_ids and str(getattr(section, 'key', '')) not in section_ids:
+                continue
+            section_type = getattr(section, 'type', None)
+            try:
+                # recentlyAdded() returns newest first; the days cutoff trims further.
+                # For SHOW libraries recentlyAdded() yields show-level items, so use
+                # recentlyAddedEpisodes() to get the actual recently-added episodes.
+                if section_type == 'show' and hasattr(section, 'recentlyAddedEpisodes'):
+                    recent = section.recentlyAddedEpisodes(maxresults=max_items)
+                else:
+                    recent = section.recentlyAdded(maxresults=max_items)
+            except Exception as e:
+                section_title = str(
+                    getattr(section, 'title', '') or f"section {getattr(section, 'key', '?')}"
+                )
+                _log_api_error(f"fetch recently added for section '{section_title}'", e)
+                # Name it rather than dropping it: an unreadable library that
+                # vanishes silently looks exactly like an empty one.
+                unreadable.append(section_title)
+                continue
+
+            read_sections.append(str(getattr(section, 'title', '?')))
+            section_kept = 0
+            for video in recent:
+                # Read-only view over listing fields: opt out of plexapi's lazy
+                # reload so a null `index` (unnumbered special) or empty `media`
+                # (unanalyzed item) costs no per-item metadata GET, and so it
+                # can't 5xx mid-fetch. Best-effort — older plexapi lacks the attr.
+                try:
+                    video._autoReload = False
+                except Exception:
+                    pass
+
+                media_type = getattr(video, 'type', None)
+                if media_type not in ('movie', 'episode'):
+                    # Skip season/show wrappers — we surface individual files.
+                    continue
+
+                added_at = getattr(video, 'addedAt', None)
+                if added_at is not None and added_at < cutoff:
+                    continue
+
+                episode_info = None
+                if media_type == 'episode':
+                    # _partial_attr, not getattr: these are the two reads that
+                    # legitimately hold None and so trigger the reload above.
+                    # Emitted whenever the item is an episode, even with the
+                    # numbering missing — the show name is the more useful half
+                    # and gating the whole dict on the numbers threw it away,
+                    # leaving the row to render as a movie. Renderers format the
+                    # code with format_season_episode(), which yields "" rather
+                    # than a fabricated S00E00 when a number is unusable.
+                    episode_info = {
+                        'show': getattr(video, 'grandparentTitle', None),
+                        'season': _partial_attr(video, 'parentIndex'),
+                        'episode': _partial_attr(video, 'index'),
+                    }
+
+                rating_key = str(getattr(video, 'ratingKey', '') or '')
+                title = getattr(video, 'title', '') or ''
+                library_title = getattr(section, 'title', '') or ''
+                library_section_id = getattr(section, 'key', None)
+
+                # One item per rating_key, describing the version PlexCache would
+                # actually manage. Multi-VERSION items (4K + 1080p) are distinct
+                # Media objects and only the preferred one is ever cached or
+                # pinned (core/pinned_media.select_media_version) — emitting a
+                # row per version would put two pin controls on one rating_key,
+                # where the second reads "Pin" but unpins. Multi-PART items
+                # (cd1/cd2) are parts of ONE Media and are all cached together,
+                # so they stay folded into this item's file list.
+                medias = list(_partial_attr(video, 'media') or [])
+                if not medias:
+                    continue
+                try:
+                    from core.pinned_media import select_media_version
+                    preferred = select_media_version(video, version_preference)
+                except (ValueError, AttributeError, ImportError):
+                    preferred = medias[0]
+
+                version_files: List[Dict[str, Any]] = []
+                for media in medias:
+                    is_preferred = media is preferred
+                    for part in getattr(media, 'parts', None) or []:
+                        part_file = getattr(part, 'file', None)
+                        if not part_file:
+                            continue
+                        version_files.append({
+                            'file_path': part_file,
+                            'size': int(getattr(part, 'size', 0) or 0),
+                            'is_preferred': is_preferred,
+                            'label': _media_version_label(media),
+                        })
+
+                preferred_files = [f for f in version_files if f['is_preferred']]
+                if not preferred_files:
+                    continue
+
+                items.append(RecentlyAddedItem(
+                    file_path=preferred_files[0]['file_path'],
+                    rating_key=rating_key,
+                    title=title,
+                    media_type=media_type,
+                    added_at=added_at,
+                    library_title=library_title,
+                    library_section_id=library_section_id,
+                    # Every part of the preferred version is cached together, so
+                    # the item's footprint is their sum.
+                    size=sum(f['size'] for f in preferred_files),
+                    episode_info=episode_info,
+                    # plexapi casts this to int; grouping keys on it as a string.
+                    show_rating_key=str(_partial_attr(video, 'grandparentRatingKey') or ''),
+                    version_files=version_files,
+                ))
+                section_kept += 1
+
+            logging.debug(
+                f"Recently added [{getattr(section, 'title', '?')}] "
+                f"(type={section_type}): {section_kept} file(s) within {days_to_monitor}d"
+            )
+
+        # Newest first, then cap. Items without added_at sort last.
+        items.sort(key=lambda i: i.added_at or datetime.min, reverse=True)
+        if len(items) > max_items:
+            logging.info(
+                f"Recently added: {len(items)} files found, capping display to {max_items}"
+            )
+            items = items[:max_items]
+
+        # Count sections actually answered, not the ones config asked for —
+        # the old form reported "from 2 section(s)" even when both had failed.
+        answered = len(read_sections)
+        summary = (
+            f"Recently added: returning {len(items)} item(s) from "
+            f"{answered} section(s) within {days_to_monitor}d"
+        )
+        if unreadable:
+            summary += f"; {len(unreadable)} unreadable ({', '.join(unreadable)})"
+        logging.info(summary)
+        return RecentlyAddedResult(items=items, unreadable_libraries=unreadable)
 
     def get_watchlist_media(self, valid_sections: List[int], watchlist_episodes: int,
                             users_toggle: bool, skip_watchlist: List[str], rss_url: Optional[str] = None,
