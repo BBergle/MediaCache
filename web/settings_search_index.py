@@ -533,7 +533,7 @@ _INDEX: List[Dict[str, Any]] = [
     {
         "tab": "logging", "setting_id": "keep_error_logs_days",
         "label": "Error Log Retention (days)",
-        "hint": "Days to keep logs containing warnings/errors (0 = disabled).",
+        "hint": "Days to keep logs containing errors (0 = disabled).",
         "section": "Logging", "subsection": "Log Retention",
         "icon": "archive", "tone": "tone-warn",
         "keywords": ["error", "warning", "retention", "days", "keep"],

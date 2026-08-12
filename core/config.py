@@ -264,7 +264,8 @@ class LoggingConfig:
     """Configuration for logging settings."""
     # Maximum number of log files to keep (default: 24 for hourly runs = 1 day)
     max_log_files: int = 24
-    # Keep error logs (containing WARNING/ERROR) for this many days (default: 7)
+    # Keep error logs (containing ERROR/CRITICAL) for this many days (default: 7)
+    # Warnings alone do not trigger preservation — see _preserve_error_log()
     # Logs are preserved in logs/errors/ subfolder
     keep_error_logs_days: int = 7
 

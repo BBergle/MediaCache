@@ -28,7 +28,7 @@
                     <input type="number" id="keep_error_logs_days" name="keep_error_logs_days"
                            class="input-narrow"
                            value="{{ settings.keep_error_logs_days | default(7) }}" min="0" max="365">
-                    <div class="form-hint">Days to keep logs containing warnings/errors (0 = disabled)</div>
+                    <div class="form-hint">Days to keep logs containing errors (0 = disabled)</div>
                 </div>
             </div>
 
@@ -36,7 +36,7 @@
                 <strong>How it works:</strong>
                 <ul style="margin: 0.5rem 0 0 1.5rem; padding: 0;">
                     <li><strong>Max Log Files:</strong> PlexCache creates a new log file each run. Older logs are automatically deleted when this limit is reached.</li>
-                    <li><strong>Error Log Retention:</strong> Logs containing WARNING or ERROR messages are preserved in <code>logs/errors/</code> for longer-term debugging.</li>
+                    <li><strong>Error Log Retention:</strong> Logs containing ERROR or CRITICAL messages are preserved in <code>logs/errors/</code> for longer-term debugging. Runs that only logged warnings are not kept.</li>
                 </ul>
             </div>
 

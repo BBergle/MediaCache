@@ -1039,7 +1039,7 @@ def _setup_advanced_settings():
         prompt_user_for_number('Max log files to keep [24]: ', '24', 'max_log_files')
 
     if 'keep_error_logs_days' not in settings_data:
-        print('\nError log retention: Logs with warnings/errors are preserved longer.')
+        print('\nError log retention: Logs containing errors are preserved longer.')
         print('(Copied to logs/errors/ subfolder for debugging)')
         prompt_user_for_number('Days to keep error logs [7]: ', '7', 'keep_error_logs_days')
 
