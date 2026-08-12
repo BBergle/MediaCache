@@ -212,6 +212,69 @@ class TestPlexcacheQuotaEnforcement:
         assert len(result) == 1
 
 
+class TestCacheSpaceConstrainedFlag:
+    """_cache_space_constrained must be set whenever caching lost files to space.
+
+    _reclaim_released_if_constrained() gates entirely on this flag, so a path
+    that drops candidates without setting it silently disables the
+    release-to-mover reclaim. The full-drive path is the one that matters most:
+    it drops *every* candidate, which is stronger evidence of pressure than the
+    partial-skip path that does set the flag.
+    """
+
+    def _run(self, tmp_path, *, quota_bytes=0, cache_limit_bytes=0,
+             min_free_bytes=0, tracked=200*GB, drive_used=400*GB):
+        app, cache_dir, files, disk, _ = _build_app(
+            tmp_path, quota_bytes=quota_bytes, cache_limit_bytes=cache_limit_bytes,
+            min_free_bytes=min_free_bytes, drive_used=drive_used,
+        )
+        app._cache_space_constrained = False
+
+        with patch('core.app.get_disk_usage', return_value=disk), \
+             patch.object(app, '_get_plexcache_tracked_size', return_value=(tracked, [])), \
+             patch('os.path.getsize', return_value=10*GB):
+            result = app._apply_cache_limit(files, cache_dir)
+
+        return app, result
+
+    def test_quota_already_exhausted_sets_the_flag(self, tmp_path):
+        app, result = self._run(tmp_path, quota_bytes=150*GB, tracked=200*GB)
+
+        assert result == []
+        assert app._cache_space_constrained is True
+
+    def test_cache_limit_already_exceeded_sets_the_flag(self, tmp_path):
+        app, result = self._run(
+            tmp_path, cache_limit_bytes=300*GB, drive_used=400*GB)
+
+        assert result == []
+        assert app._cache_space_constrained is True
+
+    def test_min_free_space_floor_breached_sets_the_flag(self, tmp_path):
+        # 1000GB total, 900GB used -> 100GB free, floor is 200GB.
+        app, result = self._run(
+            tmp_path, min_free_bytes=200*GB, drive_used=900*GB)
+
+        assert result == []
+        assert app._cache_space_constrained is True
+
+    def test_partial_skip_still_sets_the_flag(self, tmp_path):
+        """Regression guard on the path that already worked."""
+        # 220GB quota - 200GB tracked = 20GB, so 2 of 5 files fit.
+        app, result = self._run(tmp_path, quota_bytes=220*GB, tracked=200*GB)
+
+        assert len(result) == 2
+        assert app._cache_space_constrained is True
+
+    def test_everything_fits_leaves_the_flag_alone(self, tmp_path):
+        """No harm measured, so the reclaim must not fire."""
+        # 300GB quota - 200GB tracked = 100GB, all 5 files (50GB) fit.
+        app, result = self._run(tmp_path, quota_bytes=300*GB, tracked=200*GB)
+
+        assert len(result) == 5
+        assert app._cache_space_constrained is False
+
+
 class TestNoGapShowOrdering:
     """Tests for #169: episodes of the same show stay contiguous when space is tight.
 

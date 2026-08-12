@@ -2607,6 +2607,12 @@ class PlexCacheApp:
                 logging.warning(f"PlexCache quota reached ({plexcache_tracked / (1024**3):.2f}GB tracked, quota is {quota_readable})")
             else:
                 logging.warning(f"Cache drive already at or over limit ({drive_usage_gb:.2f}GB used, limit is {limit_readable})")
+            # No room for anything, so the packing loop below never runs and
+            # never reaches its own flag-setting branch. This is the strongest
+            # evidence of space pressure there is — every candidate was
+            # dropped, not just the ones that did not fit — so the reclaim in
+            # _reclaim_released_if_constrained() has to see it too.
+            self._cache_space_constrained = True
             return []
         files_to_cache = []
         skipped_count = 0
