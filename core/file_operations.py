@@ -2302,25 +2302,10 @@ class CachePriorityManager:
 
         ondeck_season, ondeck_episode = ondeck_pos
 
-        # Calculate how many episodes ahead this file is
-        if season < ondeck_season:
-            # This episode is BEFORE the OnDeck position (shouldn't happen, but handle it)
-            return -1
-        elif season == ondeck_season:
-            if episode <= ondeck_episode:
-                # Same season, same or earlier episode
-                return 0
-            else:
-                # Same season, later episode
-                return episode - ondeck_episode
-        else:
-            # Later season - estimate distance
-            # Assume ~13 episodes per season for estimation
-            episodes_per_season = 13
-            seasons_ahead = season - ondeck_season
-            episodes_remaining_in_ondeck_season = episodes_per_season - ondeck_episode
-            full_seasons_between = max(0, seasons_ahead - 1) * episodes_per_season
-            return episodes_remaining_in_ondeck_season + full_seasons_between + episode
+        # Shared with the Priority Report's scorer so both produce the same
+        # distance — see core/media_grouping.episodes_ahead_of().
+        from core.media_grouping import episodes_ahead_of
+        return episodes_ahead_of(season, episode, ondeck_season, ondeck_episode)
 
     def _is_tv_episode(self, cache_path: str) -> bool:
         """Check if a cached file is a TV episode.
