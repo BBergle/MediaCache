@@ -95,6 +95,9 @@ class PlexCacheApp:
         # Set when _apply_cache_limit() has to skip caching for space reasons.
         # Drives _reclaim_released_if_constrained().
         self._cache_space_constrained = False
+        # Both eviction entry points bail on an empty cache_limit; warn once
+        # per run rather than twice.
+        self._warned_eviction_needs_limit = False
         # Eviction tracking
         self.evicted_count = 0
         self.evicted_bytes = 0
@@ -956,7 +959,43 @@ class PlexCacheApp:
                     self._mount_paths_safe = False
             if self.config_manager.paths.cache_dir:
                 self._ensure_cache_path_exists(self.config_manager.paths.cache_dir)
-    
+
+        self._advise_on_symlinks()
+
+    def _advise_on_symlinks(self) -> None:
+        """Flag the one configuration where caching hides files from Plex.
+
+        Caching renames the original to ``.plexcached``. On Unraid the media
+        path is a FUSE union that still shows the cache copy, so Plex keeps
+        reading the file. Off Unraid that only holds when something else
+        unions the two paths (mergerfs and similar); on plain directories the
+        original path stops resolving and Plex reports the file as missing.
+
+        ``use_symlinks`` exists for exactly that case and defaults to False,
+        so a plain-Linux install hits it by default. This cannot be decided
+        from configuration alone, hence advice rather than an error.
+        """
+        if getattr(self.system_detector, 'is_unraid', False):
+            return
+        if self.config_manager.cache.use_symlinks:
+            return
+
+        cacheable = [
+            m for m in (self.config_manager.paths.path_mappings or [])
+            if m.enabled and m.cacheable and m.cache_path
+        ]
+        if not cacheable and self.config_manager.paths.cache_dir:
+            cacheable = [None]  # legacy single-path config
+        if not cacheable:
+            return
+
+        logging.warning(
+            "Not running on Unraid and 'Create symlinks' is off. Caching renames the "
+            "original file to .plexcached, so unless your media path and cache path are "
+            "a single merged view (mergerfs or similar), Plex will stop finding cached "
+            "files. Turn on 'Create symlinks' in Settings if they are separate directories."
+        )
+
     def _connect_to_plex(self) -> None:
         """Connect to the Plex server and load user tokens."""
         self.plex_manager.connect()
@@ -2633,7 +2672,11 @@ class PlexCacheApp:
         if plexcache_quota_bytes > 0:
             plexcache_tracked, _ = self._get_plexcache_tracked_size()
             quota_available = plexcache_quota_bytes - plexcache_tracked
-            logging.info(f"[QUOTA] PlexCache quota: {plexcache_quota_bytes / (1024**3):.2f}GB (tracked: {plexcache_tracked / (1024**3):.2f}GB, available: {quota_available / (1024**3):.2f}GB)")
+            # The quota's configured value is already logged above; report only
+            # what is measured against it, so one run does not print the same
+            # number twice in two different shapes.
+            logging.info(f"[QUOTA] PlexCache tracked: {plexcache_tracked / (1024**3):.2f}GB "
+                         f"(available: {quota_available / (1024**3):.2f}GB)")
             if available_space is None or quota_available < available_space:
                 available_space = quota_available
                 bottleneck = "plexcache_quota"
@@ -2641,10 +2684,10 @@ class PlexCacheApp:
         if available_space is None:
             return media_files
 
-        # Log which constraint is the bottleneck when multiple are active
-        active_count = sum(1 for v in [cache_limit_bytes, min_free_bytes, plexcache_quota_bytes] if v > 0)
-        if active_count > 1:
-            logging.info(f"[QUOTA] Active constraint: {bottleneck.replace('_', ' ')} (available: {available_space / (1024**3):.2f}GB)")
+        # Always name the constraint that won, even when only one is set.
+        # Gating this on "more than one active" meant the line's absence
+        # carried meaning, and the reader had to work out which limit applied.
+        logging.info(f"[QUOTA] Active constraint: {bottleneck.replace('_', ' ')} (available: {available_space / (1024**3):.2f}GB)")
 
         if available_space <= 0:
             if bottleneck == "min_free_space":
@@ -2803,6 +2846,28 @@ class PlexCacheApp:
         # Clamp to 0-100 range
         return max(0, min(100, score))
 
+    def _warn_eviction_needs_cache_limit(self) -> None:
+        """Say so when eviction is switched on but has nothing to measure.
+
+        Both eviction entry points size themselves as a percentage of
+        ``cache_limit``, so an empty limit leaves a fully configured eviction
+        mode doing nothing at all. Both used to return silently, which reads
+        from the log exactly like a run that had nothing to evict.
+
+        ``plexcache_quota`` does not substitute: it bounds what PlexCache
+        holds, while eviction measures total drive usage.
+        """
+        if self._warned_eviction_needs_limit:
+            return
+        self._warned_eviction_needs_limit = True
+
+        mode = self.config_manager.cache.cache_eviction_mode
+        logging.warning(
+            f"Cache eviction is set to '{mode}' but no Cache Limit is configured, "
+            f"so nothing will ever be evicted. Set a Cache Limit in Settings, or "
+            f"set eviction to 'none' to stop this warning."
+        )
+
     def _filter_low_priority_files(self, media_files: List[str], source_map: dict) -> List[str]:
         """Filter out files that would score below eviction_min_priority.
 
@@ -2840,6 +2905,7 @@ class PlexCacheApp:
         # Check if drive is over eviction threshold
         cache_limit_bytes, _ = self._get_effective_cache_limit(cache_dir)
         if cache_limit_bytes == 0:
+            self._warn_eviction_needs_cache_limit()
             return media_files
 
         threshold_percent = self.config_manager.cache.cache_eviction_threshold_percent
@@ -2916,6 +2982,7 @@ class PlexCacheApp:
         cache_dir = self.config_manager.paths.cache_dir
         cache_limit_bytes, _ = self._get_effective_cache_limit(cache_dir)
         if cache_limit_bytes == 0:
+            self._warn_eviction_needs_cache_limit()
             return (0, 0)
 
         # Get current PlexCache tracked size and file list
