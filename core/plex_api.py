@@ -1558,9 +1558,20 @@ class PlexManager:
             fresh_session = requests.Session()
 
             if user is None:
-                # Main account - use the main token with a fresh session
-                self._rate_limited_api_call()
-                account = MyPlexAccount(token=self.plex_token, session=fresh_session)
+                # Main account - use the main token with a fresh session.
+                # Retried like its home-user sibling below: constructing the
+                # account is a plex.tv round trip, and on an install with no
+                # home users it is the only one, so a single read timeout here
+                # marks the whole watchlist incomplete and skips array restore
+                # for the run.
+                def _fresh_main_account():
+                    self._rate_limited_api_call()
+                    return MyPlexAccount(token=self.plex_token, session=fresh_session)
+
+                account = _retry_plextv_call(
+                    _fresh_main_account,
+                    label=f"main account for {current_username}",
+                )
                 logging.debug(f"[USER:{current_username}] Created fresh MyPlexAccount (main user)")
             else:
                 # Home/managed user - create fresh admin account then switch to home user
