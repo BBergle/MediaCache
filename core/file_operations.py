@@ -24,6 +24,30 @@ if TYPE_CHECKING:
 # Extension used to mark array files that have been cached
 PLEXCACHED_EXTENSION = ".plexcached"
 
+# Suffix for a cache copy that is still being written. Media is copied to this
+# name and only renamed to its real name once complete, so the real name never
+# exists empty or half-written.
+#
+# On Unraid the same share-relative path can exist on both the pool and the
+# array, and shfs answers /mnt/user/... with the POOL copy. Writing straight to
+# the final name therefore publishes a 0-byte file to Plex the moment the copy
+# opens, and a growing partial file for its whole duration. Measured against
+# Plex 1.42 with a deliberately shadowed probe: a truncated copy makes Plex
+# record the wrong size, and a 0-byte copy makes it drop the item entirely and
+# not restore it until the next scan (StudioNirin/PlexCache-D#207).
+#
+# Dot-prefixed so Plex's scanner ignores it if it surfaces through the share.
+PARTIAL_EXTENSION = ".pc-part"
+
+
+def get_partial_cache_path(cache_file_name: str) -> str:
+    """Temporary name used while writing `cache_file_name`.
+
+    Same directory, so the publish rename stays on one filesystem and is atomic.
+    """
+    directory, basename = os.path.split(cache_file_name)
+    return os.path.join(directory, f".{basename}{PARTIAL_EXTENSION}")
+
 # Minimum free space (in bytes) required for metadata operations during rename
 MINIMUM_SPACE_FOR_RENAME = 100 * 1024 * 1024  # 100 MB
 
@@ -4476,6 +4500,12 @@ class FileMover:
         if destination == 'cache':
             self.last_cache_moves_count = len(move_commands)
             self.last_cache_moves_bytes = total_bytes
+            # Sweep the folders we are about to write into. A crash between the
+            # copy and the publish rename leaves a .pc-part behind, and nothing
+            # else ever references it — not the exclude file, not the trackers.
+            self.cleanup_stale_partials(
+                {os.path.dirname(cache_name) for _, cache_name, _, _ in move_commands}
+            )
 
         # Execute the move commands
         self._execute_move_commands(move_commands, max_concurrent_moves_array,
@@ -5105,15 +5135,36 @@ class FileMover:
                     return True
                 return False
 
+            # Write to a partial name, then publish with an atomic rename. Plex
+            # reads this share through shfs, which prefers the pool copy, so the
+            # real name must never be visible empty or half-written (#207).
+            partial_file = get_partial_cache_path(cache_file_name)
+            if os.path.exists(partial_file):
+                os.remove(partial_file)
+                logging.debug(f"Removed stale partial file: {partial_file}")
+
             self.file_utils.copy_file_with_permissions(
-                array_file, cache_file_name, verbose=True, display_dest=display_dest,
+                array_file, partial_file, verbose=True, display_dest=display_dest,
                 stop_check=combined_stop_check, progress_callback=byte_callback
             )
             logging.debug(f"Copy complete: {os.path.basename(array_file)}")
 
-            # Validate copy succeeded
+            # Validate the copy before it becomes visible under the real name.
+            if not os.path.isfile(partial_file):
+                raise IOError(f"Copy verification failed: cache file not created at {partial_file}")
+            source_size = os.path.getsize(array_file)
+            partial_size = os.path.getsize(partial_file)
+            if partial_size != source_size:
+                raise IOError(
+                    f"Copy verification failed: {partial_file} is {partial_size} bytes, "
+                    f"expected {source_size}"
+                )
+
+            # Publish. Same directory, so this is atomic — the real name goes
+            # straight from absent to complete, with no observable middle state.
+            os.rename(partial_file, cache_file_name)
             if not os.path.isfile(cache_file_name):
-                raise IOError(f"Copy verification failed: cache file not created at {cache_file_name}")
+                raise IOError(f"Publish failed: cache file not present at {cache_file_name}")
 
             # Step 2: Handle array file based on backup setting and hard-link status
             # Hard-linked files must be deleted (not renamed) to avoid FUSE issues
@@ -5770,6 +5821,52 @@ class FileMover:
                 return False
         return False
 
+    def cleanup_stale_partials(self, directories, min_age_seconds: int = 3600) -> int:
+        """Remove .pc-part files left behind by an interrupted run.
+
+        `_cleanup_failed_cache_copy` handles anything that raises, but a crash,
+        an OOM kill or a power cut skips it entirely. The leftover is invisible
+        to every other cleanup path — it is dot-prefixed, absent from the
+        exclude file and unknown to the trackers — so it would sit on the pool
+        consuming space indefinitely.
+
+        Args:
+            directories: Cache directories to sweep (not recursive).
+            min_age_seconds: Leave anything newer alone, so a copy in flight
+                elsewhere is never pulled out from under it.
+
+        Returns:
+            Number of files removed.
+        """
+        removed = 0
+        now = time.time()
+        for directory in directories:
+            if not directory or not os.path.isdir(directory):
+                continue
+            try:
+                entries = os.listdir(directory)
+            except OSError as e:
+                logging.debug(f"Could not scan {directory} for stale partials: {e}")
+                continue
+            for name in entries:
+                if not (name.startswith('.') and name.endswith(PARTIAL_EXTENSION)):
+                    continue
+                path = os.path.join(directory, name)
+                try:
+                    if now - os.path.getmtime(path) < min_age_seconds:
+                        logging.debug(f"Leaving recent partial alone: {path}")
+                        continue
+                    size = os.path.getsize(path)
+                    os.remove(path)
+                    removed += 1
+                    logging.info(
+                        f"[CACHE] Removed stale partial copy from an interrupted "
+                        f"run: {name} ({format_bytes(size)})"
+                    )
+                except OSError as e:
+                    logging.warning(f"Could not remove stale partial {path}: {e}")
+        return removed
+
     def _cleanup_failed_cache_copy(self, array_file: str, cache_file_name: str,
                                    original_path: str = None) -> None:
         """Clean up after a failed cache copy operation."""
@@ -5786,10 +5883,16 @@ class FileMover:
             if os.path.isfile(plexcached_file) and not os.path.isfile(array_file):
                 os.rename(plexcached_file, array_file)
                 logging.info(f"Cleanup: Restored array file after failed copy")
-            # Remove partial cache file if it exists
+            # Remove the in-progress copy. Almost every failure leaves the file
+            # under its partial name, since it is only renamed once complete.
+            partial_file = get_partial_cache_path(cache_file_name)
+            if os.path.isfile(partial_file):
+                os.remove(partial_file)
+                logging.info(f"Cleanup: Removed partial cache file")
+            # And the real name, for a failure after the publish rename.
             if os.path.isfile(cache_file_name):
                 os.remove(cache_file_name)
-                logging.info(f"Cleanup: Removed partial cache file")
+                logging.info(f"Cleanup: Removed incomplete cache file")
         except Exception as e:
             logging.error(f"Error during cleanup: {type(e).__name__}: {e}")
 
