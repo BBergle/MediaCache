@@ -264,7 +264,8 @@ class LoggingConfig:
     """Configuration for logging settings."""
     # Maximum number of log files to keep (default: 24 for hourly runs = 1 day)
     max_log_files: int = 24
-    # Keep error logs (containing WARNING/ERROR) for this many days (default: 7)
+    # Keep error logs (containing ERROR/CRITICAL) for this many days (default: 7)
+    # Warnings alone do not trigger preservation — see _preserve_error_log()
     # Logs are preserved in logs/errors/ subfolder
     keep_error_logs_days: int = 7
 
@@ -499,6 +500,43 @@ class ConfigManager:
         self.plex.per_user_ondeck_days = per_user_ondeck_days or None
         self.plex.per_user_watchlist_days = per_user_watchlist_days or None
     
+    def _validate_eviction_settings(self) -> None:
+        """Range-check the eviction trio, and flag a threshold that cannot act.
+
+        Out-of-range values fall back to their defaults. The priority threshold
+        gets an extra check that a range test cannot express: scores start at a
+        floor rather than at 0, because ``calculate_priority()`` begins at 50 and
+        its negative factors are bounded. ``get_eviction_candidates()`` keeps
+        anything scoring at or above the threshold, so a threshold below that
+        floor keeps every file and eviction frees nothing while still reporting
+        itself as enabled.
+
+        That case is reported, not corrected. Raising a stored threshold would
+        start deleting cache copies on the next run, which is not a decision to
+        make on the user's behalf while loading their config. The web input and
+        the setup wizard stop new values from landing there.
+        """
+        if self.cache.cache_eviction_mode not in ("smart", "fifo", "none"):
+            logging.warning(f"Invalid cache_eviction_mode '{self.cache.cache_eviction_mode}', using 'none'")
+            self.cache.cache_eviction_mode = "none"
+
+        if not 1 <= self.cache.cache_eviction_threshold_percent <= 100:
+            logging.warning(f"Invalid cache_eviction_threshold_percent '{self.cache.cache_eviction_threshold_percent}', using 90")
+            self.cache.cache_eviction_threshold_percent = 90
+
+        if not 0 <= self.cache.eviction_min_priority <= 100:
+            logging.warning(f"Invalid eviction_min_priority '{self.cache.eviction_min_priority}', using 60")
+            self.cache.eviction_min_priority = 60
+        elif self.cache.cache_eviction_mode == "smart":
+            from core.file_operations import PRIORITY_RANGE_WATCHLIST_MIN
+            if self.cache.eviction_min_priority < PRIORITY_RANGE_WATCHLIST_MIN:
+                logging.warning(
+                    f"eviction_min_priority is {self.cache.eviction_min_priority}, but the lowest "
+                    f"score any file can have is about {PRIORITY_RANGE_WATCHLIST_MIN}, so smart "
+                    f"eviction will never select anything. Raise it (60 is the default) or set "
+                    f"cache_eviction_mode to 'none'."
+                )
+
     def _load_cache_config(self) -> None:
         """Load cache-related configuration."""
         self.cache.watchlist_toggle = self.settings_data['watchlist_toggle']
@@ -531,31 +569,22 @@ class ConfigManager:
 
         # Load and parse cache limit setting
         self.cache.cache_limit = self.settings_data.get('cache_limit', "")
-        self.cache.cache_limit_bytes = self._parse_cache_limit(self.cache.cache_limit)
+        self.cache.cache_limit_bytes = self._parse_cache_limit(self.cache.cache_limit, 'cache_limit')
 
         # Load and parse min free space setting
         self.cache.min_free_space = self.settings_data.get('min_free_space', "")
-        self.cache.min_free_space_bytes = self._parse_cache_limit(self.cache.min_free_space)
+        self.cache.min_free_space_bytes = self._parse_cache_limit(self.cache.min_free_space, 'min_free_space')
 
         # Load and parse plexcache quota setting
         self.cache.plexcache_quota = self.settings_data.get('plexcache_quota', "")
-        self.cache.plexcache_quota_bytes = self._parse_cache_limit(self.cache.plexcache_quota)
+        self.cache.plexcache_quota_bytes = self._parse_cache_limit(self.cache.plexcache_quota, 'plexcache_quota')
 
         # Load smart eviction settings (default: disabled)
         self.cache.cache_eviction_mode = self.settings_data.get('cache_eviction_mode', "none")
         self.cache.cache_eviction_threshold_percent = self.settings_data.get('cache_eviction_threshold_percent', 90)
         self.cache.eviction_min_priority = self.settings_data.get('eviction_min_priority', 60)
 
-        # Validate eviction settings
-        if self.cache.cache_eviction_mode not in ("smart", "fifo", "none"):
-            logging.warning(f"Invalid cache_eviction_mode '{self.cache.cache_eviction_mode}', using 'none'")
-            self.cache.cache_eviction_mode = "none"
-        if not 1 <= self.cache.cache_eviction_threshold_percent <= 100:
-            logging.warning(f"Invalid cache_eviction_threshold_percent '{self.cache.cache_eviction_threshold_percent}', using 90")
-            self.cache.cache_eviction_threshold_percent = 90
-        if not 0 <= self.cache.eviction_min_priority <= 100:
-            logging.warning(f"Invalid eviction_min_priority '{self.cache.eviction_min_priority}', using 60")
-            self.cache.eviction_min_priority = 60
+        self._validate_eviction_settings()
 
         # Load .plexcached backup setting (default True for safety)
         self.cache.create_plexcached_backups = self.settings_data.get('create_plexcached_backups', True)
@@ -938,52 +967,44 @@ class ConfigManager:
             logging.error(f"Error saving settings: {type(e).__name__}: {e}")
             raise
     
-    def _parse_cache_limit(self, limit_str: str) -> int:
-        """Parse cache limit string and return bytes.
+    def _parse_cache_limit(self, limit_str: str, key: str = "cache_limit"):
+        """Parse a size-or-percentage setting and return bytes.
 
-        Supports formats:
-        - "250GB" or "250gb" -> 250 * 1024^3 bytes
-        - "500MB" or "500mb" -> 500 * 1024^2 bytes
-        - "50%" -> percentage of total cache drive size (computed at runtime)
-        - "250" -> defaults to GB (250 * 1024^3 bytes)
-        - "" or "0" -> 0 (no limit)
+        Shared by cache_limit, min_free_space and plexcache_quota, so ``key``
+        names the one being parsed — otherwise every warning blamed
+        cache_limit regardless of which value was mistyped.
+
+        Byte quantities delegate to ``parse_size_bytes()``, the parser the rest
+        of the app uses, so the accepted formats are the same everywhere.
+        Short suffixes ("3.7T") used to fall through to "no limit" here while
+        the settings page previewed an enforced cap.
 
         Returns:
-            Bytes as int, or negative value for percentage (e.g., -50 for 50%)
+            Positive bytes, 0 for disabled/unparseable, or a negative number
+            encoding a percentage resolved later against the drive total
+            (-50 for 50%). Percentages may be fractional; _get_effective_limit()
+            takes abs() and multiplies, so -7.5 resolves correctly.
         """
         if not limit_str or limit_str.strip() == "0":
             return 0
 
         limit_str = limit_str.strip().upper()
 
-        try:
-            # Check for percentage
-            if limit_str.endswith('%'):
-                percent = int(limit_str[:-1])
-                if percent <= 0 or percent > 100:
-                    logging.warning(f"Invalid cache_limit percentage '{limit_str}', must be 1-100. Using no limit.")
-                    return 0
-                # Return negative value to indicate percentage (will be computed at runtime)
-                return -percent
+        if limit_str.endswith('%'):
+            try:
+                percent = float(limit_str[:-1])
+            except ValueError:
+                logging.warning(f"Invalid {key} percentage '{limit_str}'. Using no limit.")
+                return 0
+            if percent <= 0 or percent > 100:
+                logging.warning(f"Invalid {key} percentage '{limit_str}', must be 1-100. Using no limit.")
+                return 0
+            return -percent
 
-            # Check for size units
-            if limit_str.endswith('GB'):
-                size = float(limit_str[:-2])
-                return int(size * 1024 * 1024 * 1024)
-            elif limit_str.endswith('MB'):
-                size = float(limit_str[:-2])
-                return int(size * 1024 * 1024)
-            elif limit_str.endswith('TB'):
-                size = float(limit_str[:-2])
-                return int(size * 1024 * 1024 * 1024 * 1024)
-            else:
-                # No unit specified, default to GB
-                size = float(limit_str)
-                return int(size * 1024 * 1024 * 1024)
-
-        except ValueError:
-            logging.warning(f"Invalid cache_limit value '{limit_str}'. Using no limit.")
-            return 0
+        parsed = parse_size_bytes(limit_str)
+        if parsed == 0:
+            logging.warning(f"Invalid {key} value '{limit_str}'. Using no limit.")
+        return parsed
 
 
     @staticmethod

@@ -63,6 +63,7 @@ def _preflight_budget(
     state = compute_budget_state(
         cache_limit_bytes=parsed["cache_limit_bytes"],
         min_free_space_bytes=parsed["min_free_space_bytes"],
+        plexcache_quota_bytes=parsed["plexcache_quota_bytes"],
         current_pinned_bytes=current,
         additional_bytes=additional,
     )
@@ -76,7 +77,8 @@ def _preflight_budget(
         f"({format_bytes(state['total_pinned_bytes'])} + "
         f"~{format_bytes(state['additional_bytes'])} > "
         f"{format_bytes(state['effective_budget_bytes'])}). "
-        f"Unpin something first, or raise cache_limit in settings."
+        f"Unpin something first, or raise "
+        f"{'plexcache_quota' if state.get('quota_bytes') else 'cache_limit'} in settings."
     )
 
 

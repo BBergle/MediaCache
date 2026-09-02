@@ -28,7 +28,9 @@
                     <input type="number" id="days_to_monitor" name="days_to_monitor"
                            class="input-narrow"
                            value="{{ settings.days_to_monitor | default(7) }}" min="1" max="999">
-                    <div class="form-hint">How far back to check OnDeck for recently watched items</div>
+                    <div class="form-hint">How far back to check OnDeck for recently watched items.
+                        Per-user overrides on the Users tab also set that user's OnDeck
+                        retention threshold, so one value drives both.</div>
                 </div>
             </div>
 
@@ -112,6 +114,11 @@
                 Retention
             </h3>
 
+            <div class="form-hint" style="margin-bottom: 1rem;">
+                These clocks only advance while PlexCache is running. Nothing expires between
+                runs, so the finest useful resolution is your schedule interval.
+            </div>
+
             <div class="grid grid-2">
                 <div class="form-group" data-setting-id="cache_retention_hours">
                     <label for="cache_retention_hours">Cache Retention (hours)</label>
@@ -125,8 +132,10 @@
                     <label for="watchlist_retention_days">Watchlist Retention (days)</label>
                     <input type="number" id="watchlist_retention_days" name="watchlist_retention_days"
                            class="input-narrow"
-                           value="{{ '%g' % (settings.watchlist_retention_days | default(14) | float) }}" min="0" max="365" step="0.5">
-                    <div class="form-hint">Auto-expire watchlist items after this period (0 = never expire)</div>
+                           value="{{ '%g' % (settings.watchlist_retention_days | default(0) | float) }}" min="0" max="365" step="0.5">
+                    <div class="form-hint">Stop caching a watchlist item this long after it was added in Plex,
+                        even if it is still on the watchlist. Counted from the Plex date, not from when
+                        PlexCache cached it (0 = never).</div>
                 </div>
             </div>
 
@@ -136,7 +145,9 @@
                     <input type="number" id="ondeck_retention_days" name="ondeck_retention_days"
                            class="input-narrow"
                            value="{{ '%g' % (settings.ondeck_retention_days | default(0) | float) }}" min="0" max="365" step="0.5">
-                    <div class="form-hint">Auto-expire OnDeck items after this period (0 = never expire)</div>
+                    <div class="form-hint">Stop holding an item on cache once <em>every</em> user who has it
+                        OnDeck has had it there this long, counted from when PlexCache first saw it.
+                        It is then moved back to the array on a later run, not deleted (0 = never).</div>
                 </div>
             </div>
 
@@ -161,7 +172,12 @@
                            {% if settings.create_plexcached_backups | default(true) %}checked{% endif %}>
                     <span>Create .plexcached Backup Files</span>
                 </label>
-                <div class="form-hint">When moving files to cache, keep backup on array (allows recovery if cache fails)</div>
+                <div class="form-hint">Caching renames the array file to <code>.plexcached</code> instead of
+                    deleting it, so a cached file can be recovered if the cache drive fails.
+                    <strong>Off means the array copy is deleted, not renamed, and cached files cannot be
+                    recovered.</strong> Only turn this off if you run Mover Tuning on a
+                    <code>cache:prefer</code> share. Files you are seeding do not need it off &mdash;
+                    PlexCache already handles those separately.</div>
             </div>
 
             <div class="form-group" data-setting-id="cleanup_empty_folders">
@@ -204,12 +220,13 @@
             </div>
 
             <div class="form-group" data-setting-id="hardlinked_files">
-                <label for="hardlinked_files">Hardlinked Files Handling</label>
+                <label for="hardlinked_files">Files you are seeding</label>
                 <select id="hardlinked_files" name="hardlinked_files">
-                    <option value="skip" {% if settings.hardlinked_files == 'skip' or not settings.hardlinked_files %}selected{% endif %}>Skip (preserve for seeders)</option>
-                    <option value="move" {% if settings.hardlinked_files == 'move' %}selected{% endif %}>Move (break hardlinks)</option>
+                    <option value="skip" {% if settings.hardlinked_files == 'skip' or not settings.hardlinked_files %}selected{% endif %}>Leave them on the array until seeding finishes</option>
+                    <option value="move" {% if settings.hardlinked_files == 'move' %}selected{% endif %}>Cache them anyway — the seed keeps working</option>
                 </select>
-                <div class="form-hint">Files with multiple hardlinks (e.g., seeding torrents). Skip preserves links, Move copies the file.</div>
+                <div class="form-hint">Some files are shared between your library and your torrent client.
+                    PlexCache detects these automatically; this only chooses what to do with them.</div>
             </div>
 
             <div class="form-group" data-setting-id="check_hardlinks_on_restore">
@@ -300,7 +317,7 @@
                     <label for="cache_limit">Cache Limit</label>
                     <input type="text" id="cache_limit" name="cache_limit"
                            class="input-medium"
-                           value="{{ settings.cache_limit | default('250GB') }}"
+                           value="{{ settings.cache_limit | default('') }}"
                            placeholder="500GB or 75%"
                            oninput="updateCacheCalculations()">
                     <div class="form-hint">Maximum <strong>total drive usage</strong> before PlexCache stops caching (e.g., 500GB or 75%). Includes all files on the drive, not just PlexCache-managed files. Leave empty for no cap.</div>
@@ -376,8 +393,13 @@
                         <label for="eviction_min_priority">Minimum Priority to Keep</label>
                         <input type="number" id="eviction_min_priority" name="eviction_min_priority"
                                class="input-narrow"
-                               value="{{ settings.eviction_min_priority | default(60) }}" min="0" max="100">
-                        <div class="form-hint">Only evict files below this priority (OnDeck ~{{ priority_range.ondeck_min }}-{{ priority_range.ondeck_max }}, Watchlist ~{{ priority_range.watchlist_min }}-{{ priority_range.watchlist_max }})</div>
+                               {# Floor only applies while smart eviction is on. A leftover
+                                  low value with eviction off is harmless, and enforcing it
+                                  there would block saving this whole tab over nothing. #}
+                               value="{{ settings.eviction_min_priority | default(60) }}"
+                               min="{{ priority_range.watchlist_min if settings.cache_eviction_mode == 'smart' else 0 }}"
+                               max="100">
+                        <div class="form-hint">Only evict files below this priority (OnDeck ~{{ priority_range.ondeck_min }}-{{ priority_range.ondeck_max }}, Watchlist ~{{ priority_range.watchlist_min }}-{{ priority_range.watchlist_max }}). Below {{ priority_range.watchlist_min }} nothing is ever evicted, since no file scores lower than that.</div>
                     </div>
                 </div>
             </div>

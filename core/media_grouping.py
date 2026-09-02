@@ -138,3 +138,40 @@ def format_season_episode(season: Any, episode: Any) -> str:
     if isinstance(season, int) and isinstance(episode, int):
         return f"S{season:02d}E{episode:02d}"
     return ""
+
+
+# Used when a file sits in a later season than the OnDeck position and the real
+# episode count for the intervening seasons is unknown. Only affects the
+# relative ordering of far-ahead episodes, all of which score the same anyway.
+ASSUMED_EPISODES_PER_SEASON = 13
+
+
+def episodes_ahead_of(season: Any, episode: Any,
+                      ondeck_season: Any, ondeck_episode: Any,
+                      episodes_per_season: int = ASSUMED_EPISODES_PER_SEASON) -> int:
+    """How many episodes past the OnDeck position this episode sits.
+
+    Returns 0 when the episode is at or behind the OnDeck position, a positive
+    count when it is ahead, and -1 when the comparison cannot be made (a
+    missing number, or an episode in an earlier season than OnDeck).
+
+    Shared so the eviction scorer and the Priority Report agree. They resolve
+    the two positions from different places — the engine from its trackers, the
+    web layer from the OnDeck map it already loaded — but the arithmetic that
+    turns those positions into a distance has to be one implementation, or the
+    number a user calibrates against is not the number that acts.
+    """
+    for value in (season, episode, ondeck_season, ondeck_episode):
+        if not isinstance(value, int) or isinstance(value, bool):
+            return -1
+
+    if season < ondeck_season:
+        # Behind the OnDeck position: not a prefetch, so not comparable.
+        return -1
+    if season == ondeck_season:
+        return 0 if episode <= ondeck_episode else episode - ondeck_episode
+
+    seasons_ahead = season - ondeck_season
+    remaining_in_ondeck_season = max(0, episodes_per_season - ondeck_episode)
+    full_seasons_between = max(0, seasons_ahead - 1) * episodes_per_season
+    return remaining_in_ondeck_season + full_seasons_between + episode

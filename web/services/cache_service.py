@@ -11,6 +11,9 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 
 from web.config import DATA_DIR, CONFIG_DIR, SETTINGS_FILE
+# Defaults come from core's dataclass rather than repeated literals: the engine
+# reads CacheConfig, so anything hardcoded here can disagree with what runs.
+from core.config import CacheConfig, PlexConfig
 from core.system_utils import get_disk_usage, detect_zfs, get_array_direct_path, parse_size_bytes, format_bytes, translate_container_to_host_path, translate_host_to_container_path, remove_from_exclude_file, remove_from_timestamps_file, create_dir_with_ownership, cleanup_empty_parent_folders, resolve_cache_boundary
 from core.file_operations import get_media_identity, find_matching_plexcached, save_json_atomically, SUBTITLE_EXTENSIONS, is_video_file
 
@@ -302,11 +305,22 @@ class CacheService:
 
         Factors:
         - Base: 50
-        - Source type: +20 for ondeck, +0 for watchlist
+        Mirrors CachePriorityManager.calculate_priority() in
+        core/file_operations.py, which is what eviction actually uses. Keep the
+        two in step: the number shown here is the number a user calibrates
+        eviction_min_priority against.
+
+        - Base: 50
+        - Source type: +15 for ondeck, +0 for watchlist
         - User count: +5 per user (max +15)
-        - Cache recency: +15 (<24h), +10 (<72h), +5 (<7d), 0 (older)
-        - Watchlist/OnDeck age: +10 (<7d), 0 (7-60d), -10 (>60d)
-        - Episode position: +15 (current), +10 (next few), 0 (far ahead)
+        - Cache recency: +5 (<24h), +3 (<72h), 0 (older)
+        - Watchlist age: +10 (<7d), 0 (7-60d), -10 (>60d)
+        - OnDeck staleness: +5 (<7d), 0 (7-14d), -5 (14-30d), -10 (>30d)
+        - Episode position: +15 (current), +10 (within half the prefetch
+          window), 0 (further ahead)
+
+        Pinned files are not scored here — the caller assigns them 100, matching
+        the short-circuit at the top of the engine's scorer.
         """
         score = 50
         now = datetime.now()
@@ -396,19 +410,57 @@ class CacheService:
                 pass
 
         # Factor 5: Episode position (for TV)
+        #
+        # Mirrors CachePriorityManager.calculate_priority(): the current OnDeck
+        # episode scores +15, and episodes within half the prefetch window score
+        # +10. Anything further ahead gets nothing. This previously awarded +10
+        # to every episode with a number, computing half_prefetch and never
+        # comparing against it, so the report read up to 10 points higher than
+        # the score eviction actually used.
         if ondeck_info and "episode_info" in ondeck_info:
             ep_info = ondeck_info["episode_info"]
             if ep_info.get("is_current_ondeck"):
                 score += 15
             else:
-                # Check episodes ahead
-                number_episodes = settings.get("number_episodes", 5)
-                half_prefetch = number_episodes // 2
-                # If it's a prefetched episode, give partial bonus
-                if ep_info.get("episode"):
-                    score += 10
+                ondeck_pos = self._earliest_ondeck_position(
+                    ondeck, ep_info.get("show"))
+                if ondeck_pos:
+                    from core.media_grouping import episodes_ahead_of
+                    ahead = episodes_ahead_of(
+                        ep_info.get("season"), ep_info.get("episode"),
+                        ondeck_pos[0], ondeck_pos[1])
+                    number_episodes = settings.get(
+                        "number_episodes", PlexConfig.number_episodes)
+                    if ahead == 0:
+                        score += 15
+                    elif 0 < ahead <= max(1, number_episodes // 2):
+                        score += 10
 
         return max(0, min(100, score))
+
+    @staticmethod
+    def _earliest_ondeck_position(ondeck: Dict, show: Optional[str]):
+        """Earliest (season, episode) any user is OnDeck for this show.
+
+        Same rule as OnDeckTracker.get_earliest_ondeck_position(): the user
+        furthest behind sets the reference point, so an episode is only
+        "prefetched" relative to whoever has watched least.
+        """
+        if not show:
+            return None
+        positions = []
+        for info in ondeck.values():
+            if not isinstance(info, dict):
+                continue
+            other = info.get("episode_info") or {}
+            if not other.get("is_current_ondeck"):
+                continue
+            if (other.get("show") or "").lower() != show.lower():
+                continue
+            season, episode = other.get("season"), other.get("episode")
+            if isinstance(season, int) and isinstance(episode, int):
+                positions.append((season, episode))
+        return min(positions) if positions else None
 
     def calculate_priority_with_breakdown(
         self,
@@ -901,7 +953,7 @@ class CacheService:
         eviction_over_threshold = False
         eviction_over_by = 0
         eviction_over_by_display = None
-        eviction_mode = settings.get("cache_eviction_mode", "none")
+        eviction_mode = settings.get("cache_eviction_mode", CacheConfig.cache_eviction_mode)
         cache_limit_bytes = 0
 
         if eviction_mode != "none" and disk_total > 0:
@@ -929,7 +981,7 @@ class CacheService:
                     logging.warning(f"Could not parse cache_limit '{cache_limit_setting}': {e}")
 
             if cache_limit_bytes > 0:
-                eviction_threshold_percent = settings.get("cache_eviction_threshold_percent", 95)
+                eviction_threshold_percent = settings.get("cache_eviction_threshold_percent", CacheConfig.cache_eviction_threshold_percent)
                 eviction_threshold_bytes = int(cache_limit_bytes * eviction_threshold_percent / 100)
 
                 if disk_used > eviction_threshold_bytes:
@@ -1006,7 +1058,7 @@ class CacheService:
         configured_limit_percent = 0
         if cache_limit_bytes > 0:
             configured_limit_display = format_bytes(cache_limit_bytes)
-            eviction_threshold_percent = settings.get("cache_eviction_threshold_percent", 95)
+            eviction_threshold_percent = settings.get("cache_eviction_threshold_percent", CacheConfig.cache_eviction_threshold_percent)
             eviction_threshold_bytes_val = int(cache_limit_bytes * eviction_threshold_percent / 100)
             eviction_threshold_display = format_bytes(eviction_threshold_bytes_val)
             if disk_total > 0:
@@ -1116,9 +1168,14 @@ class CacheService:
 
         # Files nearing watchlist expiration
         # Show files within N days of expiring OR already expired (still on cache)
-        watchlist_retention_days = settings.get("watchlist_retention_days", 14)
+        # 0 means retention is off, so nothing expires. Without this the
+        # subtraction below made days_remaining negative for every watchlist
+        # file and listed them all as already expired. The default matches
+        # core rather than inventing 14 days for someone who never set it.
+        watchlist_retention_days = settings.get(
+            "watchlist_retention_days", CacheConfig.watchlist_retention_days)
         expiring_soon = []
-        for f in all_files:
+        for f in all_files if watchlist_retention_days else []:
             if f.is_watchlist:
                 # Find watchlist entry to get watchlisted_at date
                 for plex_path, info in watchlist.items():
@@ -1246,7 +1303,7 @@ class CacheService:
                 plexcache_quota_warning = True
 
         # Calculate eviction threshold (for visual display)
-        eviction_threshold_setting = settings.get("cache_eviction_threshold_percent", 95)
+        eviction_threshold_setting = settings.get("cache_eviction_threshold_percent", CacheConfig.cache_eviction_threshold_percent)
         eviction_threshold_bytes = 0
         eviction_threshold_display = None
         eviction_threshold_percent_of_drive = 0
@@ -1281,7 +1338,7 @@ class CacheService:
             cache_bar_status = "safe"
 
         # Configuration
-        eviction_mode = settings.get("cache_eviction_mode", "none")
+        eviction_mode = settings.get("cache_eviction_mode", CacheConfig.cache_eviction_mode)
         # Use display path (host path) for UI, not container path
         display_cache_dir = self._get_cache_dir_for_display(settings)
         config = {
@@ -1292,8 +1349,8 @@ class CacheService:
             "number_episodes": settings.get("number_episodes", 5),
             "eviction_mode": eviction_mode,
             "eviction_enabled": eviction_mode != "none",
-            "eviction_threshold_percent": settings.get("cache_eviction_threshold_percent", 95),
-            "eviction_min_priority": settings.get("eviction_min_priority", 60)
+            "eviction_threshold_percent": settings.get("cache_eviction_threshold_percent", CacheConfig.cache_eviction_threshold_percent),
+            "eviction_min_priority": settings.get("eviction_min_priority", CacheConfig.eviction_min_priority)
         }
 
         return {
@@ -1415,7 +1472,23 @@ class CacheService:
         lines.append("SUMMARY BY TIER:")
         lines.append(f"  High priority (90-100):   {len(high)} files")
         lines.append(f"  Medium priority (70-89):  {len(medium)} files")
-        lines.append(f"  Low priority (0-69):      {len(low)} files (eviction candidates)")
+        lines.append(f"  Low priority (0-69):      {len(low)} files")
+
+        # What would actually be evicted is a different question from the tiers
+        # above, which are only a distribution. It depends on the configured
+        # threshold and on eviction being on at all. Captioning the 0-69 tier as
+        # "eviction candidates" named protected files: at the default threshold
+        # of 60, everything scoring 60-69 is kept.
+        report_settings = self._load_settings()
+        mode = report_settings.get("cache_eviction_mode", CacheConfig.cache_eviction_mode)
+        if mode == "none":
+            lines.append("  Eviction is off, so nothing is a candidate")
+        else:
+            floor = report_settings.get(
+                "eviction_min_priority", CacheConfig.eviction_min_priority)
+            candidates = [f for f in files if f.priority_score < floor]
+            lines.append(
+                f"  Below the eviction threshold ({floor}): {len(candidates)} files")
         lines.append("")
 
         # Summary by source
@@ -1536,9 +1609,9 @@ class CacheService:
         }
 
         # Eviction settings and current status
-        eviction_mode = settings.get("cache_eviction_mode", "none")
-        eviction_threshold = settings.get("cache_eviction_threshold_percent", 95)
-        eviction_min_priority = settings.get("eviction_min_priority", 60)
+        eviction_mode = settings.get("cache_eviction_mode", CacheConfig.cache_eviction_mode)
+        eviction_threshold = settings.get("cache_eviction_threshold_percent", CacheConfig.cache_eviction_threshold_percent)
+        eviction_min_priority = settings.get("eviction_min_priority", CacheConfig.eviction_min_priority)
 
         # Calculate current drive usage (use path_mappings cache_path for consistency)
         cache_dir = self._get_cache_dir(settings)

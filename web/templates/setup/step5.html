@@ -75,7 +75,7 @@
                     <label for="watchlist_retention_days">Watchlist Retention</label>
                     <div class="input-with-suffix">
                         <input type="number" id="watchlist_retention_days" name="watchlist_retention_days"
-                               value="{{ watchlist_retention_days or 14 }}"
+                               value="{{ watchlist_retention_days | default(0) }}"
                                min="0" max="365"
                                placeholder="14">
                         <span class="input-suffix">days</span>
@@ -106,12 +106,12 @@
                     <label for="cache_retention_hours">Cache Retention</label>
                     <div class="input-with-suffix">
                         <input type="number" id="cache_retention_hours" name="cache_retention_hours"
-                               value="{{ cache_retention_hours or 12 }}"
-                               min="1" max="168"
+                               value="{{ cache_retention_hours | default(12) }}"
+                               min="0" max="720"
                                placeholder="12">
                         <span class="input-suffix">hours</span>
                     </div>
-                    <p class="help-text">How long to keep files on cache after they leave OnDeck (recommended: 12)</p>
+                    <p class="help-text">After PlexCache caches a file, wait this long before it can be moved back to the array (recommended: 12)</p>
                 </div>
 
                 <div class="form-group" style="margin-bottom: 0;">

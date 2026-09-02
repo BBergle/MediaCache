@@ -10,6 +10,9 @@ from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field, asdict
 
 from web.config import DATA_DIR, SETTINGS_FILE, IS_DOCKER
+# Defaults come from core's dataclass rather than repeated literals: the engine
+# reads CacheConfig, so anything hardcoded here can disagree with what runs.
+from core.config import CacheConfig
 from web.dependencies import get_system_detector
 
 logger = logging.getLogger(__name__)
@@ -49,11 +52,11 @@ class CacheSettings:
     watched_move: bool = True
     cache_retention_hours: int = 12
     cache_drive_size: str = ""  # Manual override for drive size (for ZFS)
-    cache_limit: str = "250GB"
+    cache_limit: str = CacheConfig.cache_limit
     min_free_space: str = ""
     plexcache_quota: str = ""
     cache_eviction_mode: str = "none"
-    cache_eviction_threshold_percent: int = 95
+    cache_eviction_threshold_percent: int = CacheConfig.cache_eviction_threshold_percent
     eviction_min_priority: int = 60
     remote_watchlist_toggle: bool = False
     remote_watchlist_rss_url: str = ""
@@ -604,11 +607,11 @@ class SettingsService:
             "cache_associated_files": raw.get("cache_associated_files", "subtitles"),
             "cache_retention_hours": raw.get("cache_retention_hours", 12),
             "cache_drive_size": raw.get("cache_drive_size", ""),
-            "cache_limit": raw.get("cache_limit", "250GB"),
+            "cache_limit": raw.get("cache_limit", CacheConfig.cache_limit),
             "min_free_space": raw.get("min_free_space", ""),
             "plexcache_quota": raw.get("plexcache_quota", ""),
             "cache_eviction_mode": raw.get("cache_eviction_mode", "none"),
-            "cache_eviction_threshold_percent": raw.get("cache_eviction_threshold_percent", 95),
+            "cache_eviction_threshold_percent": raw.get("cache_eviction_threshold_percent", CacheConfig.cache_eviction_threshold_percent),
             "eviction_min_priority": raw.get("eviction_min_priority", 60),
             "pinned_preferred_resolution": raw.get("pinned_preferred_resolution", "highest"),
             "remote_watchlist_toggle": raw.get("remote_watchlist_toggle", False),

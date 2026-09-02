@@ -337,16 +337,31 @@ def save_user_settings(request: Request, form_data: ImmutableMultiDict = Depends
             try:
                 user["days_to_monitor"] = int(ondeck_days_str)
             except ValueError:
+                # Dropping the override falls back to the global default, which
+                # looks identical to never having set one. Say so.
                 user.pop("days_to_monitor", None)
+                logger.warning(
+                    "Per-user Days to Monitor for '%s' could not be read as a whole "
+                    "number ('%s'); using the global default for that user.",
+                    title, ondeck_days_str
+                )
         else:
             user.pop("days_to_monitor", None)
 
         watchlist_days_str = form_data.get(f"watchlist_days_{title}", "").strip()
         if watchlist_days_str:
             try:
-                user["watchlist_retention_days"] = int(watchlist_days_str)
+                # float, not int: the global is a float and the input offers
+                # step="0.5", so int() rejected every half-day value the form
+                # invites (core/config.py casts the per-user value with float()).
+                user["watchlist_retention_days"] = float(watchlist_days_str)
             except ValueError:
                 user.pop("watchlist_retention_days", None)
+                logger.warning(
+                    "Per-user Watchlist Retention for '%s' could not be read as a "
+                    "number ('%s'); using the global default for that user.",
+                    title, watchlist_days_str
+                )
         else:
             user.pop("watchlist_retention_days", None)
 
@@ -935,6 +950,23 @@ def save_cache_settings(request: Request, form_data: ImmutableMultiDict = Depend
     success = settings_service.save_cache_settings(settings_dict)
 
     if success:
+        # Eviction sizes itself as a percentage of Cache Limit, so with no limit
+        # set it is fully configured and will never evict anything. Saved rather
+        # than refused — setting the two in either order is reasonable — but said
+        # now, on the page, instead of only in the log on the next run.
+        saved = settings_service.get_cache_settings()
+        inert_eviction = (saved.get("cache_eviction_mode", "none") != "none"
+                          and not str(saved.get("cache_limit", "")).strip())
+        if inert_eviction:
+            return templates.TemplateResponse(
+                request,
+                "partials/alert.html",
+                {
+                    "type": "warning",
+                    "message": ("Saved, but cache eviction has nothing to measure: "
+                                "set a Cache Limit, or nothing will ever be evicted.")
+                }
+            )
         return templates.TemplateResponse(
             request,
             "partials/alert.html",

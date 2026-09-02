@@ -138,7 +138,9 @@ def setup_wizard(request: Request, step: int = 1):
         context["days_to_monitor"] = settings.get("days_to_monitor", 183)
         context["watchlist_toggle"] = settings.get("watchlist_toggle", True)
         context["watchlist_episodes"] = settings.get("watchlist_episodes", 3)
-        context["watchlist_retention_days"] = settings.get("watchlist_retention_days", 14)
+        # Default 0 to match core (CacheConfig.watchlist_retention_days), so the
+        # wizard cannot re-enable expiry for someone who deliberately disabled it.
+        context["watchlist_retention_days"] = settings.get("watchlist_retention_days", 0)
         context["cache_retention_hours"] = settings.get("cache_retention_hours", 12)
         context["watched_move"] = settings.get("watched_move", True)
         context["cache_limit"] = settings.get("cache_limit", "")

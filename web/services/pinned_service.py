@@ -316,6 +316,7 @@ class PinnedService:
         return compute_budget_state(
             cache_limit_bytes=parsed["cache_limit_bytes"],
             min_free_space_bytes=parsed["min_free_space_bytes"],
+            plexcache_quota_bytes=parsed["plexcache_quota_bytes"],
             current_pinned_bytes=current,
             additional_bytes=additional,
         )

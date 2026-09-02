@@ -673,6 +673,16 @@ class WebhookHandler(logging.Handler):
         return {"content": message, "text": message}
 
 
+# How many 20MB rollovers a single run may leave behind. Separate from
+# max_log_files, which counts whole runs: one pathological run should not be
+# able to occupy the entire log budget.
+ROTATION_BACKUPS_PER_RUN = 2
+
+# Convenience pointer to the newest run's log. Matches the cleanup glob, so the
+# retention count has to exclude it by name.
+LATEST_LOG_NAME = "plexcache_log_latest.log"
+
+
 class LoggingManager:
     """Manages logging configuration and setup."""
 
@@ -772,7 +782,7 @@ class LoggingManager:
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = self.logs_folder / f"plexcache_log_{current_time}.log"
         self.current_log_file = log_file  # Track for error preservation
-        latest_log_file = self.logs_folder / "plexcache_log_latest.log"
+        latest_log_file = self.logs_folder / LATEST_LOG_NAME
 
         datefmt = self._get_log_datefmt()
         log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt=datefmt)
@@ -781,7 +791,11 @@ class LoggingManager:
         file_handler = RotatingFileHandler(
             log_file,
             maxBytes=20*1024*1024,
-            backupCount=self.max_log_files
+            # Not max_log_files: that setting counts *runs* to keep, and each run
+            # writes its own timestamped file. Reusing it here let a single
+            # oversized run keep as many 20MB backups as the user wanted whole
+            # logs. A small constant bounds one run's overflow instead.
+            backupCount=ROTATION_BACKUPS_PER_RUN
         )
         file_handler.setFormatter(log_format)
         file_handler.addFilter(VerboseMessageFilter())  # Apply filter to handler
@@ -830,12 +844,43 @@ class LoggingManager:
             self.logger.setLevel(logging.INFO)
     
     def _clean_old_log_files(self) -> None:
-        """Clean old log files to maintain the maximum count."""
-        existing_log_files = list(self.logs_folder.glob(self.log_file_pattern))
+        """Clean old log files to maintain the maximum count.
+
+        Also removes rotation backups whose log file has been cleaned up.
+        Each run writes its own timestamped file, so RotatingFileHandler only
+        rolls over when a single run exceeds maxBytes, and the backup it leaves
+        is named ``plexcache_log_<stamp>.log.1``. That does not match the
+        ``*.log`` glob above, so nothing in the product removed them.
+
+        Tying a backup's lifetime to its base file keeps one rule rather than
+        two: when the run's log goes, its overflow goes with it.
+        """
+        # plexcache_log_latest.log matches the glob but is a pointer to the
+        # newest run, not a run of its own. Counting it meant "keep 24" kept 23.
+        existing_log_files = [p for p in self.logs_folder.glob(self.log_file_pattern)
+                              if p.name != LATEST_LOG_NAME]
         existing_log_files.sort(key=lambda x: x.stat().st_mtime)
-        
+
         while len(existing_log_files) > self.max_log_files:
             os.remove(existing_log_files.pop(0))
+
+        kept = {p.name for p in existing_log_files}
+        orphaned = 0
+        for backup in self.logs_folder.glob(f"{self.log_file_pattern}.*"):
+            # Only numeric rollover suffixes: .log.1, .log.2, ...
+            if not backup.suffix[1:].isdigit():
+                continue
+            if backup.with_suffix("").name in kept:
+                continue
+            try:
+                os.remove(backup)
+                orphaned += 1
+            except OSError:
+                pass
+
+        if orphaned:
+            logging.info(f"[LOGS] Removed {orphaned} rotation backup file(s) "
+                         f"left by oversized runs")
     
     def setup_notification_handlers(self, notification_config, is_unraid: bool, is_docker: bool) -> None:
         """Set up notification handlers based on configuration."""
