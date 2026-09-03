@@ -829,11 +829,17 @@ function dismissMaintCompletionBanner() {
         </div>
         {% if status.total_files is defined and status.total_files > 0 %}
         <div class="di-progress-track"><div class="di-progress-fill" style="width: {{ status.progress_percent }}%;"></div></div>
+        {#- The bar and the ETA are both byte-based, so bytes lead. Showing the
+            file count first made them disagree: 43/199 files reads as a fifth
+            done while the same moment was 60% of the bytes, which made a
+            correct "9m left" look impossible. -#}
         <div class="di-progress-meta">
-            <span>{{ status.completed_files }}/{{ status.total_files }} file{{ 's' if status.total_files != 1 }}
+            <span>
+                {%- if status.has_byte_progress and status.bytes_display %}{{ status.bytes_display }}
+                {%- else %}{{ status.completed_files }}/{{ status.total_files }} file{{ 's' if status.total_files != 1 }}{% endif %}
                 {%- if status.last_completed_file %} &mdash; {{ status.last_completed_file|truncate(35, True, '...') }}{% endif %}</span>
             <span class="di-progress-meta__right">
-                {%- if status.bytes_display %}{{ status.bytes_display }} &middot; {% endif %}
+                {%- if status.has_byte_progress %}{{ status.completed_files }}/{{ status.total_files }} file{{ 's' if status.total_files != 1 }} &middot; {% endif %}
                 {{- status.elapsed_display }}
                 {%- if status.eta_display %} | ~{{ status.eta_display }} left{% endif %}</span>
         </div>
@@ -860,7 +866,14 @@ function dismissMaintCompletionBanner() {
             <div class="di-divider"></div>
             {%- for f in status.recent_files %}
             <div class="di-file-row">
+                {#- A sidecars-only header names the video so its extras can be
+                    attributed, but the video did not move. Its own action badge
+                    would say otherwise, so it gets a neutral one instead. -#}
+                {% if f.sidecars_only is defined and f.sidecars_only %}
+                <span class="di-action-tag" title="Only this title's associated files moved. The video was already in place.">EXTRAS</span>
+                {% else %}
                 <span class="di-action-tag {{ 'di-action-tag--cached' if f.action == 'Cached' else 'di-action-tag--restored' }}">{{ f.action|upper }}</span>
+                {% endif %}
                 <span class="di-file-row__name" title="{{ f.filename }}">{{ f.filename|truncate_filename(55) }}</span>
                 {% if f.size and f.size != '-' %}<span class="di-file-row__size">{{ f.size }}</span>{% endif %}
                 {% if f.associated_files is defined and f.associated_files %}<span class="di-file-row__assoc-badge">+{{ f.associated_files|length }}</span>{% endif %}

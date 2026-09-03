@@ -42,6 +42,11 @@ from core.activity import (
 
 SETTINGS_FILE = CONFIG_SETTINGS_FILE
 
+# Sidecars whose parent video is not in the run are gathered under a header row
+# naming that video. Two is the threshold: grouping a lone sidecar would turn one
+# row into two without telling the reader anything its own filename does not.
+_ORPHAN_GROUP_MIN = 2
+
 
 class OperationState(str, Enum):
     """Operation states"""
@@ -86,6 +91,14 @@ class OperationResult:
     cumulative_bytes_copied: int = 0
     cumulative_bytes_total: int = 0
     _prev_batch_cumulative: int = 0  # internal: snapshot at batch start
+    # Best sustained transfer rate seen this run, in bytes/sec. Copy time is
+    # bytes/rate PLUS a fixed cost per file (open, verify, chown, tracker
+    # write), so the batch average conflates the two and reads high while big
+    # files dominate. Tracking the peak separates them: the residual between
+    # elapsed and bytes/peak_rate is what the per-file cost has to explain.
+    peak_byte_rate: float = 0.0
+    _rate_last_time: Optional[float] = None
+    _rate_last_bytes: int = 0
 
 
 class WebLogHandler(logging.Handler):
@@ -1033,14 +1046,28 @@ class OperationRunner:
             def _bytes_cb(bytes_copied: int, bytes_total: int):
                 with self._lock:
                     r = self._current_result
+                    now = time.time()
                     if bytes_copied == 0:
                         # New batch starting — snapshot cumulative progress
-                        r.batch_copy_start_time = time.time()
+                        r.batch_copy_start_time = now
                         r._prev_batch_cumulative = r.cumulative_bytes_copied
                         r.cumulative_bytes_total = r._prev_batch_cumulative + bytes_total
+                        r._rate_last_time = now
+                        r._rate_last_bytes = 0
                     r.batch_bytes_copied = bytes_copied
                     r.batch_bytes_total = bytes_total
                     r.cumulative_bytes_copied = r._prev_batch_cumulative + bytes_copied
+
+                    # Sample the sustained rate over >=2s windows. Shorter ones
+                    # are dominated by scheduling noise and would inflate the
+                    # peak, which then hides the per-file cost in the ETA.
+                    if r._rate_last_time is not None:
+                        dt = now - r._rate_last_time
+                        db = bytes_copied - r._rate_last_bytes
+                        if dt >= 2.0 and db > 0:
+                            r.peak_byte_rate = max(r.peak_byte_rate, db / dt)
+                            r._rate_last_time = now
+                            r._rate_last_bytes = bytes_copied
 
             # Create and run the app
             app = PlexCacheApp(
@@ -1187,25 +1214,68 @@ class OperationRunner:
                     parent_index[key] = i
 
             merged_indices: set = set()
+            orphans: Dict[tuple, list] = {}
+            orphan_key_at: Dict[int, tuple] = {}
+
             for i, act in enumerate(activities):
-                if act.filename in sibling_to_parent:
-                    parent_basename = sibling_to_parent[act.filename]
-                    # Try compatible actions (e.g. Moved sibling → Restored parent)
-                    compatible = _COMPATIBLE_ACTIONS.get(act.action, (act.action,))
-                    for try_action in compatible:
-                        parent_key = (parent_basename, try_action)
-                        if parent_key in parent_index:
-                            parent_idx = parent_index[parent_key]
-                            parent_act = activities[parent_idx]
-                            parent_act.associated_files.append({
-                                "filename": act.filename,
-                                "size": format_bytes(act.size_bytes) if act.size_bytes > 0 else "",
-                            })
-                            merged_indices.add(i)
-                            break
+                if act.filename not in sibling_to_parent:
+                    continue
+                parent_basename = sibling_to_parent[act.filename]
+                # Try compatible actions (e.g. Moved sibling → Restored parent)
+                compatible = _COMPATIBLE_ACTIONS.get(act.action, (act.action,))
+                merged = False
+                for try_action in compatible:
+                    parent_key = (parent_basename, try_action)
+                    if parent_key in parent_index:
+                        parent_idx = parent_index[parent_key]
+                        parent_act = activities[parent_idx]
+                        parent_act.associated_files.append({
+                            "filename": act.filename,
+                            "size": format_bytes(act.size_bytes) if act.size_bytes > 0 else "",
+                        })
+                        merged_indices.add(i)
+                        merged = True
+                        break
+                if not merged:
+                    key = (parent_basename, act.action)
+                    orphans.setdefault(key, []).append(i)
+                    orphan_key_at.setdefault(key, i)
+
+            # Sidecars copied without their video (already on cache) have no parent
+            # to fold into. Give them one, so the feed names the film instead of
+            # listing loose artwork.
+            orphans = {k: v for k, v in orphans.items() if len(v) >= _ORPHAN_GROUP_MIN}
+            for idxs in orphans.values():
+                merged_indices.update(idxs)
 
             if merged_indices:
-                activities = [a for i, a in enumerate(activities) if i not in merged_indices]
+                rebuilt: list = []
+                emitted: set = set()
+                for i, act in enumerate(activities):
+                    if i not in merged_indices:
+                        rebuilt.append(act)
+                        continue
+                    for key, first_i in orphan_key_at.items():
+                        if key in orphans and first_i == i and key not in emitted:
+                            emitted.add(key)
+                            first = activities[i]
+                            rebuilt.append(FileActivity(
+                                timestamp=first.timestamp,
+                                action=key[1],
+                                filename=key[0],
+                                size_bytes=0,  # the video did not move
+                                users=list(first.users),
+                                run_id=first.run_id,
+                                run_source=first.run_source,
+                                sidecars_only=True,
+                                associated_files=[{
+                                    "filename": activities[j].filename,
+                                    "size": (format_bytes(activities[j].size_bytes)
+                                             if activities[j].size_bytes > 0 else ""),
+                                } for j in orphans[key]],
+                            ))
+                            break
+                activities = rebuilt
                 _save_activity_unlocked(activities)
 
         # Update in-memory list and merge _current_run_files for banner pill
@@ -1229,26 +1299,124 @@ class OperationRunner:
                 parent_index[key] = i
 
         merged_indices: set = set()
-        for i, f in enumerate(self._current_run_files):
-            if f["filename"] in sibling_to_parent:
-                parent_basename = sibling_to_parent[f["filename"]]
-                compatible = compatible_actions.get(f["action"], (f["action"],))
-                for try_action in compatible:
-                    parent_key = (parent_basename, try_action)
-                    if parent_key in parent_index:
-                        parent_idx = parent_index[parent_key]
-                        parent_entry = self._current_run_files[parent_idx]
-                        if "associated_files" not in parent_entry:
-                            parent_entry["associated_files"] = []
-                        parent_entry["associated_files"].append({
-                            "filename": f["filename"],
-                            "size": f.get("size", ""),
-                        })
-                        merged_indices.add(i)
-                        break
+        # Sidecars whose parent video is not in this run — see _group_orphan_sidecars.
+        orphans: Dict[tuple, list] = {}
+        orphan_key_at: Dict[int, tuple] = {}
 
-        if merged_indices:
-            self._current_run_files = [f for i, f in enumerate(self._current_run_files) if i not in merged_indices]
+        for i, f in enumerate(self._current_run_files):
+            if f["filename"] not in sibling_to_parent:
+                continue
+            parent_basename = sibling_to_parent[f["filename"]]
+            compatible = compatible_actions.get(f["action"], (f["action"],))
+            merged = False
+            for try_action in compatible:
+                parent_key = (parent_basename, try_action)
+                if parent_key in parent_index:
+                    parent_idx = parent_index[parent_key]
+                    parent_entry = self._current_run_files[parent_idx]
+                    if "associated_files" not in parent_entry:
+                        parent_entry["associated_files"] = []
+                    parent_entry["associated_files"].append({
+                        "filename": f["filename"],
+                        "size": f.get("size", ""),
+                    })
+                    merged_indices.add(i)
+                    merged = True
+                    break
+            if not merged:
+                key = (parent_basename, f["action"])
+                orphans.setdefault(key, []).append(f)
+                orphan_key_at.setdefault(key, i)
+
+        orphans = {k: v for k, v in orphans.items() if len(v) >= _ORPHAN_GROUP_MIN}
+        for key, entries in orphans.items():
+            for f in entries:
+                merged_indices.add(self._current_run_files.index(f))
+
+        if not merged_indices:
+            return
+
+        rebuilt: list = []
+        emitted: set = set()
+        for i, f in enumerate(self._current_run_files):
+            if i not in merged_indices:
+                rebuilt.append(f)
+                continue
+            for key, first_i in orphan_key_at.items():
+                if key in orphans and first_i == i and key not in emitted:
+                    emitted.add(key)
+                    rebuilt.append(self._synthetic_sidecar_parent(key, orphans[key]))
+                    break
+        self._current_run_files = rebuilt
+
+    @staticmethod
+    def _estimate_remaining_seconds(*, elapsed: float, bytes_done: int,
+                                    bytes_remaining: int, files_done: int,
+                                    files_remaining: int,
+                                    peak_rate: float) -> Optional[float]:
+        """Seconds left, priced per byte and per file.
+
+        A pure bytes/second model assumes every remaining byte costs the same
+        as the ones already copied. That holds while the queue is video files
+        and breaks at the tail, where artwork and NFOs are thousands of times
+        smaller but still cost a copy, a size verify, a chown and a tracker
+        write each. The estimate then reads far too low exactly when a user is
+        watching it, and the run appears stuck near the end.
+
+        Two terms instead:
+
+            remaining = bytes_remaining / rate + files_remaining * per_file
+
+        ``rate`` is the best sustained rate seen, which is the throughput of
+        bulk transfer with per-file costs mostly excluded. Whatever elapsed
+        time that does not explain is attributed to the files completed so
+        far, giving ``per_file``. Both are measured from this run, so a slow
+        array or a busy mover is reflected without any tuning constant.
+
+        Falls back to the plain byte rate when there is not enough to fit,
+        and returns None when there is nothing to estimate from.
+        """
+        if elapsed <= 0 or bytes_done <= 0:
+            return None
+
+        average_rate = bytes_done / elapsed
+        rate = peak_rate if peak_rate > average_rate else average_rate
+        if rate <= 0:
+            return None
+
+        # Time the bytes alone cannot account for is per-file cost.
+        per_file = 0.0
+        if files_done > 0:
+            unexplained = elapsed - (bytes_done / rate)
+            if unexplained > 0:
+                per_file = unexplained / files_done
+
+        return (bytes_remaining / rate) + (files_remaining * per_file)
+
+    @staticmethod
+    def _synthetic_sidecar_parent(key: tuple, entries: list) -> dict:
+        """A header row for sidecars whose parent video was not part of this run.
+
+        Artwork and NFOs are often copied on their own, because the video is
+        already on cache. Without a parent to fold into they rendered as
+        several unattributed rows — four "…-poster.jpg" lines with nothing
+        naming the film. This carries the parent's filename so the group reads
+        as what it is.
+
+        No size on the header: the video did not move, and showing the sidecar
+        total there would imply it did.
+        """
+        parent_basename, action = key
+        return {
+            "action": action,
+            "filename": parent_basename,
+            "size": "",
+            "size_bytes": 0,
+            "sidecars_only": True,
+            "associated_files": [
+                {"filename": e["filename"], "size": e.get("size", "")} for e in entries
+            ],
+        }
 
     # Show-episode grouping helper lives in core.activity (shared with the
     # Recent Activity dashboard grouping service). Imported as
@@ -1357,14 +1525,22 @@ class OperationRunner:
                 status["progress_percent"] = min(int(cumul_copied / cumul_total * 100), 100)
                 status["bytes_display"] = f"{self._format_bytes(cumul_copied)} / {self._format_bytes(cumul_total)}"
 
-                # ETA from current batch byte rate
+                status["has_byte_progress"] = True
+
+                # ETA from the batch, priced per byte AND per file.
                 if result.batch_bytes_copied > 0 and result.batch_copy_start_time:
                     copy_elapsed = time.time() - result.batch_copy_start_time
                     if copy_elapsed > 0:
-                        rate = result.batch_bytes_copied / copy_elapsed
-                        remaining = cumul_total - cumul_copied
-                        if rate > 0:
-                            status["eta_display"] = self._format_duration(remaining / rate)
+                        eta = self._estimate_remaining_seconds(
+                            elapsed=copy_elapsed,
+                            bytes_done=result.batch_bytes_copied,
+                            bytes_remaining=max(0, cumul_total - cumul_copied),
+                            files_done=completed_files,
+                            files_remaining=max(0, total_files - completed_files),
+                            peak_rate=result.peak_byte_rate,
+                        )
+                        if eta is not None:
+                            status["eta_display"] = self._format_duration(eta)
 
             # Recent log messages (last 5) for hover mini-log
             # Files completed so far in this run for detail panel

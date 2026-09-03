@@ -124,7 +124,7 @@
     data-action="{{ entry.action }}"
     onclick="ActivityRuns.toggleShow(this)">
     <td>{{ entry.time_display }}</td>
-    <td>{{ action_badge(entry.action) }}</td>
+    <td>{% if entry.sidecars_only %}<span class="badge badge-muted" title="Only this title's associated files moved. The video was already in place.">Extras only</span>{% else %}{{ action_badge(entry.action) }}{% endif %}</td>
     <td class="text-muted activity-file-col">
         <span class="chev">&#8250;</span>{{ entry.show_name }}
         <span class="badge badge-group badge-sm">{{ entry.episode_count }} eps</span>
@@ -157,7 +157,7 @@
     data-action="{{ entry.action }}"
     {% if entry.associated_files %}{{ af_expand_onclick() }}{% endif %}>
     <td>{{ entry.time_display }}</td>
-    <td>{{ action_badge(entry.action) }}</td>
+    <td>{% if entry.sidecars_only %}<span class="badge badge-muted" title="Only this title's associated files moved. The video was already in place.">Extras only</span>{% else %}{{ action_badge(entry.action) }}{% endif %}</td>
     <td class="text-muted activity-file-col" title="{{ entry.filename }}">{{ entry.filename }}</td>
     <td class="user-badges">
         {% if entry.users and entry.users|length > 0 %}
