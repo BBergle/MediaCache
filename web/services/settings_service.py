@@ -1066,15 +1066,32 @@ class SettingsService:
         try:
             import logging
             from plexapi.server import PlexServer
+
+            from core.plex_api import _retry_plextv_call
             plex = PlexServer(plex_url, plex_token, timeout=10)
 
             users = []
             account_error = None
             shared_users_error = None
 
+            # myPlexAccount() and users() are plex.tv round trips, so a transient
+            # timeout would otherwise drop the admin from this list for a whole
+            # refresh cycle. The blocks retry independently: a failure fetching
+            # the account has been seen while the very next call succeeded, so
+            # sharing one result would cost the shared users too.
+            #
+            # One retry rather than the usual three. This runs on the
+            # /settings/plex/users request path, not just the hourly refresh, so
+            # attempts are paid in page latency when plex.tv is down — and the
+            # cost of giving up is a stale user list, not a skipped array
+            # restore. One retry still covers the single blip seen in the logs.
+            PLEXTV_UI_ATTEMPTS = 2
+
             # Add main account first
             try:
-                account = plex.myPlexAccount()
+                account = _retry_plextv_call(
+                    lambda: plex.myPlexAccount(), label="settings main account",
+                    max_attempts=PLEXTV_UI_ATTEMPTS)
                 users.append({
                     "username": account.username,
                     "title": account.title or account.username,
@@ -1088,9 +1105,13 @@ class SettingsService:
 
             # Add shared users (all users from account.users() have server access)
             try:
-                account = plex.myPlexAccount()
+                account = _retry_plextv_call(
+                    lambda: plex.myPlexAccount(), label="settings shared users",
+                    max_attempts=PLEXTV_UI_ATTEMPTS)
                 shared_count = 0
-                for user in account.users():
+                for user in _retry_plextv_call(
+                        lambda: account.users(), label="settings user list",
+                        max_attempts=PLEXTV_UI_ATTEMPTS):
                     is_home = getattr(user, "home", False)
                     users.append({
                         "username": user.title,
