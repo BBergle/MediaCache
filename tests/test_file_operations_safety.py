@@ -394,7 +394,14 @@ class TestMoveToCacheFusePathSafety:
         cache_file = "/mnt/cache/media/Movies/Movie.mkv"
 
         mover = _make_file_mover(tmp_path, is_unraid=True, create_backups=True)
-        mover.file_utils.copy_file_with_permissions = lambda src, dest, **kw: None
+        # Model what a copy actually does — register the destination in the
+        # virtual filesystem — rather than returning None. The destination is
+        # the partial name now (published by rename), and these tests are about
+        # the array-side path conversion, not the copy mechanics.
+        def _record_copy(src, dest, **kw):
+            known_files[dest] = True
+            known_sizes[dest] = known_sizes.get(src, 1000)
+        mover.file_utils.copy_file_with_permissions = _record_copy
 
         rename_calls = []
         renamed_files = set()
@@ -543,7 +550,14 @@ class TestMoveToCacheFusePathSafety:
         cache_file = "/mnt/cache/media/Movies/Movie.mkv"
 
         mover = _make_file_mover(tmp_path, is_unraid=True, create_backups=True)
-        mover.file_utils.copy_file_with_permissions = lambda src, dest, **kw: None
+        # Model what a copy actually does — register the destination in the
+        # virtual filesystem — rather than returning None. The destination is
+        # the partial name now (published by rename), and these tests are about
+        # the array-side path conversion, not the copy mechanics.
+        def _record_copy(src, dest, **kw):
+            known_files[dest] = True
+            known_sizes[dest] = known_sizes.get(src, 1000)
+        mover.file_utils.copy_file_with_permissions = _record_copy
 
         # Simulate incorrect ZFS detection: share marked as pool-only
         old_prefixes = _zfs_user_prefixes.copy()
@@ -614,7 +628,14 @@ class TestMoveToCacheFusePathSafety:
         cache_file = "/mnt/cache/media/Movies/Movie.mkv"
 
         mover = _make_file_mover(tmp_path, is_unraid=True, create_backups=True)
-        mover.file_utils.copy_file_with_permissions = lambda src, dest, **kw: None
+        # Model what a copy actually does — register the destination in the
+        # virtual filesystem — rather than returning None. The destination is
+        # the partial name now (published by rename), and these tests are about
+        # the array-side path conversion, not the copy mechanics.
+        def _record_copy(src, dest, **kw):
+            known_files[dest] = True
+            known_sizes[dest] = known_sizes.get(src, 1000)
+        mover.file_utils.copy_file_with_permissions = _record_copy
 
         rename_calls = []
         renamed_files = set()
