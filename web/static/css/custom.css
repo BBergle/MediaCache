@@ -462,18 +462,32 @@ footer {
     pointer-events: auto;
 }
 
-/* ── Banner Pill System ───────────────────────────────── */
 
 /* Foreground/background tokens for the pill — dark by default.
-   All rgba(var(--di-on),X) foreground colors and dark surface fills
-   inside the pill reference these instead of literals, so the whole
-   component (compact + expanded + detail states) can flip cleanly
-   for Light theme below, without touching every declaration. */
+   Text-legibility tiers (--di-t*) exist because opacity-based text
+   does not invert symmetrically: e.g. 0.25 white-on-black reads fine,
+   but 0.25 black-on-white is close to invisible, so the Light theme
+   values below are boosted rather than a flat on/off swap. Named by
+   their original dark-mode alpha (t25 = 25% in dark mode). */
 #global-operation-banner {
     --di-on: 255,255,255;   /* RGB triplet used as rgba(var(--di-on), X) */
     --di-bg: #000;
     --di-track-bg: #1a1a1a;
+    --di-t15: rgba(var(--di-on),0.15);
+    --di-t20: rgba(var(--di-on),0.2);
+    --di-t25: rgba(var(--di-on),0.25);
+    --di-t30: rgba(var(--di-on),0.3);
+    --di-t35: rgba(var(--di-on),0.35);
+    --di-t40: rgba(var(--di-on),0.4);
+    --di-t45: rgba(var(--di-on),0.45);
+    --di-t50: rgba(var(--di-on),0.5);
+    --di-t55: rgba(var(--di-on),0.55);
+    --di-t60: rgba(var(--di-on),0.6);
+    --di-t70: rgba(var(--di-on),0.7);
+    --di-info-text: #5AC8FA; /* fixed light-blue badges/timer (queue, countdown) */
 }
+
+/* ── Banner Pill System ───────────────────────────────── */
 
 /* Color accent variables per operation type */
 .di-pill--caching  { --accent: #4CD964; --accent-dim: rgba(76,217,100,0.2);  --accent-glow: rgba(76,217,100,0.15); }
@@ -582,7 +596,7 @@ footer {
 .di-btn--primary:hover { background: #f0b020; }
 .di-btn--secondary {
     background: rgba(var(--di-on),0.08);
-    color: rgba(var(--di-on),0.7);
+    color: var(--di-t70);
     border: 1px solid rgba(var(--di-on),0.12);
 }
 .di-btn--secondary:hover { background: rgba(var(--di-on),0.14); color: rgb(var(--di-on)); }
@@ -592,7 +606,7 @@ footer {
     gap: 0.35rem;
     cursor: pointer;
     font-size: 0.75rem;
-    color: rgba(var(--di-on),0.5);
+    color: var(--di-t50);
     margin-right: auto;
 }
 .di-verbose-toggle input[type="checkbox"] {
@@ -667,7 +681,7 @@ footer {
     transition: opacity 0.2s ease;
 }
 .di-pill:hover .di-pill__compact::after {
-    border-color: rgba(var(--di-on),0.45);
+    border-color: var(--di-t45);
 }
 
 /* Pill layout sections */
@@ -711,7 +725,7 @@ footer {
 
 /* Muted metric variant for idle/secondary info */
 .di-metric--muted {
-    color: rgba(var(--di-on),0.5);
+    color: var(--di-t50);
     font-weight: 400;
     font-size: 0.78rem;
     white-space: nowrap;
@@ -864,10 +878,10 @@ footer {
     display: flex;
     justify-content: space-between;
     font-size: 0.75rem;
-    color: rgba(var(--di-on),0.4);
+    color: var(--di-t40);
 }
 .di-progress-meta .di-progress-meta__right {
-    color: rgba(var(--di-on),0.7);
+    color: var(--di-t70);
     font-variant-numeric: tabular-nums;
 }
 
@@ -878,7 +892,7 @@ footer {
     justify-content: center;
     gap: 0.3rem;
     font-size: 0.7rem;
-    color: rgba(var(--di-on),0.25);
+    color: var(--di-t25);
     cursor: pointer;
     padding-top: 0.15rem;
 }
@@ -904,7 +918,7 @@ footer {
     align-items: center;
     gap: 0.5rem;
     font-size: 0.72rem;
-    color: rgba(var(--di-on),0.45);
+    color: var(--di-t45);
     padding: 2px 0;
 }
 .di-file-row .di-action-tag {
@@ -916,11 +930,11 @@ footer {
 }
 .di-action-tag--active {
     background: rgba(90,200,250,0.15);
-    color: #5AC8FA;
+    color: var(--di-info-text);
     animation: diPulseTag 1.5s ease-in-out infinite;
 }
 @keyframes diPulseTag { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-.di-file-row--active .di-file-row__name { color: rgba(var(--di-on),0.7); }
+.di-file-row--active .di-file-row__name { color: var(--di-t70); }
 .di-action-tag--cached {
     background: rgba(76,217,100,0.12);
     color: #4CD964;
@@ -941,13 +955,13 @@ footer {
     min-width: 0;
 }
 .di-file-row__size {
-    color: rgba(var(--di-on),0.25);
+    color: var(--di-t25);
     flex-shrink: 0;
     margin-left: auto;
 }
 .di-file-row__assoc-badge {
     font-size: 0.6rem;
-    color: rgba(var(--di-on),0.3);
+    color: var(--di-t30);
     flex-shrink: 0;
 }
 .di-file-row--sub {
@@ -956,15 +970,15 @@ footer {
     opacity: 0.55;
 }
 .di-file-row--sub .di-file-row__size {
-    color: rgba(var(--di-on),0.55);
+    color: var(--di-t55);
 }
 .di-sub-arrow {
-    color: rgba(var(--di-on),0.25);
+    color: var(--di-t25);
     flex-shrink: 0;
     font-size: 0.7rem;
 }
 .di-expand-chev {
-    color: rgba(var(--di-on),0.4);
+    color: var(--di-t40);
     flex-shrink: 0;
     font-size: 0.85rem;
     transition: transform 0.18s ease;
@@ -1029,7 +1043,7 @@ footer {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: rgba(var(--di-on),0.4);
+    color: var(--di-t40);
     font-size: 1rem;
     transition: background 0.2s, color 0.2s;
     flex-shrink: 0;
@@ -1064,7 +1078,7 @@ footer {
 }
 .di-summary-stats__cached { color: #4CD964; }
 .di-summary-stats__restored { color: #FF9500; }
-.di-summary-stats__muted { color: rgba(var(--di-on),0.25); }
+.di-summary-stats__muted { color: var(--di-t25); }
 
 /* Divider line */
 .di-divider {
@@ -1078,14 +1092,14 @@ footer {
 .di-more-files {
     text-align: center;
     font-size: 0.7rem;
-    color: rgba(var(--di-on),0.25);
+    color: var(--di-t25);
     margin-top: 0.15rem;
 }
 
 /* ── Queue badge (compact pill) ──────────────────────── */
 .di-queue-badge {
     background: rgba(90,200,250,0.2);
-    color: #5AC8FA;
+    color: var(--di-info-text);
     font-size: 0.65rem;
     padding: 0.1rem 0.4rem;
     border-radius: 8px;
@@ -1107,13 +1121,13 @@ footer {
 
 .di-queue-header__label {
     font-size: 0.65rem;
-    color: rgba(var(--di-on),0.25);
+    color: var(--di-t25);
 }
 
 .di-queue-header__clear {
     background: rgba(var(--di-on),0.06);
     border: none;
-    color: rgba(var(--di-on),0.35);
+    color: var(--di-t35);
     font-size: 0.6rem;
     padding: 0.15rem 0.45rem;
     border-radius: 4px;
@@ -1131,7 +1145,7 @@ footer {
     align-items: center;
     gap: 0.5rem;
     font-size: 0.72rem;
-    color: rgba(var(--di-on),0.45);
+    color: var(--di-t45);
     padding: 2px 0;
 }
 
@@ -1144,7 +1158,7 @@ footer {
 }
 
 .di-queue-item__count {
-    color: rgba(var(--di-on),0.2);
+    color: var(--di-t20);
     font-size: 0.65rem;
     flex-shrink: 0;
     margin-left: auto;
@@ -1166,7 +1180,7 @@ footer {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: rgba(var(--di-on),0.15);
+    color: var(--di-t15);
     font-size: 0.8rem;
     line-height: 1;
     flex-shrink: 0;
@@ -1188,14 +1202,14 @@ footer {
 
 .di-countdown__text {
     font-size: 0.78rem;
-    color: rgba(var(--di-on),0.5);
+    color: var(--di-t50);
 }
 
 .di-countdown__timer {
     font-family: monospace;
     font-size: 0.85rem;
     font-weight: 700;
-    color: #5AC8FA;
+    color: var(--di-info-text);
     font-variant-numeric: tabular-nums;
 }
 
@@ -1208,19 +1222,72 @@ footer {
 
 /* ── Light theme pill overrides ──────────────────────── */
 /* Flip the pill to a light surface, matching the rest of the Light
-   theme, by swapping the foreground/background tokens instead of
-   the surface staying hard-coded black. Accent colors (green for
-   caching, orange for evicting, etc. — see .di-pill--* above) are
-   left untouched, so operation-state coloring stays identical in
-   both themes. */
+   theme, instead of the surface staying hard-coded black. */
 [data-theme="light"] #global-operation-banner {
     --di-on: 0,0,0;
     --di-bg: var(--plex-bg-card);
     --di-track-bg: rgba(0,0,0,0.08);
+    /* Text-legibility tiers boosted — see comment on the dark-mode
+       definitions above for why this isn't a flat on/off swap. */
+    --di-t15: rgba(var(--di-on),0.55);
+    --di-t20: rgba(var(--di-on),0.55);
+    --di-t25: rgba(var(--di-on),0.55);
+    --di-t30: rgba(var(--di-on),0.55);
+    --di-t35: rgba(var(--di-on),0.55);
+    --di-t40: rgba(var(--di-on),0.6);
+    --di-t45: rgba(var(--di-on),0.65);
+    --di-t50: rgba(var(--di-on),0.65);
+    --di-t55: rgba(var(--di-on),0.7);
+    --di-t60: rgba(var(--di-on),0.72);
+    --di-t70: rgba(var(--di-on),0.85);
+    --di-info-text: var(--plex-info);
 }
 [data-theme="light"] .di-pill {
     border: 1px solid var(--plex-border);
     box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+}
+
+/* Accent colors were literals tuned for a black surface — on white,
+   swap each pill state to the semantic tokens from plex-theme.css,
+   which already carry correct Light theme values. The idle state
+   keeps the Plex brand orange as-is (used elsewhere in Light theme
+   already); dry-run maps to warning, there's no dedicated token for
+   "caution/preview" distinct from it. */
+[data-theme="light"] .di-pill--caching,
+[data-theme="light"] .di-pill--completed { --accent: var(--plex-success); }
+[data-theme="light"] .di-pill--evicting,
+[data-theme="light"] .di-pill--completed-errors,
+[data-theme="light"] .di-pill--dry-run { --accent: var(--plex-warning); }
+[data-theme="light"] .di-pill--maintenance { --accent: var(--plex-info); }
+[data-theme="light"] .di-pill--error,
+[data-theme="light"] .di-pill--disconnected { --accent: var(--plex-error); }
+
+/* --accent-dim (icon circle fill, spinner ring) needs the same
+   semantic remap as --accent — otherwise the icon's stroke color
+   and its own fill are two different, unrelated hues in Light
+   theme. Kept at a similar ~15-20% tint so the icon circle doesn't
+   turn fully solid. */
+[data-theme="light"] .di-pill--caching,
+[data-theme="light"] .di-pill--completed { --accent-dim: color-mix(in srgb, var(--plex-success) 18%, transparent); }
+[data-theme="light"] .di-pill--evicting,
+[data-theme="light"] .di-pill--completed-errors,
+[data-theme="light"] .di-pill--dry-run { --accent-dim: color-mix(in srgb, var(--plex-warning) 18%, transparent); }
+[data-theme="light"] .di-pill--maintenance { --accent-dim: color-mix(in srgb, var(--plex-info) 18%, transparent); }
+[data-theme="light"] .di-pill--error,
+[data-theme="light"] .di-pill--disconnected { --accent-dim: color-mix(in srgb, var(--plex-error) 18%, transparent); }
+
+/* The pulse halo (--accent-glow) reads as a smudge on a white card —
+   drop it in Light theme rather than trying to tune its opacity. */
+[data-theme="light"] .di-pill--caching,
+[data-theme="light"] .di-pill--evicting,
+[data-theme="light"] .di-pill--maintenance,
+[data-theme="light"] .di-pill--error,
+[data-theme="light"] .di-pill--dry-run,
+[data-theme="light"] .di-pill--completed,
+[data-theme="light"] .di-pill--completed-errors,
+[data-theme="light"] .di-pill--idle,
+[data-theme="light"] .di-pill--disconnected {
+    --accent-glow: transparent;
 }
 
 /* ── Mobile responsive ───────────────────────────────── */
@@ -1763,4 +1830,195 @@ footer {
 }
 .ss-flash-pinned-card.is-dismissing {
     border-color: rgba(229, 160, 13, 0) !important;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Recently Added — small caption under a row's Pin action
+   ───────────────────────────────────────────────────────────────────── */
+.ra-status-note {
+    font-size: 0.72rem;
+    color: var(--plex-text-muted);
+    margin-top: 0.2rem;
+}
+
+/* Expandable show-group header (TV runs collapsed under one row) */
+.ra-group-header { cursor: pointer; }
+.ra-group-header:hover td { background: var(--plex-bg-hover); }
+.ra-chevron {
+    display: inline-flex;
+    color: var(--plex-text-muted);
+    transition: transform 0.15s ease;
+}
+.ra-group-header.is-open .ra-chevron { transform: rotate(90deg); }
+/* Inset surface token, so the nesting tint follows the theme. A hardcoded
+   rgba(0,0,0,0.12) composited to #E0E0E0 in light, all but identical to the
+   #DDDDE2 that tbody tr:hover paints — 1.03 contrast, i.e. no hover feedback
+   on a row that is clickable. Keep the specificity at (0,1,0): a
+   [data-theme="light"] companion would outrank tbody tr:hover and kill the
+   hover outright. */
+.ra-group-child { background: var(--plex-bg-input); }
+
+/* Per-row file-detail expander (chevron on the title cell) */
+.ra-detail-chevron {
+    display: inline-flex;
+    color: var(--plex-text-muted);
+    flex-shrink: 0;
+    transition: transform 0.15s ease;
+}
+.ra-detail-chevron i { width: 14px; height: 14px; }
+.ra-detail-chevron.open { transform: rotate(90deg); }
+
+/* File-detail sub-row: full-width colspan cell. The filename wraps inline
+   (overflow-wrap:anywhere) so long release names never widen the table, and the
+   size sits as a muted chip right after the name — not floated to the far edge.
+   padding-left aligns the name under the title text above it (past the
+   chevron + media icon); child rows have no icon so they're overridden inline. */
+.ra-detail-cell {
+    padding-left: 4rem;
+    font-size: 0.8rem;
+    color: var(--plex-text-muted, #8e8e93);
+}
+.ra-detail-name {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+/* Shared muted size chip (file-detail rows + dashboard widget). */
+.ra-size-chip {
+    display: inline-block;
+    margin-left: 0.5rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: var(--plex-radius-sm, 8px);
+    background: var(--plex-bg-hover, rgba(255, 255, 255, 0.06));
+    white-space: nowrap;
+    font-size: 0.72rem;
+    color: var(--plex-text-muted, #8e8e93);
+}
+
+/* ── Dashboard "Recently Added" widget: header + aligned columns ── */
+.ra-w-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid var(--plex-border);
+    font-size: 0.66rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--plex-text-muted);
+}
+.ra-w-head .ra-w-lead { width: 2.2rem; flex-shrink: 0; }
+.ra-w-row {
+    cursor: pointer;
+    border-top: 1px solid var(--plex-border);
+}
+.ra-w-row:first-of-type { border-top: none; }
+.ra-w-line {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0;
+    font-size: 0.85rem;
+}
+.ra-w-chevron {
+    display: inline-flex;
+    color: var(--plex-text-muted);
+    flex-shrink: 0;
+    transition: transform 0.15s ease;
+}
+.ra-w-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* Indeterminate outcome (pin state unknown / unmapped path). A dashed outline
+   reads as "not established" rather than as a settled state, without inventing
+   a new colour outside the token set. */
+.ra-badge-dashed {
+    border: 1px dashed var(--plex-border);
+    background: transparent;
+}
+
+/* Season/episode-count qualifier on a grouped show line. Inline (not a second
+   line) so grouped and ungrouped rows keep the same row height. */
+.ra-w-sub {
+    color: var(--plex-text-muted);
+    font-size: 0.76rem;
+    margin-left: 0.35rem;
+}
+.ra-w-size {
+    width: 5rem;
+    flex-shrink: 0;
+    text-align: right;
+}
+.ra-w-size .ra-size-chip { margin-left: 0; }
+.ra-w-age {
+    /* 5rem, matching .ra-w-size above: "30 days ago" overflows 4.5rem (72px)
+       at this font size now that format_cache_age has a day tier. */
+    width: 5rem;
+    flex-shrink: 0;
+    text-align: right;
+    white-space: nowrap;
+    color: var(--plex-text-muted);
+}
+.ra-w-detail { padding: 0 0 0.4rem 2.2rem; }
+.ra-w-detail-line {
+    display: flex;
+    align-items: baseline;
+    padding: 0.1rem 0;
+    font-size: 0.78rem;
+    color: var(--plex-text-muted);
+}
+/* Name shrinks (ellipsis) only as needed so the size chip hugs it, rather than
+   being pushed to the far right edge. */
+.ra-w-detail-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ==========================================================================
+   Share Alignment Warning (Libraries tab)
+   Flags a path mapping whose cache destination isn't the same Unraid share as
+   its media — the misconfiguration behind files appearing missing in Plex.
+   ========================================================================== */
+
+.share-mismatch-warning {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+    margin-bottom: 0.5rem;
+    padding: 0.5rem 0.65rem;
+    background: color-mix(in srgb, var(--plex-warning) 12%, transparent);
+    border-left: 3px solid var(--plex-warning);
+    border-radius: var(--plex-radius-sm);
+    font-size: 0.8rem;
+    color: var(--plex-warning);
+}
+
+.share-mismatch-warning__icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+}
+
+.share-mismatch-warning__body {
+    margin-top: 0.2rem;
+    color: var(--plex-text);
+    opacity: 0.85;
+    line-height: 1.45;
+}
+
+.share-mismatch-warning code {
+    padding: 0.05rem 0.3rem;
+    background: color-mix(in srgb, var(--plex-warning) 18%, transparent);
+    border-radius: 3px;
+    color: var(--plex-warning);
+    font-size: 0.95em;
 }
