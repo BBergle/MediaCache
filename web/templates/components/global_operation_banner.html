@@ -264,18 +264,22 @@ function diPillClick() {
 // Toggle a grouped show row in the completed-state detail view.
 // Hides/shows the adjacent .di-file-row--ep sub-rows without re-rendering
 // (which would require replaying the IIFE that built detailHtml).
+// `data-show` carries the group id minted by core.media_grouping — not the show
+// name — so two groups for the same show (cached vs restored in one run) toggle
+// independently. The id is stable across the 2s poll re-renders, which is what
+// lets the expanded state below survive.
 function bannerToggleShow(evt, el) {
     if (evt && evt.stopPropagation) evt.stopPropagation();
-    var show = el.getAttribute('data-show');
+    var groupId = el.getAttribute('data-show');
     var chev = el.querySelector('.di-expand-chev');
     var expand = !chev.classList.contains('open');
     chev.classList.toggle('open');
 
-    var subs = document.querySelectorAll('.di-file-row--ep[data-parent-show="' + (show || '').replace(/"/g, '\\"') + '"]');
+    var subs = document.querySelectorAll('.di-file-row--ep[data-parent-show="' + (groupId || '') + '"]');
     subs.forEach(function(s) { s.style.display = expand ? 'flex' : 'none'; });
 
     if (!window.__bannerExpandedShows) window.__bannerExpandedShows = {};
-    window.__bannerExpandedShows[show] = expand;
+    window.__bannerExpandedShows[groupId] = expand;
 }
 
 // Preserve window scroll position across banner swaps.
@@ -362,7 +366,7 @@ document.addEventListener('htmx:sendError', function(evt) {
             '        <span class="di-label">Server Unreachable</span>' +
             '      </div>' +
             '    </div>' +
-            '    <div style="font-size:0.78rem;color:rgba(var(--di-on),0.5);text-align:center;padding:0.3rem 0;">' +
+            '    <div style="font-size:0.78rem;color:var(--di-t50);text-align:center;padding:0.3rem 0;">' +
             '      Unable to reach the server. Retrying&hellip;' +
             '    </div>' +
             '  </div>' +
@@ -490,7 +494,7 @@ document.addEventListener('htmx:afterSwap', function(evt) {
         <div class="di-progress-track"><div class="di-progress-fill" style="width: {{ maint_status.progress_percent }}%;"></div></div>
         <div class="di-progress-meta">
             <span>{{ maint_status.files_processed }}/{{ maint_status.file_count }} files
-                {%- if maint_status.parallel %} <span style="color: rgba(var(--di-on),0.25);">({{ maint_status.parallel }}&times;)</span>{% endif %}
+                {%- if maint_status.parallel %} <span style="color:var(--di-t25);">({{ maint_status.parallel }}&times;)</span>{% endif %}
                 {%- if not maint_status.parallel and maint_status.current_file %} &mdash; {{ maint_status.current_file|truncate(50, True, '...') }}{% endif %}</span>
             <span class="di-progress-meta__right">
                 {%- if maint_status.bytes_display %}{{ maint_status.bytes_display }} &middot; {% endif %}
@@ -510,7 +514,7 @@ document.addEventListener('htmx:afterSwap', function(evt) {
             <div class="di-divider"></div>
             {%- for f in maint_status.active_files %}
             <div class="di-file-row">
-                <span style="color: rgba(var(--di-on),0.2);">&#8627;</span>
+                <span style="color:var(--di-t20);">&#8627;</span>
                 <span class="di-file-row__name" title="{{ f }}">{{ f|truncate_filename(65) }}</span>
             </div>
             {%- endfor %}
@@ -603,7 +607,7 @@ document.addEventListener('htmx:afterSwap', function(evt) {
         hintHtml = '<div class="di-expand-hint"><span>Click for details</span><i data-lucide="chevron-down" style="width: 12px; height: 12px;"></i></div>';
         detailHtml = '<div class="di-pill__detail"><div class="di-divider"></div>';
         affectedFiles.forEach(function(f) {
-            detailHtml += '<div class="di-file-row"><span style="color: rgba(var(--di-on),0.2);">&#8627;</span><span class="di-file-row__name" title="' + f.full + '">' + f.name + '</span></div>';
+            detailHtml += '<div class="di-file-row"><span style="color:var(--di-t20);">&#8627;</span><span class="di-file-row__name" title="' + f.full + '">' + f.name + '</span></div>';
         });
         if (affectedCount > affectedFiles.length) {
             detailHtml += '<div class="di-more-files">+ ' + (affectedCount - affectedFiles.length) + ' more files</div>';
@@ -638,7 +642,7 @@ document.addEventListener('htmx:afterSwap', function(evt) {
                         <button class="di-dismiss" title="Dismiss" onclick="event.stopPropagation(); dismissMaintCompletionBanner();">&times;</button>
                     </div>
                 </div>
-                <div style="font-size: 0.78rem; color: rgba(var(--di-on),0.5);">${resultMsg}</div>
+                <div style="font-size: 0.78rem; color:var(--di-t50);">${resultMsg}</div>
                 ${hintHtml}
                 ${detailHtml}
             </div>
@@ -744,7 +748,7 @@ function dismissMaintCompletionBanner() {
             </div>
         </div>
         {% if maint_status.error_message %}
-        <div style="font-size: 0.78rem; color: rgba(var(--di-on),0.5);">{{ maint_status.error_message }}</div>
+        <div style="font-size: 0.78rem; color:var(--di-t50);">{{ maint_status.error_message }}</div>
         {% endif %}
     </div>
 </div>
@@ -825,16 +829,22 @@ function dismissMaintCompletionBanner() {
         </div>
         {% if status.total_files is defined and status.total_files > 0 %}
         <div class="di-progress-track"><div class="di-progress-fill" style="width: {{ status.progress_percent }}%;"></div></div>
+        {#- The bar and the ETA are both byte-based, so bytes lead. Showing the
+            file count first made them disagree: 43/199 files reads as a fifth
+            done while the same moment was 60% of the bytes, which made a
+            correct "9m left" look impossible. -#}
         <div class="di-progress-meta">
-            <span>{{ status.completed_files }}/{{ status.total_files }} file{{ 's' if status.total_files != 1 }}
+            <span>
+                {%- if status.has_byte_progress and status.bytes_display %}{{ status.bytes_display }}
+                {%- else %}{{ status.completed_files }}/{{ status.total_files }} file{{ 's' if status.total_files != 1 }}{% endif %}
                 {%- if status.last_completed_file %} &mdash; {{ status.last_completed_file|truncate(35, True, '...') }}{% endif %}</span>
             <span class="di-progress-meta__right">
-                {%- if status.bytes_display %}{{ status.bytes_display }} &middot; {% endif %}
+                {%- if status.has_byte_progress %}{{ status.completed_files }}/{{ status.total_files }} file{{ 's' if status.total_files != 1 }} &middot; {% endif %}
                 {{- status.elapsed_display }}
                 {%- if status.eta_display %} | ~{{ status.eta_display }} left{% endif %}</span>
         </div>
         {% elif status.elapsed_display is defined %}
-        <div style="font-size: 0.78rem; color: rgba(var(--di-on),0.5); text-align: center;">{{ status.elapsed_display }}</div>
+        <div style="font-size: 0.78rem; color:var(--di-t50); text-align: center;">{{ status.elapsed_display }}</div>
         {% endif %}
         <!-- Tier 2 hint: click to expand detail panel -->
         <div class="di-expand-hint">
@@ -856,7 +866,14 @@ function dismissMaintCompletionBanner() {
             <div class="di-divider"></div>
             {%- for f in status.recent_files %}
             <div class="di-file-row">
+                {#- A sidecars-only header names the video so its extras can be
+                    attributed, but the video did not move. Its own action badge
+                    would say otherwise, so it gets a neutral one instead. -#}
+                {% if f.sidecars_only is defined and f.sidecars_only %}
+                <span class="di-action-tag" title="Only this title's associated files moved. The video was already in place.">EXTRAS</span>
+                {% else %}
                 <span class="di-action-tag {{ 'di-action-tag--cached' if f.action == 'Cached' else 'di-action-tag--restored' }}">{{ f.action|upper }}</span>
+                {% endif %}
                 <span class="di-file-row__name" title="{{ f.filename }}">{{ f.filename|truncate_filename(55) }}</span>
                 {% if f.size and f.size != '-' %}<span class="di-file-row__size">{{ f.size }}</span>{% endif %}
                 {% if f.associated_files is defined and f.associated_files %}<span class="di-file-row__assoc-badge">+{{ f.associated_files|length }}</span>{% endif %}
@@ -992,7 +1009,7 @@ function dismissMaintCompletionBanner() {
         statsHtml += '</span>';
     }
     if (filesCached === 0 && filesRestored === 0) {
-        statsHtml += '<span style="color: rgba(var(--di-on),0.5);">No files needed processing</span>';
+        statsHtml += '<span style="color:var(--di-t50);">No files needed processing</span>';
     }
     statsHtml += '</div>';
 
@@ -1002,7 +1019,7 @@ function dismissMaintCompletionBanner() {
     var recentFiles = [
         {% for f in status.recent_files|default([]) %}
         {%- if f.is_group is defined and f.is_group %}
-        { action: '{{ f.action }}', isGroup: true, showName: {{ f.show_name|tojson }}, episodeCount: {{ f.episode_count }}, size: '{{ f.size }}', episodes: [
+        { action: '{{ f.action }}', isGroup: true, groupId: '{{ f.group_id }}', showName: {{ f.show_name|tojson }}, episodeCount: {{ f.episode_count }}, size: '{{ f.size }}', episodes: [
             {%- for ep in f.episodes %}
             { filename: '{{ ep.filename|truncate_filename(45)|e }}', fullFilename: '{{ ep.filename|e }}', size: '{{ ep.size }}', associatedFiles: [
                 {%- if ep.associated_files %}{% for af in ep.associated_files %}{ filename: '{{ af.filename|truncate_filename(45)|e }}', fullFilename: '{{ af.filename|e }}', size: '{{ af.size }}' },{% endfor %}{% endif -%}
@@ -1041,10 +1058,14 @@ function dismissMaintCompletionBanner() {
             var tagClass = f.action === 'Cached' ? 'di-action-tag--cached' : 'di-action-tag--restored';
 
             if (f.isGroup) {
-                var isExpanded = expandedShows[f.showName] === true;
+                // Keyed on groupId, not showName: one run can both cache and
+                // restore episodes of the same show, which the grouper emits as
+                // two rows sharing a name. The id also keeps user-supplied
+                // titles (which can contain quotes) out of the attribute.
+                var isExpanded = expandedShows[f.groupId] === true;
                 var chevClass = isExpanded ? 'di-expand-chev open' : 'di-expand-chev';
                 var epLabel = f.episodeCount + ' ep' + (f.episodeCount !== 1 ? 's' : '');
-                detailHtml += '<div class="di-file-row di-file-row--group" data-show="' + f.showName + '" onclick="bannerToggleShow(event, this)" style="cursor:pointer">' +
+                detailHtml += '<div class="di-file-row di-file-row--group" data-show="' + f.groupId + '" onclick="bannerToggleShow(event, this)" style="cursor:pointer">' +
                     '<span class="di-action-tag ' + tagClass + '">' + f.action.toUpperCase() + '</span>' +
                     '<span class="di-file-row__name">' + f.showName + '</span>' +
                     '<span class="di-file-row__assoc-badge">' + epLabel + '</span>' +
@@ -1053,7 +1074,7 @@ function dismissMaintCompletionBanner() {
                     '</div>';
                 f.episodes.forEach(function(ep) {
                     var epAssoc = ep.associatedFiles.length > 0 ? '<span class="di-file-row__assoc-badge">+' + ep.associatedFiles.length + '</span>' : '';
-                    detailHtml += '<div class="di-file-row di-file-row--sub di-file-row--ep" data-parent-show="' + f.showName + '" style="display:' + (isExpanded ? 'flex' : 'none') + '">' +
+                    detailHtml += '<div class="di-file-row di-file-row--sub di-file-row--ep" data-parent-show="' + f.groupId + '" style="display:' + (isExpanded ? 'flex' : 'none') + '">' +
                         '<span class="di-sub-arrow">&#8627;</span>' +
                         '<span class="di-file-row__name" title="' + ep.fullFilename + '">' + ep.filename + '</span>' +
                         epAssoc +
@@ -1221,7 +1242,7 @@ function dismissCompletionBanner() {
             </div>
         </div>
         {% if status.error_message %}
-        <div style="font-size: 0.78rem; color: rgba(var(--di-on),0.5);">{{ status.error_message }}</div>
+        <div style="font-size: 0.78rem; color:var(--di-t50);">{{ status.error_message }}</div>
         {% endif %}
     </div>
 </div>
@@ -1327,7 +1348,7 @@ function dismissCompletionBanner() {
     <div class="di-pill__compact">
         <div class="di-pill__left">
             <div class="di-icon" style="background: color-mix(in srgb, var(--plex-warning) 15%, transparent); color: var(--plex-warning);"><i data-lucide="pause" style="width: 14px; height: 14px;"></i></div>
-            <span class="di-label" style="color: rgba(var(--di-on),0.6);">Queue paused</span>
+            <span class="di-label" style="color:var(--di-t60);">Queue paused</span>
             <span class="di-queue-badge" style="background: color-mix(in srgb, var(--plex-warning) 20%, transparent); color: var(--plex-warning);">{{ maint_status.queue_count }}</span>
         </div>
         <div class="di-pill__right">
@@ -1342,7 +1363,7 @@ function dismissCompletionBanner() {
             <div class="di-expanded__header-left">
                 <div class="di-icon" style="background: color-mix(in srgb, var(--plex-warning) 15%, transparent); color: var(--plex-warning);"><i data-lucide="pause" style="width: 14px; height: 14px;"></i></div>
                 <span class="di-label">Queue Paused</span>
-                <span style="font-size: 0.78rem; color: rgba(var(--di-on),0.4);">({{ maint_status.queue_count }} action{{ 's' if maint_status.queue_count != 1 }})</span>
+                <span style="font-size: 0.78rem; color:var(--di-t40);">({{ maint_status.queue_count }} action{{ 's' if maint_status.queue_count != 1 }})</span>
             </div>
             <div class="di-expanded__header-right">
                 <button class="di-btn di-btn--primary" style="background: var(--plex-warning); color: #000; height: 28px;"
@@ -1391,7 +1412,7 @@ function dismissCompletionBanner() {
     <div class="di-pill__compact">
         <div class="di-pill__left">
             <i data-lucide="clock" style="width: 13px; height: 13px; color: var(--plex-orange); opacity: 0.6;"></i>
-            <span style="font-size: 0.78rem; color: rgba(var(--di-on),0.5);">Next run</span>
+            <span style="font-size: 0.78rem; color:var(--di-t50);">Next run</span>
         </div>
         <div class="di-pill__right">
             <span class="di-metric" style="color: color-mix(in srgb, var(--plex-orange) 70%, transparent); font-weight: 400; font-size: 0.8rem;">{{ scheduler_status.next_run_relative }}</span>
@@ -1459,7 +1480,7 @@ function diTriggerRun(dryRun) {
     <div class="di-pill__compact">
         <div class="di-pill__left">
             <i data-lucide="play" style="width: 13px; height: 13px; color: var(--plex-orange); opacity: 0.6;"></i>
-            <span style="font-size: 0.78rem; color: rgba(var(--di-on),0.5);">PlexCache</span>
+            <span style="font-size: 0.78rem; color:var(--di-t50);">PlexCache</span>
         </div>
     </div>
 
