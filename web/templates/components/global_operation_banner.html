@@ -1279,7 +1279,7 @@ function dismissCompletionBanner() {
             <span class="di-countdown__timer" data-countdown-start="{{ maint_status.queue_countdown_started }}" data-countdown-duration="{{ maint_status.queue_countdown_seconds }}"></span>
         </div>
         <div class="di-countdown__actions">
-            <button class="di-btn di-btn--primary" style="background: var(--plex-info); color: #000;"
+            <button class="di-btn di-btn--primary" style="background: var(--plex-info); color: var(--di-btn-text-on-accent);"
                     onclick="event.stopPropagation(); fetch('/maintenance/queue/start-now',{method:'POST'}).then(()=>htmx.ajax('GET','/api/operation-banner',{target:'#global-operation-banner',swap:'innerHTML'}));">
                 <i data-lucide="play" style="width: 14px; height: 14px;"></i>
                 Start Now
@@ -1366,7 +1366,7 @@ function dismissCompletionBanner() {
                 <span style="font-size: 0.78rem; color:var(--di-t40);">({{ maint_status.queue_count }} action{{ 's' if maint_status.queue_count != 1 }})</span>
             </div>
             <div class="di-expanded__header-right">
-                <button class="di-btn di-btn--primary" style="background: var(--plex-warning); color: #000; height: 28px;"
+                <button class="di-btn di-btn--primary" style="background: var(--plex-warning); color: var(--di-btn-text-on-accent); height: 28px;"
                         onclick="event.stopPropagation(); fetch('/maintenance/queue/resume',{method:'POST'}).then(()=>htmx.ajax('GET','/api/operation-banner',{target:'#global-operation-banner',swap:'innerHTML'}));">
                     <i data-lucide="play" style="width: 14px; height: 14px;"></i>
                     Resume
@@ -1415,7 +1415,7 @@ function dismissCompletionBanner() {
             <span style="font-size: 0.78rem; color:var(--di-t50);">Next run</span>
         </div>
         <div class="di-pill__right">
-            <span class="di-metric" style="color: color-mix(in srgb, var(--plex-orange) 70%, transparent); font-weight: 400; font-size: 0.8rem;">{{ scheduler_status.next_run_relative }}</span>
+            <span class="di-metric" style="color: var(--di-idle-value); font-weight: 400; font-size: 0.8rem;">{{ scheduler_status.next_run_relative }}</span>
         </div>
     </div>
 
