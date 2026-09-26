@@ -485,6 +485,8 @@ footer {
     --di-t60: rgba(var(--di-on),0.6);
     --di-t70: rgba(var(--di-on),0.7);
     --di-info-text: #5AC8FA; /* fixed light-blue badges/timer (queue, countdown) */
+    --di-idle-value: color-mix(in srgb, var(--plex-orange) 70%, transparent); /* compact "Next run" countdown value */
+    --di-btn-text-on-accent: #000; /* text on var(--plex-info)/var(--plex-warning) buttons ("Start Now", "Resume") */
 }
 
 /* ── Banner Pill System ───────────────────────────────── */
@@ -1241,6 +1243,13 @@ footer {
     --di-t60: rgba(var(--di-on),0.72);
     --di-t70: rgba(var(--di-on),0.85);
     --di-info-text: var(--plex-info);
+    /* Plex orange at 70% on a white card measures ~1.8:1 — the icon
+       stays orange (that's fine on its own), but the countdown value
+       text needs an actual text tier instead. */
+    --di-idle-value: var(--di-t60);
+    /* --plex-info is a darker blue in Light theme, so black text on
+       it drops under 4:1 — needs to flip to white. */
+    --di-btn-text-on-accent: #fff;
 }
 [data-theme="light"] .di-pill {
     border: 1px solid var(--plex-border);
