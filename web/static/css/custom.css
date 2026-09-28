@@ -486,7 +486,7 @@ footer {
     --di-t70: rgba(var(--di-on),0.7);
     --di-info-text: #5AC8FA; /* fixed light-blue badges/timer (queue, countdown) */
     --di-idle-value: color-mix(in srgb, var(--plex-orange) 70%, transparent); /* compact "Next run" countdown value */
-    --di-btn-text-on-accent: #000; /* text on var(--plex-info)/var(--plex-warning) buttons ("Start Now", "Resume") */
+    --di-btn-text-on-accent: #000; /* text on the var(--plex-info) "Start Now" button */
 }
 
 /* ── Banner Pill System ───────────────────────────────── */
@@ -1253,7 +1253,10 @@ footer {
 }
 [data-theme="light"] .di-pill {
     border: 1px solid var(--plex-border);
-    box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+    /* The pill floats over page content, usually a white card in light
+       mode. Card-weight shadow made it read as part of the card, so use
+       the theme's elevated shadow plus a 1px contact shadow. */
+    box-shadow: var(--plex-shadow-elevated), 0 1px 2px rgba(0,0,0,0.10);
 }
 
 /* Accent colors were literals tuned for a black surface — on white,
@@ -1297,6 +1300,29 @@ footer {
 [data-theme="light"] .di-pill--idle,
 [data-theme="light"] .di-pill--disconnected {
     --accent-glow: transparent;
+}
+
+/* State colour on the pill border. Running pills carry .di-glow; finished
+   and failed pills set their own border in the dark rules above, so list
+   them here too. Keys off each state's --accent, which is already remapped
+   to the semantic tokens for light mode. Only border-color is set: the
+   dry-run pill is dashed and .di-glow sets the width, and the expanded
+   override further up still wins once a pill opens, as in dark. */
+[data-theme="light"] .di-glow,
+[data-theme="light"] .di-pill--completed,
+[data-theme="light"] .di-pill--completed-errors,
+[data-theme="light"] .di-pill--error,
+[data-theme="light"] .di-pill--disconnected,
+[data-theme="light"] .di-pill--dry-run {
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* Resting expand chevron. It is decorative, so it is not on a text tier;
+   at rest it is 20% of the foreground, which on white is a little faint.
+   Give it slightly more presence in light without approaching text weight. */
+[data-theme="light"] .di-pill__compact::after {
+    border-right-color: rgba(0,0,0,0.3);
+    border-bottom-color: rgba(0,0,0,0.3);
 }
 
 /* ── Mobile responsive ───────────────────────────────── */
