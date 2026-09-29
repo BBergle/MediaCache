@@ -366,7 +366,7 @@ document.addEventListener('htmx:sendError', function(evt) {
             '        <span class="di-label">Server Unreachable</span>' +
             '      </div>' +
             '    </div>' +
-            '    <div style="font-size:0.78rem;color:rgba(255,255,255,0.5);text-align:center;padding:0.3rem 0;">' +
+            '    <div style="font-size:0.78rem;color:var(--di-t50);text-align:center;padding:0.3rem 0;">' +
             '      Unable to reach the server. Retrying&hellip;' +
             '    </div>' +
             '  </div>' +
@@ -494,7 +494,7 @@ document.addEventListener('htmx:afterSwap', function(evt) {
         <div class="di-progress-track"><div class="di-progress-fill" style="width: {{ maint_status.progress_percent }}%;"></div></div>
         <div class="di-progress-meta">
             <span>{{ maint_status.files_processed }}/{{ maint_status.file_count }} files
-                {%- if maint_status.parallel %} <span style="color: rgba(255,255,255,0.25);">({{ maint_status.parallel }}&times;)</span>{% endif %}
+                {%- if maint_status.parallel %} <span style="color:var(--di-t25);">({{ maint_status.parallel }}&times;)</span>{% endif %}
                 {%- if not maint_status.parallel and maint_status.current_file %} &mdash; {{ maint_status.current_file|truncate(50, True, '...') }}{% endif %}</span>
             <span class="di-progress-meta__right">
                 {%- if maint_status.bytes_display %}{{ maint_status.bytes_display }} &middot; {% endif %}
@@ -514,7 +514,7 @@ document.addEventListener('htmx:afterSwap', function(evt) {
             <div class="di-divider"></div>
             {%- for f in maint_status.active_files %}
             <div class="di-file-row">
-                <span style="color: rgba(255,255,255,0.2);">&#8627;</span>
+                <span style="color:var(--di-t20);">&#8627;</span>
                 <span class="di-file-row__name" title="{{ f }}">{{ f|truncate_filename(65) }}</span>
             </div>
             {%- endfor %}
@@ -607,7 +607,7 @@ document.addEventListener('htmx:afterSwap', function(evt) {
         hintHtml = '<div class="di-expand-hint"><span>Click for details</span><i data-lucide="chevron-down" style="width: 12px; height: 12px;"></i></div>';
         detailHtml = '<div class="di-pill__detail"><div class="di-divider"></div>';
         affectedFiles.forEach(function(f) {
-            detailHtml += '<div class="di-file-row"><span style="color: rgba(255,255,255,0.2);">&#8627;</span><span class="di-file-row__name" title="' + f.full + '">' + f.name + '</span></div>';
+            detailHtml += '<div class="di-file-row"><span style="color:var(--di-t20);">&#8627;</span><span class="di-file-row__name" title="' + f.full + '">' + f.name + '</span></div>';
         });
         if (affectedCount > affectedFiles.length) {
             detailHtml += '<div class="di-more-files">+ ' + (affectedCount - affectedFiles.length) + ' more files</div>';
@@ -642,7 +642,7 @@ document.addEventListener('htmx:afterSwap', function(evt) {
                         <button class="di-dismiss" title="Dismiss" onclick="event.stopPropagation(); dismissMaintCompletionBanner();">&times;</button>
                     </div>
                 </div>
-                <div style="font-size: 0.78rem; color: rgba(255,255,255,0.5);">${resultMsg}</div>
+                <div style="font-size: 0.78rem; color:var(--di-t50);">${resultMsg}</div>
                 ${hintHtml}
                 ${detailHtml}
             </div>
@@ -748,7 +748,7 @@ function dismissMaintCompletionBanner() {
             </div>
         </div>
         {% if maint_status.error_message %}
-        <div style="font-size: 0.78rem; color: rgba(255,255,255,0.5);">{{ maint_status.error_message }}</div>
+        <div style="font-size: 0.78rem; color:var(--di-t50);">{{ maint_status.error_message }}</div>
         {% endif %}
     </div>
 </div>
@@ -844,7 +844,7 @@ function dismissMaintCompletionBanner() {
                 {%- if status.eta_display %} | ~{{ status.eta_display }} left{% endif %}</span>
         </div>
         {% elif status.elapsed_display is defined %}
-        <div style="font-size: 0.78rem; color: rgba(255,255,255,0.5); text-align: center;">{{ status.elapsed_display }}</div>
+        <div style="font-size: 0.78rem; color:var(--di-t50); text-align: center;">{{ status.elapsed_display }}</div>
         {% endif %}
         <!-- Tier 2 hint: click to expand detail panel -->
         <div class="di-expand-hint">
@@ -1009,7 +1009,7 @@ function dismissMaintCompletionBanner() {
         statsHtml += '</span>';
     }
     if (filesCached === 0 && filesRestored === 0) {
-        statsHtml += '<span style="color: rgba(255,255,255,0.5);">No files needed processing</span>';
+        statsHtml += '<span style="color:var(--di-t50);">No files needed processing</span>';
     }
     statsHtml += '</div>';
 
@@ -1242,7 +1242,7 @@ function dismissCompletionBanner() {
             </div>
         </div>
         {% if status.error_message %}
-        <div style="font-size: 0.78rem; color: rgba(255,255,255,0.5);">{{ status.error_message }}</div>
+        <div style="font-size: 0.78rem; color:var(--di-t50);">{{ status.error_message }}</div>
         {% endif %}
     </div>
 </div>
@@ -1279,7 +1279,7 @@ function dismissCompletionBanner() {
             <span class="di-countdown__timer" data-countdown-start="{{ maint_status.queue_countdown_started }}" data-countdown-duration="{{ maint_status.queue_countdown_seconds }}"></span>
         </div>
         <div class="di-countdown__actions">
-            <button class="di-btn di-btn--primary" style="background: var(--plex-info); color: #000;"
+            <button class="di-btn di-btn--primary" style="background: var(--plex-info); color: var(--di-btn-text-on-accent);"
                     onclick="event.stopPropagation(); fetch('/maintenance/queue/start-now',{method:'POST'}).then(()=>htmx.ajax('GET','/api/operation-banner',{target:'#global-operation-banner',swap:'innerHTML'}));">
                 <i data-lucide="play" style="width: 14px; height: 14px;"></i>
                 Start Now
@@ -1348,7 +1348,7 @@ function dismissCompletionBanner() {
     <div class="di-pill__compact">
         <div class="di-pill__left">
             <div class="di-icon" style="background: color-mix(in srgb, var(--plex-warning) 15%, transparent); color: var(--plex-warning);"><i data-lucide="pause" style="width: 14px; height: 14px;"></i></div>
-            <span class="di-label" style="color: rgba(255,255,255,0.6);">Queue paused</span>
+            <span class="di-label" style="color:var(--di-t60);">Queue paused</span>
             <span class="di-queue-badge" style="background: color-mix(in srgb, var(--plex-warning) 20%, transparent); color: var(--plex-warning);">{{ maint_status.queue_count }}</span>
         </div>
         <div class="di-pill__right">
@@ -1363,10 +1363,10 @@ function dismissCompletionBanner() {
             <div class="di-expanded__header-left">
                 <div class="di-icon" style="background: color-mix(in srgb, var(--plex-warning) 15%, transparent); color: var(--plex-warning);"><i data-lucide="pause" style="width: 14px; height: 14px;"></i></div>
                 <span class="di-label">Queue Paused</span>
-                <span style="font-size: 0.78rem; color: rgba(255,255,255,0.4);">({{ maint_status.queue_count }} action{{ 's' if maint_status.queue_count != 1 }})</span>
+                <span style="font-size: 0.78rem; color:var(--di-t40);">({{ maint_status.queue_count }} action{{ 's' if maint_status.queue_count != 1 }})</span>
             </div>
             <div class="di-expanded__header-right">
-                <button class="di-btn di-btn--primary" style="background: var(--plex-warning); color: #000; height: 28px;"
+                <button class="di-btn di-btn--primary" style="height: 28px;"
                         onclick="event.stopPropagation(); fetch('/maintenance/queue/resume',{method:'POST'}).then(()=>htmx.ajax('GET','/api/operation-banner',{target:'#global-operation-banner',swap:'innerHTML'}));">
                     <i data-lucide="play" style="width: 14px; height: 14px;"></i>
                     Resume
@@ -1412,10 +1412,10 @@ function dismissCompletionBanner() {
     <div class="di-pill__compact">
         <div class="di-pill__left">
             <i data-lucide="clock" style="width: 13px; height: 13px; color: var(--plex-orange); opacity: 0.6;"></i>
-            <span style="font-size: 0.78rem; color: rgba(255,255,255,0.5);">Next run</span>
+            <span style="font-size: 0.78rem; color:var(--di-t50);">Next run</span>
         </div>
         <div class="di-pill__right">
-            <span class="di-metric" style="color: color-mix(in srgb, var(--plex-orange) 70%, transparent); font-weight: 400; font-size: 0.8rem;">{{ scheduler_status.next_run_relative }}</span>
+            <span class="di-metric" style="color: var(--di-idle-value); font-weight: 400; font-size: 0.8rem;">{{ scheduler_status.next_run_relative }}</span>
         </div>
     </div>
 
@@ -1480,7 +1480,7 @@ function diTriggerRun(dryRun) {
     <div class="di-pill__compact">
         <div class="di-pill__left">
             <i data-lucide="play" style="width: 13px; height: 13px; color: var(--plex-orange); opacity: 0.6;"></i>
-            <span style="font-size: 0.78rem; color: rgba(255,255,255,0.5);">PlexCache</span>
+            <span style="font-size: 0.78rem; color:var(--di-t50);">PlexCache</span>
         </div>
     </div>
 

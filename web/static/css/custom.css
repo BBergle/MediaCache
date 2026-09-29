@@ -462,6 +462,33 @@ footer {
     pointer-events: auto;
 }
 
+
+/* Foreground/background tokens for the pill — dark by default.
+   Text-legibility tiers (--di-t*) exist because opacity-based text
+   does not invert symmetrically: e.g. 0.25 white-on-black reads fine,
+   but 0.25 black-on-white is close to invisible, so the Light theme
+   values below are boosted rather than a flat on/off swap. Named by
+   their original dark-mode alpha (t25 = 25% in dark mode). */
+#global-operation-banner {
+    --di-on: 255,255,255;   /* RGB triplet used as rgba(var(--di-on), X) */
+    --di-bg: #000;
+    --di-track-bg: #1a1a1a;
+    --di-t15: rgba(var(--di-on),0.15);
+    --di-t20: rgba(var(--di-on),0.2);
+    --di-t25: rgba(var(--di-on),0.25);
+    --di-t30: rgba(var(--di-on),0.3);
+    --di-t35: rgba(var(--di-on),0.35);
+    --di-t40: rgba(var(--di-on),0.4);
+    --di-t45: rgba(var(--di-on),0.45);
+    --di-t50: rgba(var(--di-on),0.5);
+    --di-t55: rgba(var(--di-on),0.55);
+    --di-t60: rgba(var(--di-on),0.6);
+    --di-t70: rgba(var(--di-on),0.7);
+    --di-info-text: #5AC8FA; /* fixed light-blue badges/timer (queue, countdown) */
+    --di-idle-value: color-mix(in srgb, var(--plex-orange) 70%, transparent); /* compact "Next run" countdown value */
+    --di-btn-text-on-accent: #000; /* text on the var(--plex-info) "Start Now" button */
+}
+
 /* ── Banner Pill System ───────────────────────────────── */
 
 /* Color accent variables per operation type */
@@ -511,7 +538,7 @@ footer {
 
 /* Base compact pill */
 .di-pill {
-    background: #000;
+    background: var(--di-bg);
     border-radius: 28px;
     padding: 0 1.25rem;
     height: 44px;
@@ -570,18 +597,18 @@ footer {
 }
 .di-btn--primary:hover { background: #f0b020; }
 .di-btn--secondary {
-    background: rgba(255,255,255,0.08);
-    color: rgba(255,255,255,0.7);
-    border: 1px solid rgba(255,255,255,0.12);
+    background: rgba(var(--di-on),0.08);
+    color: var(--di-t70);
+    border: 1px solid rgba(var(--di-on),0.12);
 }
-.di-btn--secondary:hover { background: rgba(255,255,255,0.14); color: #fff; }
+.di-btn--secondary:hover { background: rgba(var(--di-on),0.14); color: rgb(var(--di-on)); }
 .di-verbose-toggle {
     display: flex;
     align-items: center;
     gap: 0.35rem;
     cursor: pointer;
     font-size: 0.75rem;
-    color: rgba(255,255,255,0.5);
+    color: var(--di-t50);
     margin-right: auto;
 }
 .di-verbose-toggle input[type="checkbox"] {
@@ -611,7 +638,7 @@ footer {
 
 /* Running pills use a fixed width in compact mode to prevent jumpiness
    as content changes (phase labels, counts, durations) every 2s poll */
-.di-glow { width: 360px; min-width: 360px; border: 1.5px solid var(--accent-dim, rgba(255,255,255,0.12)); }
+.di-glow { width: 360px; min-width: 360px; border: 1.5px solid var(--accent-dim, rgba(var(--di-on),0.12)); }
 
 /* Subtle animated glow behind running pills — compact state only */
 .di-glow::after {
@@ -632,7 +659,7 @@ footer {
 /* Hide border glow + flash animation when expanded */
 #global-operation-banner[data-di-expanded="tier2"] .di-pill,
 #global-operation-banner[data-di-expanded="tier3"] .di-pill,
-.di-pill.di-expanded { border-color: rgba(255,255,255,0.06) !important; animation: none !important; }
+.di-pill.di-expanded { border-color: rgba(var(--di-on),0.06) !important; animation: none !important; }
 
 /* Compact view layout */
 .di-pill__compact {
@@ -648,15 +675,15 @@ footer {
     content: '';
     width: 8px;
     height: 8px;
-    border-right: 1.5px solid rgba(255,255,255,0.2);
-    border-bottom: 1.5px solid rgba(255,255,255,0.2);
+    border-right: 1.5px solid rgba(var(--di-on),0.2);
+    border-bottom: 1.5px solid rgba(var(--di-on),0.2);
     transform: rotate(45deg);
     flex-shrink: 0;
     margin-top: -2px;
     transition: opacity 0.2s ease;
 }
 .di-pill:hover .di-pill__compact::after {
-    border-color: rgba(255,255,255,0.45);
+    border-color: var(--di-t45);
 }
 
 /* Pill layout sections */
@@ -685,7 +712,7 @@ footer {
 .di-label {
     font-size: 0.85rem;
     font-weight: 600;
-    color: #fff;
+    color: rgb(var(--di-on));
     white-space: nowrap;
 }
 
@@ -700,7 +727,7 @@ footer {
 
 /* Muted metric variant for idle/secondary info */
 .di-metric--muted {
-    color: rgba(255,255,255,0.5);
+    color: var(--di-t50);
     font-weight: 400;
     font-size: 0.78rem;
     white-space: nowrap;
@@ -737,7 +764,7 @@ footer {
 /* Error badge */
 .di-error-badge {
     background: #e74c3c;
-    color: #fff;
+    color: #fff; /* fixed red badge — always white text, independent of pill theme */
     font-size: 0.65rem;
     padding: 0.1rem 0.4rem;
     border-radius: 8px;
@@ -836,7 +863,7 @@ footer {
 /* Expanded progress bar */
 .di-progress-track {
     height: 4px;
-    background: #1a1a1a;
+    background: var(--di-track-bg);
     border-radius: 2px;
     overflow: hidden;
     width: 100%;
@@ -853,10 +880,10 @@ footer {
     display: flex;
     justify-content: space-between;
     font-size: 0.75rem;
-    color: rgba(255,255,255,0.4);
+    color: var(--di-t40);
 }
 .di-progress-meta .di-progress-meta__right {
-    color: rgba(255,255,255,0.7);
+    color: var(--di-t70);
     font-variant-numeric: tabular-nums;
 }
 
@@ -867,7 +894,7 @@ footer {
     justify-content: center;
     gap: 0.3rem;
     font-size: 0.7rem;
-    color: rgba(255,255,255,0.25);
+    color: var(--di-t25);
     cursor: pointer;
     padding-top: 0.15rem;
 }
@@ -893,7 +920,7 @@ footer {
     align-items: center;
     gap: 0.5rem;
     font-size: 0.72rem;
-    color: rgba(255,255,255,0.45);
+    color: var(--di-t45);
     padding: 2px 0;
 }
 .di-file-row .di-action-tag {
@@ -905,11 +932,11 @@ footer {
 }
 .di-action-tag--active {
     background: rgba(90,200,250,0.15);
-    color: #5AC8FA;
+    color: var(--di-info-text);
     animation: diPulseTag 1.5s ease-in-out infinite;
 }
 @keyframes diPulseTag { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-.di-file-row--active .di-file-row__name { color: rgba(255,255,255,0.7); }
+.di-file-row--active .di-file-row__name { color: var(--di-t70); }
 .di-action-tag--cached {
     background: rgba(76,217,100,0.12);
     color: #4CD964;
@@ -930,13 +957,13 @@ footer {
     min-width: 0;
 }
 .di-file-row__size {
-    color: rgba(255,255,255,0.25);
+    color: var(--di-t25);
     flex-shrink: 0;
     margin-left: auto;
 }
 .di-file-row__assoc-badge {
     font-size: 0.6rem;
-    color: rgba(255,255,255,0.3);
+    color: var(--di-t30);
     flex-shrink: 0;
 }
 .di-file-row--sub {
@@ -945,15 +972,15 @@ footer {
     opacity: 0.55;
 }
 .di-file-row--sub .di-file-row__size {
-    color: rgba(255,255,255,0.55);
+    color: var(--di-t55);
 }
 .di-sub-arrow {
-    color: rgba(255,255,255,0.25);
+    color: var(--di-t25);
     flex-shrink: 0;
     font-size: 0.7rem;
 }
 .di-expand-chev {
-    color: rgba(255,255,255,0.4);
+    color: var(--di-t40);
     flex-shrink: 0;
     font-size: 0.85rem;
     transition: transform 0.18s ease;
@@ -963,7 +990,7 @@ footer {
     transform: rotate(90deg);
 }
 .di-file-row--group:hover {
-    background: rgba(255,255,255,0.04);
+    background: rgba(var(--di-on),0.04);
     border-radius: 4px;
 }
 .di-more-link {
@@ -974,7 +1001,7 @@ footer {
     padding: 0.45rem;
     margin-top: 0.25rem;
     text-decoration: none;
-    border-top: 1px dashed rgba(255,255,255,0.08);
+    border-top: 1px dashed rgba(var(--di-on),0.08);
     transition: background 0.15s, color 0.15s;
 }
 .di-more-link:hover {
@@ -1012,19 +1039,19 @@ footer {
     width: 28px;
     height: 28px;
     border-radius: 50%;
-    background: rgba(255,255,255,0.06);
+    background: rgba(var(--di-on),0.06);
     border: none;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: rgba(255,255,255,0.4);
+    color: var(--di-t40);
     font-size: 1rem;
     transition: background 0.2s, color 0.2s;
     flex-shrink: 0;
     line-height: 1;
 }
-.di-dismiss:hover { background: rgba(255,255,255,0.12); color: #fff; }
+.di-dismiss:hover { background: rgba(var(--di-on),0.12); color: rgb(var(--di-on)); }
 
 /* ── Warning row (reused from old banner) ────────────── */
 .di-warning {
@@ -1053,12 +1080,12 @@ footer {
 }
 .di-summary-stats__cached { color: #4CD964; }
 .di-summary-stats__restored { color: #FF9500; }
-.di-summary-stats__muted { color: rgba(255,255,255,0.25); }
+.di-summary-stats__muted { color: var(--di-t25); }
 
 /* Divider line */
 .di-divider {
     height: 1px;
-    background: #1a1a1a;
+    background: var(--di-track-bg);
     margin: 0.15rem 0;
     width: 100%;
 }
@@ -1067,14 +1094,14 @@ footer {
 .di-more-files {
     text-align: center;
     font-size: 0.7rem;
-    color: rgba(255,255,255,0.25);
+    color: var(--di-t25);
     margin-top: 0.15rem;
 }
 
 /* ── Queue badge (compact pill) ──────────────────────── */
 .di-queue-badge {
     background: rgba(90,200,250,0.2);
-    color: #5AC8FA;
+    color: var(--di-info-text);
     font-size: 0.65rem;
     padding: 0.1rem 0.4rem;
     border-radius: 8px;
@@ -1096,13 +1123,13 @@ footer {
 
 .di-queue-header__label {
     font-size: 0.65rem;
-    color: rgba(255,255,255,0.25);
+    color: var(--di-t25);
 }
 
 .di-queue-header__clear {
-    background: rgba(255,255,255,0.06);
+    background: rgba(var(--di-on),0.06);
     border: none;
-    color: rgba(255,255,255,0.35);
+    color: var(--di-t35);
     font-size: 0.6rem;
     padding: 0.15rem 0.45rem;
     border-radius: 4px;
@@ -1120,7 +1147,7 @@ footer {
     align-items: center;
     gap: 0.5rem;
     font-size: 0.72rem;
-    color: rgba(255,255,255,0.45);
+    color: var(--di-t45);
     padding: 2px 0;
 }
 
@@ -1133,7 +1160,7 @@ footer {
 }
 
 .di-queue-item__count {
-    color: rgba(255,255,255,0.2);
+    color: var(--di-t20);
     font-size: 0.65rem;
     flex-shrink: 0;
     margin-left: auto;
@@ -1155,7 +1182,7 @@ footer {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: rgba(255,255,255,0.15);
+    color: var(--di-t15);
     font-size: 0.8rem;
     line-height: 1;
     flex-shrink: 0;
@@ -1177,14 +1204,14 @@ footer {
 
 .di-countdown__text {
     font-size: 0.78rem;
-    color: rgba(255,255,255,0.5);
+    color: var(--di-t50);
 }
 
 .di-countdown__timer {
     font-family: monospace;
     font-size: 0.85rem;
     font-weight: 700;
-    color: #5AC8FA;
+    color: var(--di-info-text);
     font-variant-numeric: tabular-nums;
 }
 
@@ -1196,9 +1223,106 @@ footer {
 }
 
 /* ── Light theme pill overrides ──────────────────────── */
-/* Pill stays dark in light mode — just soften the shadow for lighter backgrounds */
+/* Flip the pill to a light surface, matching the rest of the Light
+   theme, instead of the surface staying hard-coded black. */
+[data-theme="light"] #global-operation-banner {
+    --di-on: 0,0,0;
+    --di-bg: var(--plex-bg-card);
+    --di-track-bg: rgba(0,0,0,0.08);
+    /* Text-legibility tiers boosted — see comment on the dark-mode
+       definitions above for why this isn't a flat on/off swap. */
+    --di-t15: rgba(var(--di-on),0.55);
+    --di-t20: rgba(var(--di-on),0.55);
+    --di-t25: rgba(var(--di-on),0.55);
+    --di-t30: rgba(var(--di-on),0.55);
+    --di-t35: rgba(var(--di-on),0.55);
+    --di-t40: rgba(var(--di-on),0.6);
+    --di-t45: rgba(var(--di-on),0.65);
+    --di-t50: rgba(var(--di-on),0.65);
+    --di-t55: rgba(var(--di-on),0.7);
+    --di-t60: rgba(var(--di-on),0.72);
+    --di-t70: rgba(var(--di-on),0.85);
+    --di-info-text: var(--plex-info);
+    /* Plex orange at 70% on a white card measures ~1.8:1 — the icon
+       stays orange (that's fine on its own), but the countdown value
+       text needs an actual text tier instead. */
+    --di-idle-value: var(--di-t60);
+    /* --plex-info is a darker blue in Light theme, so black text on
+       it drops under 4:1 — needs to flip to white. */
+    --di-btn-text-on-accent: #fff;
+}
 [data-theme="light"] .di-pill {
-    box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+    border: 1px solid var(--plex-border);
+    /* The pill floats over page content, usually a white card in light
+       mode. Card-weight shadow made it read as part of the card, so use
+       the theme's elevated shadow plus a 1px contact shadow. */
+    box-shadow: var(--plex-shadow-elevated), 0 1px 2px rgba(0,0,0,0.10);
+}
+
+/* Accent colors were literals tuned for a black surface — on white,
+   swap each pill state to the semantic tokens from plex-theme.css,
+   which already carry correct Light theme values. The idle state
+   keeps the Plex brand orange as-is (used elsewhere in Light theme
+   already); dry-run maps to warning, there's no dedicated token for
+   "caution/preview" distinct from it. */
+[data-theme="light"] .di-pill--caching,
+[data-theme="light"] .di-pill--completed { --accent: var(--plex-success); }
+[data-theme="light"] .di-pill--evicting,
+[data-theme="light"] .di-pill--completed-errors,
+[data-theme="light"] .di-pill--dry-run { --accent: var(--plex-warning); }
+[data-theme="light"] .di-pill--maintenance { --accent: var(--plex-info); }
+[data-theme="light"] .di-pill--error,
+[data-theme="light"] .di-pill--disconnected { --accent: var(--plex-error); }
+
+/* --accent-dim (icon circle fill, spinner ring) needs the same
+   semantic remap as --accent — otherwise the icon's stroke color
+   and its own fill are two different, unrelated hues in Light
+   theme. Kept at a similar ~15-20% tint so the icon circle doesn't
+   turn fully solid. */
+[data-theme="light"] .di-pill--caching,
+[data-theme="light"] .di-pill--completed { --accent-dim: color-mix(in srgb, var(--plex-success) 18%, transparent); }
+[data-theme="light"] .di-pill--evicting,
+[data-theme="light"] .di-pill--completed-errors,
+[data-theme="light"] .di-pill--dry-run { --accent-dim: color-mix(in srgb, var(--plex-warning) 18%, transparent); }
+[data-theme="light"] .di-pill--maintenance { --accent-dim: color-mix(in srgb, var(--plex-info) 18%, transparent); }
+[data-theme="light"] .di-pill--error,
+[data-theme="light"] .di-pill--disconnected { --accent-dim: color-mix(in srgb, var(--plex-error) 18%, transparent); }
+
+/* The pulse halo (--accent-glow) reads as a smudge on a white card —
+   drop it in Light theme rather than trying to tune its opacity. */
+[data-theme="light"] .di-pill--caching,
+[data-theme="light"] .di-pill--evicting,
+[data-theme="light"] .di-pill--maintenance,
+[data-theme="light"] .di-pill--error,
+[data-theme="light"] .di-pill--dry-run,
+[data-theme="light"] .di-pill--completed,
+[data-theme="light"] .di-pill--completed-errors,
+[data-theme="light"] .di-pill--idle,
+[data-theme="light"] .di-pill--disconnected {
+    --accent-glow: transparent;
+}
+
+/* State colour on the pill border. Running pills carry .di-glow; finished
+   and failed pills set their own border in the dark rules above, so list
+   them here too. Keys off each state's --accent, which is already remapped
+   to the semantic tokens for light mode. Only border-color is set: the
+   dry-run pill is dashed and .di-glow sets the width, and the expanded
+   override further up still wins once a pill opens, as in dark. */
+[data-theme="light"] .di-glow,
+[data-theme="light"] .di-pill--completed,
+[data-theme="light"] .di-pill--completed-errors,
+[data-theme="light"] .di-pill--error,
+[data-theme="light"] .di-pill--disconnected,
+[data-theme="light"] .di-pill--dry-run {
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* Resting expand chevron. It is decorative, so it is not on a text tier;
+   at rest it is 20% of the foreground, which on white is a little faint.
+   Give it slightly more presence in light without approaching text weight. */
+[data-theme="light"] .di-pill__compact::after {
+    border-right-color: rgba(0,0,0,0.3);
+    border-bottom-color: rgba(0,0,0,0.3);
 }
 
 /* ── Mobile responsive ───────────────────────────────── */
