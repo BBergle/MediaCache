@@ -156,6 +156,21 @@
 
                 {% block content %}{% endblock %}
 
+                <script>
+                    // Move the global operation banner into the page header so it is a
+                    // regular flex item there (title | pill | buttons) and wraps with it
+                    // at any zoom level / viewport width instead of floating over other
+                    // elements (issue #216). Pages without a .page-header keep it above
+                    // the content.
+                    (function () {
+                        var banner = document.getElementById('global-operation-banner');
+                        var header = document.querySelector('.content-wrapper > .page-header');
+                        if (!banner || !header) return;
+                        var title = header.querySelector(':scope > .page-title');
+                        header.insertBefore(banner, title ? title.nextSibling : header.firstChild);
+                    })();
+                </script>
+
                 <footer>
                     PlexCache-D Web UI <span class="version">v{{ web_version }}</span>
                 </footer>
