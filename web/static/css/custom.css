@@ -442,24 +442,28 @@ footer {
     display: none;
 }
 
-/* Global Operation Banner - centered within content-wrapper */
+/* Global Operation Banner
+   The banner is moved into .page-header by a small script in base.html, so it
+   is a regular flex item of the header row (title | pill | buttons). It wraps
+   together with the header instead of floating on top of it (issue #216).
+   Only the expanded pill is taken out of flow (see below), so hovering never
+   reflows the page. z-index 100 keeps it above page content but below the
+   theme toggle (101), the sidebar (160) and the mobile header (200). */
 #global-operation-banner {
-    position: absolute;
-    top: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 9999;
-    pointer-events: none;
+    position: relative;
+    z-index: 100;
+    flex: 0 0 auto;
+    margin-inline: auto;
+    min-width: 240px;
+    min-height: 38px;
     display: flex;
     justify-content: center;
+    align-items: flex-start;
 }
 
-#global-operation-banner:empty {
-    display: none;
-}
-
-#global-operation-banner > * {
-    pointer-events: auto;
+/* Fallback when a page has no .page-header (e.g. error pages): own row */
+.content-wrapper > #global-operation-banner {
+    margin-bottom: 1.5rem;
 }
 
 
@@ -811,11 +815,17 @@ footer {
     border-radius: 22px;
     height: auto;
     padding: 0.85rem 1.25rem;
-    max-width: 620px;
+    max-width: min(620px, calc(100vw - 2rem));
     min-width: 420px;
     cursor: default;
     overflow: visible;
     flex-direction: column;
+    /* overlay: leave the flow, stay centered on the banner slot (issue #216) */
+    position: absolute;
+    top: 0;
+    left: 50%;
+    translate: -50% 0;
+    width: max-content;
 }
 #global-operation-banner[data-di-expanded="tier2"] .di-pill:hover,
 #global-operation-banner[data-di-expanded="tier3"] .di-pill:hover { transform: none; }
@@ -833,11 +843,17 @@ footer {
     border-radius: 22px;
     height: auto;
     padding: 0.85rem 1.25rem;
-    max-width: 620px;
+    max-width: min(620px, calc(100vw - 2rem));
     min-width: 420px;
     cursor: default;
     overflow: visible;
     flex-direction: column;
+    /* overlay: leave the flow, stay centered on the banner slot (issue #216) */
+    position: absolute;
+    top: 0;
+    left: 50%;
+    translate: -50% 0;
+    width: max-content;
 }
 .di-pill.di-expanded:hover { transform: none; }
 
@@ -1325,12 +1341,29 @@ footer {
     border-bottom-color: rgba(0,0,0,0.3);
 }
 
-/* ── Mobile responsive ───────────────────────────────── */
+/* ── Responsive ──────────────────────────────────────── */
+/* Not enough room for title | pill | buttons in one row: the pill moves to
+   its own row directly below the title/buttons row (above the page content)
+   instead of overlapping its neighbours. */
+@media (max-width: 1400px) {
+    .page-header > #global-operation-banner {
+        order: 1;
+        flex: 1 1 100%;
+        margin-inline: 0;
+        min-width: 0;
+    }
+
+    /* Dashboard/Maintenance start with a light "Updated ... / Refresh" row
+       instead of a card, so the space below the pill can be a bit tighter. */
+    .stats-header {
+        margin-top: -0.75rem;
+    }
+}
+
 @media (max-width: 768px) {
-    #global-operation-banner {
-        left: 0;
-        right: 0;
-        transform: none;
+    .page-header > #global-operation-banner {
+        align-self: stretch;
+        width: 100%;
     }
 
     .di-pill {
@@ -1339,9 +1372,17 @@ footer {
         width: 100%;
     }
 
+    /* Expanded pill fills the (full-width) banner slot. Same selectors as
+       the base rules so the higher specificity is matched. */
+    #global-operation-banner[data-di-expanded="tier2"] .di-pill,
+    #global-operation-banner[data-di-expanded="tier3"] .di-pill,
     .di-pill.di-expanded {
+        left: 0;
+        right: 0;
+        translate: none;
+        width: auto;
+        min-width: 0;
         max-width: none;
-        min-width: auto;
     }
 
     .di-pill__detail {
