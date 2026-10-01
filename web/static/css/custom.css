@@ -242,6 +242,18 @@ footer {
     .activity-col-size   { width: 100px; }
 }
 
+/* Keep the run header (title + stat pills) in view while the table is
+   scrolled sideways: it spans all 5 columns, so its right-aligned pills
+   would otherwise sit off-screen on narrow cards. */
+.run-expandable-header .run-expandable-inner {
+    position: sticky;
+    left: 0.75rem;
+    width: calc(100cqw - 1.5rem);
+    box-sizing: border-box;
+    flex-wrap: wrap;
+    row-gap: 0.35rem;
+}
+
 /* Associated files badge + expandable sub-rows */
 .af-parent {
     cursor: pointer;
