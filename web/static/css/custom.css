@@ -154,6 +154,7 @@ footer {
 .recent-activity-scroll {
     max-height: 400px;
     overflow-y: auto;
+    overflow-x: auto;
     -webkit-overflow-scrolling: touch;
 }
 
@@ -206,6 +207,10 @@ footer {
 .recent-activity-table {
     table-layout: fixed;
     width: 100%;
+    /* Fixed columns take 500px; keep ~220px for FILE. On narrower screens
+       (phone portrait, high zoom) the table scrolls sideways inside
+       .recent-activity-scroll instead of squeezing FILE down to 0px. */
+    min-width: 720px;
 }
 .activity-col-time   { width: 130px; }
 .activity-col-action { width: 130px; }
@@ -214,9 +219,12 @@ footer {
 .activity-col-size   { width: 110px; }
 
 .activity-file-col {
-    word-break: break-word;
+    /* Not `word-break: break-word` (alias of overflow-wrap:anywhere) and no
+       `min-width: 0`: together they let the column collapse to one character
+       per line. */
+    word-break: normal;
+    overflow-wrap: break-word;
     white-space: normal;
-    min-width: 0;
 }
 .recent-activity-scroll table td:first-child {
     white-space: nowrap;
