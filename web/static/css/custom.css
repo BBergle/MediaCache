@@ -156,6 +156,7 @@ footer {
     overflow-y: auto;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+    container-type: inline-size; /* lets the table adapt to the card width, not the viewport */
 }
 
 /* Thin subtle scrollbar for Chrome/Safari/Edge */
@@ -228,6 +229,17 @@ footer {
 }
 .recent-activity-scroll table td:first-child {
     white-space: nowrap;
+}
+
+/* Narrow card (phone portrait, high browser zoom): tighter fixed columns so
+   FILE is reachable with a short swipe. Keyed to the card width, not the
+   viewport, because the sidebar also eats width on desktop. */
+@container (max-width: 719px) {
+    .recent-activity-table { min-width: 520px; }
+    .activity-col-time   { width: 80px; }
+    .activity-col-action { width: 96px; }
+    .activity-col-users  { width: 90px; }
+    .activity-col-size   { width: 100px; }
 }
 
 /* Associated files badge + expandable sub-rows */
