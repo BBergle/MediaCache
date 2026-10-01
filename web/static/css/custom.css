@@ -1,392 +1,2113 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}{{ page_title | default('PlexCache-D') }}{% endblock %} - PlexCache-D</title>
+/* PlexCache-D Web UI Custom Styles */
 
-    <!-- Favicon -->
-    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+/* Icon size utility classes — use on lucide <i> elements to replace
+   inline `style="width:Npx; height:Npx"`. Pair with inline color/margin
+   styles or other utility classes as needed. */
+.icon-xs { width: 12px; height: 12px; }
+.icon-sm { width: 14px; height: 14px; }
+.icon-md { width: 16px; height: 16px; }
+.icon-lg { width: 20px; height: 20px; }
+.icon-xl { width: 32px; height: 32px; }
 
-    <!-- Lucide Icons (vendored) -->
-    <script src="/static/js/vendor/lucide.min.js"></script>
+/* Log viewer - single scroll context for both axes */
+.log-viewer {
+    height: 500px;
+    overflow: auto;
+    background-color: var(--plex-bg-input);
+    padding: 1rem;
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+    font-size: 0.85em;
+    line-height: 1.4;
+}
 
-    <!-- Custom Plex Theme -->
-    <link rel="stylesheet" href="/static/css/plex-theme.css">
-    <link rel="stylesheet" href="/static/css/custom.css">
+.log-viewer code,
+.log-viewer pre {
+    background: none;
+    padding: 0;
+    white-space: pre;
+    width: max-content;
+    min-width: 100%;
+}
 
-    <!-- HTMX (vendored) -->
-    <script src="/static/js/vendor/htmx.min.js"></script>
-    <script src="/static/js/vendor/htmx-ws.js"></script>
+/* Alert styles */
+.alert {
+    padding: 1rem;
+    margin-bottom: 1rem;
+    border-radius: var(--plex-radius-sm);
+    position: relative;
+}
 
-    <!-- Apply saved theme and sidebar state immediately to prevent flash -->
-    <script>
-        (function() {
-            const savedTheme = localStorage.getItem('theme');
-            if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+.alert-success {
+    background-color: rgba(46, 204, 113, 0.1);
+    border-left: 4px solid var(--plex-success);
+}
 
-            // Apply saved sidebar collapsed state
-            const sidebarCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
-            if (sidebarCollapsed) {
-                document.documentElement.classList.add('sidebar-collapsed-init');
-            }
-        })();
-    </script>
+.alert-error {
+    background-color: rgba(231, 76, 60, 0.1);
+    border-left: 4px solid var(--plex-error);
+}
 
-    {% block head %}{% endblock %}
-</head>
-<body>
-    <!-- Mobile Header -->
-    <header class="mobile-header">
-        <button class="hamburger-btn" onclick="toggleSidebar()" aria-label="Toggle menu">
-            <i data-lucide="menu"></i>
-        </button>
-        <div class="mobile-brand">
-            <div class="sidebar-brand-icon"><i data-lucide="hard-drive"></i></div>
-            <span>PlexCache-D</span>
-        </div>
-        <div class="mobile-actions">
-            <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
-                <i data-lucide="sun" class="icon-sun"></i>
-                <i data-lucide="moon" class="icon-moon"></i>
-            </button>
-        </div>
-    </header>
+.alert-warning {
+    background-color: rgba(243, 156, 18, 0.1);
+    border-left: 4px solid var(--plex-warning);
+}
 
-    <!-- Sidebar Overlay -->
-    <div class="sidebar-overlay" onclick="closeSidebar()"></div>
+.alert-info {
+    background-color: rgba(52, 152, 219, 0.1);
+    border-left: 4px solid var(--plex-info);
+}
 
-    <div class="app-container">
-        <!-- Sidebar -->
-        <nav class="sidebar">
-            <div class="sidebar-brand">
-                <div class="sidebar-brand-icon"><i data-lucide="hard-drive"></i></div>
-                <div class="sidebar-brand-text">
-                    <span>PlexCache-D</span>
-                    <small class="sidebar-brand-version">v{{ product_version }}{% if tag_label %} <span class="dev-badge">{{ tag_label }}</span>{% endif %}</small>
-                </div>
-            </div>
-            <ul class="sidebar-nav">
-                <li>
-                    <a href="/" data-tooltip="Dashboard" {% if page_title == 'Dashboard' %}class="active"{% endif %}>
-                        <i data-lucide="layout-dashboard"></i>
-                        <span>Dashboard</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="/cache" data-tooltip="Cached Files" {% if page_title == 'Cached Files' %}class="active"{% endif %}>
-                        <i data-lucide="database"></i>
-                        <span>Cached Files</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="/recently-added" data-tooltip="Recently Added" {% if page_title == 'Recently Added' %}class="active"{% endif %}>
-                        <i data-lucide="sparkles"></i>
-                        <span>Recently Added</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="/cache/drive" data-tooltip="Storage" {% if page_title == 'Storage' %}class="active"{% endif %}>
-                        <i data-lucide="hard-drive"></i>
-                        <span>Storage</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="/settings" data-tooltip="Settings" {% if 'Settings' in page_title|default('') %}class="active"{% endif %}>
-                        <i data-lucide="settings"></i>
-                        <span>Settings</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="/logs" data-tooltip="Logs" {% if page_title == 'Logs' %}class="active"{% endif %}>
-                        <i data-lucide="file-text"></i>
-                        <span>Logs</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="/maintenance" data-tooltip="Maintenance" {% if page_title == 'Maintenance' %}class="active"{% endif %}>
-                        <i data-lucide="wrench"></i>
-                        <span>Maintenance</span>
-                    </a>
-                </li>
-            </ul>
-            {% if request.state.user is defined and request.state.user %}
-            <form method="post" action="/auth/logout" style="margin: 0; padding: 0 0.5rem;">
-                <button type="submit" class="sidebar-logout-btn" title="Sign out ({{ request.state.user.plex_username }})">
-                    <i data-lucide="log-out"></i>
-                    <span>Sign Out</span>
-                </button>
-            </form>
-            {% endif %}
-            <div class="sidebar-footer">
-                <button class="sidebar-collapse-btn" onclick="toggleSidebarCollapse()" title="Collapse sidebar">
-                    <i data-lucide="panel-left-close"></i>
-                    <span>Collapse</span>
-                </button>
-            </div>
-        </nav>
+.alert .close {
+    position: absolute;
+    right: 0.5rem;
+    top: 0.5rem;
+    background: none;
+    border: none;
+    font-size: 1.2rem;
+    cursor: pointer;
+    opacity: 0.5;
+}
 
-        <!-- Main Content -->
-        <main class="main-content">
-            <div class="content-wrapper">
-                <!-- Theme toggle - positioned top-right of content area -->
-                <div class="top-controls">
-                    <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
-                        <i data-lucide="sun" class="icon-sun"></i>
-                        <i data-lucide="moon" class="icon-moon"></i>
-                    </button>
-                </div>
+.alert .close:hover {
+    opacity: 1;
+}
 
-                <!-- Global Operation Status Banner -->
-                <div id="global-operation-banner"
-                     hx-get="/api/operation-banner"
-                     hx-trigger="load, pinned-eviction-started from:body"
-                     hx-swap="innerHTML">
-                </div>
-                <script>
-                    // Scroll to top when an unpin kicks off a background eviction
-                    // so the user sees the banner spin up.
-                    document.body.addEventListener('pinned-eviction-started', function() {
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                    });
-                </script>
+/* HTMX loading indicator */
+.htmx-indicator {
+    display: none;
+}
 
-                <!-- Alert container for toast notifications -->
-                <div id="alert-container"></div>
+.htmx-request .htmx-indicator {
+    display: inline;
+}
 
-                {% block content %}{% endblock %}
+.htmx-request .button-text {
+    display: none;
+}
 
-                <script>
-                    // Operation pill placement (#216). The pill stays centred on top of the page
-                    // (Dynamic-Island style) as long as it does not collide with the page title,
-                    // the action buttons or the theme toggle. If it would, it gets .di-flow and
-                    // becomes a full-width row of the header, below the buttons. Measured with
-                    // .di-flow removed, so it moves back up as soon as there is room again.
-                    (function () {
-                        var banner = document.getElementById('global-operation-banner');
-                        var header = document.querySelector('.content-wrapper > .page-header');
-                        if (!banner || !header) return;
-                        // Child of the header so the fit mode can place it in the header flow;
-                        // the default state is absolutely positioned and does not affect the layout.
-                        var title = header.querySelector(':scope > .page-title');
-                        header.insertBefore(banner, title ? title.nextSibling : header.firstChild);
+/* Path mapping cards */
+.path-mapping {
+    margin-bottom: 1rem;
+}
 
-                        function collides(a, b, gap) {
-                            if (!b || !b.width || !b.height) return false;
-                            return a.left < b.right + gap && a.right + gap > b.left &&
-                                   a.top < b.bottom && a.bottom > b.top;
-                        }
+.path-mapping dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.5rem;
+}
 
-                        function fit() {
-                            var state = banner.getAttribute('data-di-expanded');
-                            if (state === 'tier2' || state === 'tier3') return; // expanded overlay: keep mode
-                            if (!banner.querySelector('.di-pill')) return;
-                            var inFlow = banner.classList.contains('di-flow');
-                            if (inFlow) banner.classList.remove('di-flow');
-                            var rect = banner.getBoundingClientRect();
-                            var gap = inFlow ? 40 : 16; // hysteresis: no flip-flopping at the edge
-                            var hit = [
-                                header.querySelector(':scope > .page-title'),
-                                header.querySelector(':scope > .action-buttons'),
-                                document.querySelector('.top-controls')
-                            ].some(function (el) {
-                                return el && collides(rect, el.getBoundingClientRect(), gap);
-                            });
-                            if (hit) banner.classList.add('di-flow');
-                        }
+.path-mapping dt {
+    font-weight: bold;
+}
 
-                        // Content swaps are handled synchronously (microtask, before the next paint),
-                        // so the pill never flashes in the wrong place. Expand/collapse animations
-                        // are re-checked once they are done.
-                        var slow = null;
-                        if (window.ResizeObserver) {
-                            new ResizeObserver(function () { requestAnimationFrame(fit); }).observe(header);
-                        } else {
-                            window.addEventListener('resize', fit);
-                        }
-                        // Banner content is replaced by htmx and by diTriggerRun() (innerHTML)
-                        new MutationObserver(function (list) {
-                            if (list.some(function (m) { return m.type === 'childList'; })) fit();
-                            if (list.some(function (m) { return m.type === 'attributes'; })) {
-                                clearTimeout(slow);
-                                slow = setTimeout(fit, 450);
-                            }
-                        }).observe(banner, {
-                            childList: true, subtree: true,
-                            attributes: true, attributeFilter: ['data-di-expanded']
-                        });
-                        if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
-                        window.addEventListener('load', fit);
-                        fit();
-                    })();
-                </script>
+.path-mapping dd {
+    margin: 0;
+}
 
-                <footer>
-                    PlexCache-D Web UI <span class="version">v{{ web_version }}</span>
-                </footer>
-            </div>
-        </main>
-    </div>
+/* Small buttons */
+button.small, .button.small {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.85em;
+}
 
-    <!-- Custom JavaScript -->
-    <script src="/static/js/app.js"></script>
-    <script>
-        // Initialize Lucide icons
-        lucide.createIcons();
+/* Navigation current page indicator */
+nav a[aria-current="page"] {
+    font-weight: bold;
+    border-bottom: 2px solid var(--plex-orange);
+}
 
-        // Re-initialize icons after HTMX swaps + scroll to alert if populated
-        document.addEventListener('htmx:afterSwap', function(e) {
-            lucide.createIcons();
-            var id = e.detail.target.id;
-            if ((id === 'settings-alert-container' || id === 'alert-container') && e.detail.target.innerHTML.trim()) {
-                e.detail.target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }
-        });
+/* Settings tabs navigation */
+article nav ul {
+    display: flex;
+    gap: 1rem;
+    list-style: none;
+    padding: 0;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid var(--plex-border);
+}
 
-        // Theme toggle
-        function toggleTheme() {
-            const html = document.documentElement;
-            const current = html.getAttribute('data-theme');
-            const next = current === 'light' ? 'dark' : 'light';
+article nav ul li {
+    margin: 0;
+}
 
-            if (next === 'dark') {
-                html.removeAttribute('data-theme');
-                localStorage.removeItem('theme');
-            } else {
-                html.setAttribute('data-theme', next);
-                localStorage.setItem('theme', next);
-            }
+article nav ul li a {
+    display: block;
+    padding: 0.5rem 1rem;
+    text-decoration: none;
+}
 
-            // Re-init icons to update theme toggle icons
-            lucide.createIcons();
-        }
+article nav ul li a[aria-current="page"] {
+    border-bottom: 2px solid var(--plex-orange);
+    margin-bottom: -1px;
+}
 
-        // Mobile sidebar toggle
-        function toggleSidebar() {
-            document.querySelector('.sidebar').classList.toggle('open');
-            document.querySelector('.sidebar-overlay').classList.toggle('active');
-        }
+/* Footer styling */
+footer {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--plex-border);
+    text-align: center;
+    opacity: 0.7;
+}
 
-        function closeSidebar() {
-            document.querySelector('.sidebar').classList.remove('open');
-            document.querySelector('.sidebar-overlay').classList.remove('active');
-        }
+/* Recent Activity scrollable container */
+.recent-activity-scroll {
+    max-height: 400px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
 
-        // Close sidebar on nav link click (mobile)
-        document.querySelectorAll('.sidebar-nav a').forEach(link => {
-            link.addEventListener('click', () => {
-                if (window.innerWidth <= 768) {
-                    closeSidebar();
-                }
-            });
-        });
+/* Thin subtle scrollbar for Chrome/Safari/Edge */
+.recent-activity-scroll::-webkit-scrollbar {
+    width: 6px;
+}
 
-        // Close sidebar on escape key
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') {
-                closeSidebar();
-            }
-        });
+.recent-activity-scroll::-webkit-scrollbar-track {
+    background: transparent;
+}
 
-        // Sidebar collapse toggle (desktop)
-        function toggleSidebarCollapse() {
-            const sidebar = document.querySelector('.sidebar');
-            const appContainer = document.querySelector('.app-container');
-            const isCollapsed = sidebar.classList.toggle('collapsed');
-            appContainer.classList.toggle('sidebar-collapsed', isCollapsed);
-            document.body.classList.toggle('sidebar-collapsed', isCollapsed);
+.recent-activity-scroll::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+}
 
-            // Persist state
-            localStorage.setItem('sidebarCollapsed', isCollapsed);
+.recent-activity-scroll::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
 
-            // Remove init class if present (no longer needed after first toggle)
-            document.documentElement.classList.remove('sidebar-collapsed-init');
+/* Thin scrollbar for Firefox */
+.recent-activity-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
 
-            // Re-init icons
-            lucide.createIcons();
-        }
+/* Light theme scrollbar overrides */
+[data-theme="light"] .recent-activity-scroll::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+}
+[data-theme="light"] .recent-activity-scroll::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.35);
+}
+[data-theme="light"] .recent-activity-scroll {
+    scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
 
-        // Initialize sidebar collapsed state on page load
-        (function initSidebarState() {
-            const sidebarCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
-            if (sidebarCollapsed) {
-                const sidebar = document.querySelector('.sidebar');
-                const appContainer = document.querySelector('.app-container');
-                if (sidebar && appContainer) {
-                    sidebar.classList.add('collapsed');
-                    appContainer.classList.add('sidebar-collapsed');
-                    document.body.classList.add('sidebar-collapsed');
-                }
-                // Remove the init class since we've applied the proper classes
-                document.documentElement.classList.remove('sidebar-collapsed-init');
-            }
-        })();
-    </script>
-    <!-- Banner live log stream — persists outside HTMX-swapped banner area -->
-    <script>
-    window.BannerLogStream = (function() {
-        var buffer = [];
-        var socket = null;
-        var reconnectTimer = null;
-        var MAX_LINES = 5;
+/* Keep table header sticky while scrolling */
+.recent-activity-scroll table thead {
+    position: sticky;
+    top: 0;
+    background: var(--plex-bg-card);
+    z-index: 1;
+}
 
-        function esc(text) {
-            var d = document.createElement('div');
-            d.textContent = text;
-            return d.innerHTML;
-        }
+/* Activity table column tweaks */
+/* Fixed layout pins column widths via <colgroup> so expanding a run-row
+   doesn't shift column boundaries based on the newly visible filenames. */
+.recent-activity-table {
+    table-layout: fixed;
+    width: 100%;
+}
+.activity-col-time   { width: 130px; }
+.activity-col-action { width: 130px; }
+.activity-col-file   { width: auto; }
+.activity-col-users  { width: 130px; }
+.activity-col-size   { width: 110px; }
 
-        function connect() {
-            if (socket) return;
-            var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            socket = new WebSocket(proto + '//' + location.host + '/logs/ws?source=live');
+.activity-file-col {
+    word-break: break-word;
+    white-space: normal;
+    min-width: 0;
+}
+.recent-activity-scroll table td:first-child {
+    white-space: nowrap;
+}
 
-            socket.onmessage = function(e) {
-                try {
-                    var data = JSON.parse(e.data);
-                    if (data.type === 'initial') {
-                        buffer = (data.lines || []).slice(-MAX_LINES);
-                    } else if (data.type === 'append') {
-                        (data.lines || []).forEach(function(l) { buffer.push(l); });
-                        while (buffer.length > MAX_LINES) buffer.shift();
-                    } else { return; } // heartbeat/error — skip render
-                    renderIfVisible();
-                } catch (err) {}
-            };
+/* Associated files badge + expandable sub-rows */
+.af-parent {
+    cursor: pointer;
+}
+.associated-files-badge {
+    margin-left: 0.375rem;
+    cursor: pointer;
+    user-select: none;
+    transition: opacity 0.15s ease;
+}
+.af-expanded .associated-files-badge {
+    opacity: 0.5;
+}
+.associated-sub-row {
+    display: none;
+}
+.associated-sub-row.af-visible {
+    display: table-row;
+}
+.associated-sub-row td {
+    padding-top: 0.1rem !important;
+    padding-bottom: 0.1rem !important;
+    border-bottom: none !important;
+}
+.associated-sub-row:hover td {
+    background: transparent !important;
+}
+.associated-sub-file {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.8rem;
+    color: var(--plex-text-muted, #8e8e93);
+    padding-left: 1.5rem !important;
+}
+.associated-sub-arrow {
+    color: var(--plex-text-muted, #8e8e93);
+    opacity: 0.5;
+    margin-right: 0.25rem;
+}
+.associated-sub-size {
+    font-size: 0.8rem;
+    color: var(--plex-text-muted, #8e8e93);
+}
 
-            socket.onclose = function() {
-                socket = null;
-                // Auto-reconnect if a running pill still exists
-                if (document.querySelector('.di-pill.di-glow')) {
-                    reconnectTimer = setTimeout(connect, 3000);
-                }
-            };
-            socket.onerror = function() {};
-        }
+/* Associated files hover popup (compact tables) */
+.associated-files-hover {
+    position: relative;
+    display: inline-block;
+    cursor: default;
+}
+.associated-files-popup {
+    display: none;
+    position: fixed;
+    background: var(--plex-bg-card);
+    border: 1px solid var(--plex-border-light);
+    border-radius: var(--plex-radius-sm);
+    padding: 0.5rem 0.75rem;
+    min-width: 280px;
+    width: max-content;
+    z-index: 1000;
+    box-shadow: var(--plex-shadow-elevated);
+    white-space: nowrap;
+    pointer-events: none;
+}
+.associated-files-popup .af-popup-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.125rem 0;
+    font-size: 0.78rem;
+    color: var(--plex-text-muted);
+}
+.associated-files-popup .af-popup-name {
+    flex: 1;
+    min-width: 0;
+}
+.associated-files-popup .af-popup-name .associated-sub-arrow {
+    opacity: 0.4;
+}
+.associated-files-popup .af-popup-size {
+    flex-shrink: 0;
+    text-align: right;
+}
 
-        function disconnect() {
-            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-            if (socket) { socket.close(); socket = null; }
-            buffer = [];
-        }
+/* Date group headers in activity feed */
+.date-group-header td {
+    padding: 0.55rem 0.75rem 0.35rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.02);
+}
 
-        function renderIfVisible() {
-            var container = document.getElementById('di-log-lines');
-            if (!container || buffer.length === 0) return;
+.date-group-header:hover td {
+    background: rgba(255, 255, 255, 0.02);
+}
 
-            var html = '';
-            buffer.forEach(function(line) {
-                var text = typeof line === 'string' ? line : (line.raw || '');
-                if (text.length > 120) text = text.substring(0, 117) + '...';
-                html += '<div class="di-file-row" style="font-family: monospace; font-size: 0.7rem;">' +
-                        '<span class="di-file-row__name">' + esc(text) + '</span></div>';
-            });
-            container.innerHTML = html;
-        }
+.date-group-inner {
+    display: flex;
+    align-items: center;
+    width: 100%;
+}
 
-        return { connect: connect, disconnect: disconnect, renderIfVisible: renderIfVisible };
-    })();
-    </script>
-    {% block scripts %}{% endblock %}
-</body>
-</html>
+.date-group-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--plex-text-light, #aeaeb2);
+    letter-spacing: 0.02em;
+}
+
+.date-group-label svg {
+    width: 13px;
+    height: 13px;
+    stroke: var(--plex-text-muted, #8e8e93);
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.date-group-count {
+    font-size: 0.65rem;
+    font-weight: 500;
+    color: var(--plex-text-muted, #8e8e93);
+    margin-left: 0.3rem;
+}
+
+.date-group-line {
+    flex: 1;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.06);
+    margin-left: 0.75rem;
+}
+
+/* Light theme */
+[data-theme="light"] .date-group-header td {
+    background: rgba(0, 0, 0, 0.02);
+    border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .date-group-line {
+    background: rgba(0, 0, 0, 0.06);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .grid {
+        grid-template-columns: 1fr;
+    }
+
+    .path-mapping dl {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Global Operation Indicator - visible in header across all pages */
+.global-op-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.75rem;
+    background-color: rgba(230, 126, 34, 0.15);
+    border: 1px solid rgba(230, 126, 34, 0.5);
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-decoration: none;
+    color: var(--plex-orange, #e5a00d);
+    margin-right: 0.75rem;
+    animation: indicator-pulse 1.5s ease-in-out infinite;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+
+.global-op-indicator:hover {
+    background-color: rgba(230, 126, 34, 0.25);
+    border-color: rgba(230, 126, 34, 0.7);
+    text-decoration: none;
+}
+
+.global-op-dot {
+    width: 10px;
+    height: 10px;
+    background-color: var(--plex-orange, #e5a00d);
+    border-radius: 50%;
+    box-shadow: 0 0 8px var(--plex-orange, #e5a00d);
+    animation: dot-glow 1s ease-in-out infinite;
+}
+
+.global-op-text {
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+@keyframes indicator-pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.7;
+    }
+}
+
+@keyframes dot-glow {
+    0%, 100% {
+        box-shadow: 0 0 8px var(--plex-orange, #e5a00d), 0 0 16px var(--plex-orange, #e5a00d);
+        transform: scale(1);
+    }
+    50% {
+        box-shadow: 0 0 4px var(--plex-orange, #e5a00d);
+        transform: scale(0.85);
+    }
+}
+
+/* Hidden placeholder when no operation running */
+#global-op-check {
+    display: none;
+}
+
+/* Global Operation Banner - centered within content-wrapper.
+   z-index 100: above page content, below the theme toggle (101), the sidebar (160)
+   and the mobile header (200), so it can never cover the navigation (#216). */
+#global-operation-banner {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 100;
+    pointer-events: none;
+    display: flex;
+    justify-content: center;
+}
+
+#global-operation-banner:empty {
+    display: none;
+}
+
+#global-operation-banner > * {
+    pointer-events: auto;
+}
+
+/* Fit mode (#216): the fit check in base.html adds .di-flow when the centred pill
+   would collide with the page title, the action buttons or the theme toggle (narrow
+   windows, high zoom, phones). The banner then becomes a full-width row of the page
+   header, ordered after the buttons, and moves back up as soon as there is room. */
+.page-header > #global-operation-banner.di-flow {
+    position: relative;
+    top: auto;
+    left: auto;
+    right: auto;
+    transform: none;
+    order: 1;
+    flex: 1 1 100%;
+    min-height: 38px;
+    align-items: flex-start;
+}
+
+/* Dashboard/Maintenance start with a light "Updated ... / Refresh" row instead of a
+   card, so in fit mode the space below the pill can be a bit tighter. */
+.content-wrapper:has(#global-operation-banner.di-flow) .stats-header {
+    margin-top: -0.75rem;
+}
+
+
+/* Foreground/background tokens for the pill — dark by default.
+   Text-legibility tiers (--di-t*) exist because opacity-based text
+   does not invert symmetrically: e.g. 0.25 white-on-black reads fine,
+   but 0.25 black-on-white is close to invisible, so the Light theme
+   values below are boosted rather than a flat on/off swap. Named by
+   their original dark-mode alpha (t25 = 25% in dark mode). */
+#global-operation-banner {
+    --di-on: 255,255,255;   /* RGB triplet used as rgba(var(--di-on), X) */
+    --di-bg: #000;
+    --di-track-bg: #1a1a1a;
+    --di-t15: rgba(var(--di-on),0.15);
+    --di-t20: rgba(var(--di-on),0.2);
+    --di-t25: rgba(var(--di-on),0.25);
+    --di-t30: rgba(var(--di-on),0.3);
+    --di-t35: rgba(var(--di-on),0.35);
+    --di-t40: rgba(var(--di-on),0.4);
+    --di-t45: rgba(var(--di-on),0.45);
+    --di-t50: rgba(var(--di-on),0.5);
+    --di-t55: rgba(var(--di-on),0.55);
+    --di-t60: rgba(var(--di-on),0.6);
+    --di-t70: rgba(var(--di-on),0.7);
+    --di-info-text: #5AC8FA; /* fixed light-blue badges/timer (queue, countdown) */
+    --di-idle-value: color-mix(in srgb, var(--plex-orange) 70%, transparent); /* compact "Next run" countdown value */
+    --di-btn-text-on-accent: #000; /* text on the var(--plex-info) "Start Now" button */
+}
+
+/* ── Banner Pill System ───────────────────────────────── */
+
+/* Color accent variables per operation type */
+.di-pill--caching  { --accent: #4CD964; --accent-dim: rgba(76,217,100,0.2);  --accent-glow: rgba(76,217,100,0.15); }
+.di-pill--evicting { --accent: #FF9500; --accent-dim: rgba(255,149,0,0.2);   --accent-glow: rgba(255,149,0,0.15); }
+.di-pill--maintenance { --accent: #5AC8FA; --accent-dim: rgba(90,200,250,0.2); --accent-glow: rgba(90,200,250,0.15); }
+.di-pill--error    { --accent: #FF3B30; --accent-dim: rgba(255,59,48,0.2);   --accent-glow: rgba(255,59,48,0.15); }
+.di-pill--dry-run  { --accent: #FFCC00; --accent-dim: rgba(255,204,0,0.2);   --accent-glow: rgba(255,204,0,0.15); }
+.di-pill--completed { --accent: #4CD964; --accent-dim: rgba(76,217,100,0.2); --accent-glow: rgba(76,217,100,0.15); }
+.di-pill--completed-errors { --accent: #FF9500; --accent-dim: rgba(255,149,0,0.2); --accent-glow: rgba(255,149,0,0.15); }
+.di-pill--idle     { --accent: #e5a00d; --accent-dim: rgba(229,160,13,0.15); --accent-glow: rgba(229,160,13,0.1); }
+.di-pill--disconnected { --accent: #FF3B30; --accent-dim: rgba(255,59,48,0.2); --accent-glow: rgba(255,59,48,0.15); }
+
+/* Slide-down entrance */
+@keyframes diSlideDown {
+    from { opacity: 0; transform: translateY(-20px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Completion flash */
+@keyframes diCompleteFlash {
+    0%   { box-shadow: 0 4px 24px rgba(0,0,0,0.5), 0 0 0 0 var(--accent-glow); }
+    50%  { box-shadow: 0 4px 24px rgba(0,0,0,0.5), 0 0 12px 4px var(--accent-glow); }
+    100% { box-shadow: 0 4px 24px rgba(0,0,0,0.5), 0 0 0 0 var(--accent-glow); }
+}
+
+/* Content emerge animation — scale up from within (expand) */
+@keyframes diFadeIn {
+    from { opacity: 0; transform: scale(0.92); }
+    to   { opacity: 1; transform: scale(1); }
+}
+.di-content-enter { animation: diFadeIn 0.22s cubic-bezier(0.34, 1.3, 0.64, 1) both; }
+
+/* Content recede animation — scale back down into pill (collapse) */
+@keyframes diFadeOut {
+    from { opacity: 1; transform: scale(1); }
+    to   { opacity: 0; transform: scale(0.92); }
+}
+.di-content-exit { animation: diFadeOut 0.15s ease-in both; }
+
+/* Quick settle fade — compact content appears during collapse morph */
+@keyframes diSettle {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+.di-content-settle { animation: diSettle 0.12s ease-out both; }
+
+/* Base compact pill */
+.di-pill {
+    background: var(--di-bg);
+    border-radius: 28px;
+    padding: 0 1.25rem;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    min-width: 240px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    /* No entrance animation — HTMX replaces innerHTML every 2s and would
+       replay it each time, causing a visible bounce.  Entrance animation
+       is applied once via .di-pill--entrance in JS on state changes. */
+    transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+                border-color 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* One-shot entrance animation — added by JS only on real state changes */
+.di-pill--entrance { animation: diSlideDown 0.3s ease-out; }
+
+.di-pill:hover { transform: scale(1.02); }
+
+/* Idle variant — smaller */
+.di-pill--idle {
+    height: 38px;
+    border-radius: 20px;
+    padding: 0 1rem;
+    min-width: 200px;
+}
+
+/* ── Idle pill expanded actions ───────────────────────── */
+.di-idle-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+}
+.di-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.75rem;
+    border-radius: 8px;
+    border: none;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.2s, transform 0.1s;
+}
+.di-btn:active { transform: scale(0.96); }
+.di-btn--primary {
+    background: var(--plex-orange, #e5a00d);
+    color: #000;
+}
+.di-btn--primary:hover { background: #f0b020; }
+.di-btn--secondary {
+    background: rgba(var(--di-on),0.08);
+    color: var(--di-t70);
+    border: 1px solid rgba(var(--di-on),0.12);
+}
+.di-btn--secondary:hover { background: rgba(var(--di-on),0.14); color: rgb(var(--di-on)); }
+.di-verbose-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    cursor: pointer;
+    font-size: 0.75rem;
+    color: var(--di-t50);
+    margin-right: auto;
+}
+.di-verbose-toggle input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--plex-orange, #e5a00d);
+    cursor: pointer;
+    margin: 0;
+}
+
+/* Dry run — dashed border */
+.di-pill--dry-run { border: 1.5px dashed rgba(255,204,0,0.3); }
+
+/* Completed — subtle glow border */
+.di-pill--completed {
+    border: 1.5px solid rgba(76,217,100,0.3);
+    animation: diCompleteFlash 0.6s ease-out;
+}
+.di-pill--completed-errors {
+    border: 1.5px solid rgba(255,149,0,0.3);
+    animation: diCompleteFlash 0.6s ease-out;
+}
+
+/* Error — red glow border */
+.di-pill--error { border: 1.5px solid rgba(255,59,48,0.3); }
+.di-pill--disconnected { border: 1.5px solid rgba(255,59,48,0.3); }
+
+/* Running pills use a fixed width in compact mode to prevent jumpiness
+   as content changes (phase labels, counts, durations) every 2s poll */
+.di-glow { width: 360px; min-width: 360px; border: 1.5px solid var(--accent-dim, rgba(var(--di-on),0.12)); }
+
+/* Subtle animated glow behind running pills — compact state only */
+.di-glow::after {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: 28px;
+    background: var(--accent-glow, transparent);
+    opacity: 0.4;
+    pointer-events: none;
+    z-index: 0;
+    transition: opacity 0.3s ease;
+}
+/* Hide glow when expanded */
+#global-operation-banner[data-di-expanded="tier2"] .di-glow::after,
+#global-operation-banner[data-di-expanded="tier3"] .di-glow::after,
+.di-pill.di-expanded.di-glow::after { opacity: 0; }
+/* Hide border glow + flash animation when expanded */
+#global-operation-banner[data-di-expanded="tier2"] .di-pill,
+#global-operation-banner[data-di-expanded="tier3"] .di-pill,
+.di-pill.di-expanded { border-color: rgba(var(--di-on),0.06) !important; animation: none !important; }
+
+/* Compact view layout */
+.di-pill__compact {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    width: 100%;
+}
+
+/* Subtle expand-hint chevron on compact pill */
+.di-pill__compact::after {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-right: 1.5px solid rgba(var(--di-on),0.2);
+    border-bottom: 1.5px solid rgba(var(--di-on),0.2);
+    transform: rotate(45deg);
+    flex-shrink: 0;
+    margin-top: -2px;
+    transition: opacity 0.2s ease;
+}
+.di-pill:hover .di-pill__compact::after {
+    border-color: var(--di-t45);
+}
+
+/* Pill layout sections */
+.di-pill__left, .di-pill__right {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    position: relative;
+    z-index: 1;
+}
+
+/* Icon circle */
+.di-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: var(--accent-dim);
+    color: var(--accent);
+}
+
+/* Label text */
+.di-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: rgb(var(--di-on));
+    white-space: nowrap;
+}
+
+/* Metric (count, duration, etc.) */
+.di-metric {
+    font-size: 0.85rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--accent);
+}
+
+/* Muted metric variant for idle/secondary info */
+.di-metric--muted {
+    color: var(--di-t50);
+    font-weight: 400;
+    font-size: 0.78rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
+}
+
+/* Accent-colored spinner */
+.di-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid transparent;
+    border-top-color: var(--accent);
+    border-right-color: var(--accent-dim);
+    border-radius: 50%;
+    animation: diSpin 0.8s linear infinite;
+    flex-shrink: 0;
+}
+@keyframes diSpin { to { transform: rotate(360deg); } }
+
+/* 3px progress bar at pill bottom */
+.di-pill__progress {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    border-radius: 0 0 28px 28px;
+    background: var(--accent);
+    transition: width 0.5s ease;
+    z-index: 1;
+}
+
+/* Error badge */
+.di-error-badge {
+    background: #e74c3c;
+    color: #fff; /* fixed red badge — always white text, independent of pill theme */
+    font-size: 0.65rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 8px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.di-cli-badge {
+    background: rgba(155, 89, 182, 0.3);
+    color: #bb8fce;
+    font-size: 0.6rem;
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+/* ── Expanded state ──────────────────────────────────── */
+/* Driven by data-di-expanded on the OUTER #global-operation-banner div
+   (which is NOT replaced by HTMX swaps). This avoids flicker — no JS
+   class reapplication needed after each 2s poll. */
+
+/* Default: expanded content hidden */
+.di-pill .di-pill__expanded { display: none; }
+
+/* Tier 2+: hide compact, show expanded */
+#global-operation-banner[data-di-expanded="tier2"] .di-pill__compact,
+#global-operation-banner[data-di-expanded="tier3"] .di-pill__compact { display: none !important; }
+#global-operation-banner[data-di-expanded="tier2"] .di-pill__expanded,
+#global-operation-banner[data-di-expanded="tier3"] .di-pill__expanded {
+    display: flex !important;
+    flex-direction: column;
+    gap: 0.5rem;
+    width: 100%;
+}
+
+/* Hide the compact 3px progress bar when expanded (expanded has its own 4px bar) */
+#global-operation-banner[data-di-expanded="tier2"] .di-pill__progress,
+#global-operation-banner[data-di-expanded="tier3"] .di-pill__progress { display: none; }
+
+/* Pill shape when expanded */
+#global-operation-banner[data-di-expanded="tier2"] .di-pill,
+#global-operation-banner[data-di-expanded="tier3"] .di-pill {
+    border-radius: 22px;
+    height: auto;
+    padding: 0.85rem 1.25rem;
+    max-width: 620px;
+    min-width: 420px;
+    cursor: default;
+    overflow: visible;
+    flex-direction: column;
+}
+#global-operation-banner[data-di-expanded="tier2"] .di-pill:hover,
+#global-operation-banner[data-di-expanded="tier3"] .di-pill:hover { transform: none; }
+
+/* Legacy class support (for JS-generated pills like completion banners) */
+.di-pill.di-expanded .di-pill__compact { display: none !important; }
+.di-pill.di-expanded .di-pill__expanded {
+    display: flex !important;
+    flex-direction: column;
+    gap: 0.5rem;
+    width: 100%;
+}
+.di-pill.di-expanded .di-pill__progress { display: none; }
+.di-pill.di-expanded {
+    border-radius: 22px;
+    height: auto;
+    padding: 0.85rem 1.25rem;
+    max-width: 620px;
+    min-width: 420px;
+    cursor: default;
+    overflow: visible;
+    flex-direction: column;
+}
+.di-pill.di-expanded:hover { transform: none; }
+
+/* Expanded header row */
+.di-expanded__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    width: 100%;
+}
+.di-expanded__header-left {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+}
+.di-expanded__header-right {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+/* Expanded progress bar */
+.di-progress-track {
+    height: 4px;
+    background: var(--di-track-bg);
+    border-radius: 2px;
+    overflow: hidden;
+    width: 100%;
+}
+.di-progress-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: var(--accent);
+    transition: width 0.5s ease;
+}
+
+/* Progress meta row */
+.di-progress-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: var(--di-t40);
+}
+.di-progress-meta .di-progress-meta__right {
+    color: var(--di-t70);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── Expand hint (visible in tier2 only, hidden in tier3) ── */
+.di-expand-hint {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 0.3rem;
+    font-size: 0.7rem;
+    color: var(--di-t25);
+    cursor: pointer;
+    padding-top: 0.15rem;
+}
+#global-operation-banner[data-di-expanded="tier2"] .di-expand-hint,
+.di-pill.di-expanded:not(.di-detail) .di-expand-hint { display: flex; }
+#global-operation-banner[data-di-expanded="tier3"] .di-expand-hint,
+.di-pill.di-detail .di-expand-hint { display: none; }
+
+/* ── Detail panel (Tier 3) ───────────────────────────── */
+
+.di-pill .di-pill__detail { display: none; }
+#global-operation-banner[data-di-expanded="tier3"] .di-pill__detail,
+.di-pill.di-detail .di-pill__detail {
+    display: block;
+    width: 100%;
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+/* File row in detail panel */
+.di-file-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.72rem;
+    color: var(--di-t45);
+    padding: 2px 0;
+}
+.di-file-row .di-action-tag {
+    font-size: 0.65rem;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+.di-action-tag--active {
+    background: rgba(90,200,250,0.15);
+    color: var(--di-info-text);
+    animation: diPulseTag 1.5s ease-in-out infinite;
+}
+@keyframes diPulseTag { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+.di-file-row--active .di-file-row__name { color: var(--di-t70); }
+.di-action-tag--cached {
+    background: rgba(76,217,100,0.12);
+    color: #4CD964;
+}
+.di-action-tag--restored {
+    background: rgba(255,149,0,0.12);
+    color: #FF9500;
+}
+.di-action-tag--error {
+    background: rgba(255,59,48,0.12);
+    color: #FF3B30;
+}
+.di-file-row__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+}
+.di-file-row__size {
+    color: var(--di-t25);
+    flex-shrink: 0;
+    margin-left: auto;
+}
+.di-file-row__assoc-badge {
+    font-size: 0.6rem;
+    color: var(--di-t30);
+    flex-shrink: 0;
+}
+.di-file-row--sub {
+    padding-left: 1.25rem;
+    font-size: 0.65rem;
+    opacity: 0.55;
+}
+.di-file-row--sub .di-file-row__size {
+    color: var(--di-t55);
+}
+.di-sub-arrow {
+    color: var(--di-t25);
+    flex-shrink: 0;
+    font-size: 0.7rem;
+}
+.di-expand-chev {
+    color: var(--di-t40);
+    flex-shrink: 0;
+    font-size: 0.85rem;
+    transition: transform 0.18s ease;
+    margin-left: 0.25rem;
+}
+.di-expand-chev.open {
+    transform: rotate(90deg);
+}
+.di-file-row--group:hover {
+    background: rgba(var(--di-on),0.04);
+    border-radius: 4px;
+}
+.di-more-link {
+    display: block;
+    text-align: center;
+    color: rgba(229, 160, 13, 0.85);
+    font-size: 0.72rem;
+    padding: 0.45rem;
+    margin-top: 0.25rem;
+    text-decoration: none;
+    border-top: 1px dashed rgba(var(--di-on),0.08);
+    transition: background 0.15s, color 0.15s;
+}
+.di-more-link:hover {
+    color: var(--plex-accent, #e5a00d);
+    background: rgba(229, 160, 13, 0.06);
+    text-decoration: none;
+}
+
+/* ── Buttons ─────────────────────────────────────────── */
+
+/* Circular stop button */
+.di-stop {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(255,59,48,0.15);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+    flex-shrink: 0;
+}
+.di-stop:hover { background: rgba(255,59,48,0.3); }
+.di-stop__inner {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    background: #FF3B30;
+}
+
+/* Circular dismiss/minimize button */
+.di-dismiss {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(var(--di-on),0.06);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--di-t40);
+    font-size: 1rem;
+    transition: background 0.2s, color 0.2s;
+    flex-shrink: 0;
+    line-height: 1;
+}
+.di-dismiss:hover { background: rgba(var(--di-on),0.12); color: rgb(var(--di-on)); }
+
+/* ── Warning row (reused from old banner) ────────────── */
+.di-warning {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    max-height: 0;
+    max-width: 0;
+    opacity: 0;
+    overflow: hidden;
+    padding-top: 0;
+    margin-top: 0;
+    border-top: 1px solid transparent;
+    transition: max-height 0.35s ease-out, max-width 0.4s ease-out,
+                opacity 0.3s ease-out, padding-top 0.35s ease-out,
+                margin-top 0.35s ease-out, border-color 0.3s ease-out;
+}
+
+/* ── Summary stats row (completion expanded) ─────────── */
+.di-summary-stats {
+    display: flex;
+    gap: 1.5rem;
+    font-size: 0.8rem;
+    margin: 0.15rem 0;
+}
+.di-summary-stats__cached { color: #4CD964; }
+.di-summary-stats__restored { color: #FF9500; }
+.di-summary-stats__muted { color: var(--di-t25); }
+
+/* Divider line */
+.di-divider {
+    height: 1px;
+    background: var(--di-track-bg);
+    margin: 0.15rem 0;
+    width: 100%;
+}
+
+/* More files link */
+.di-more-files {
+    text-align: center;
+    font-size: 0.7rem;
+    color: var(--di-t25);
+    margin-top: 0.15rem;
+}
+
+/* ── Queue badge (compact pill) ──────────────────────── */
+.di-queue-badge {
+    background: rgba(90,200,250,0.2);
+    color: var(--di-info-text);
+    font-size: 0.65rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 8px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* ── Queue section (tier3 detail) ────────────────────── */
+.di-queue-section {
+    padding: 0.1rem 0;
+}
+
+.di-queue-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.1rem 0 0.2rem;
+}
+
+.di-queue-header__label {
+    font-size: 0.65rem;
+    color: var(--di-t25);
+}
+
+.di-queue-header__clear {
+    background: rgba(var(--di-on),0.06);
+    border: none;
+    color: var(--di-t35);
+    font-size: 0.6rem;
+    padding: 0.15rem 0.45rem;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+}
+.di-queue-header__clear:hover {
+    background: rgba(255,59,48,0.15);
+    color: #FF3B30;
+}
+
+/* Queue items use the same .di-file-row layout */
+.di-queue-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.72rem;
+    color: var(--di-t45);
+    padding: 2px 0;
+}
+
+.di-queue-item__name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.di-queue-item__count {
+    color: var(--di-t20);
+    font-size: 0.65rem;
+    flex-shrink: 0;
+    margin-left: auto;
+}
+
+/* Queued action tag — muted cyan, matches maintenance accent */
+.di-action-tag--queued {
+    background: rgba(90,200,250,0.1);
+    color: rgba(90,200,250,0.6);
+}
+
+.di-queue-item__remove {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--di-t15);
+    font-size: 0.8rem;
+    line-height: 1;
+    flex-shrink: 0;
+    transition: background 0.2s, color 0.2s;
+}
+.di-queue-item__remove:hover {
+    background: rgba(255,59,48,0.15);
+    color: #FF3B30;
+}
+
+/* ── Queue countdown ─────────────────────────────────── */
+.di-countdown {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+}
+
+.di-countdown__text {
+    font-size: 0.78rem;
+    color: var(--di-t50);
+}
+
+.di-countdown__timer {
+    font-family: monospace;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--di-info-text);
+    font-variant-numeric: tabular-nums;
+}
+
+.di-countdown__actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
+/* ── Light theme pill overrides ──────────────────────── */
+/* Flip the pill to a light surface, matching the rest of the Light
+   theme, instead of the surface staying hard-coded black. */
+[data-theme="light"] #global-operation-banner {
+    --di-on: 0,0,0;
+    --di-bg: var(--plex-bg-card);
+    --di-track-bg: rgba(0,0,0,0.08);
+    /* Text-legibility tiers boosted — see comment on the dark-mode
+       definitions above for why this isn't a flat on/off swap. */
+    --di-t15: rgba(var(--di-on),0.55);
+    --di-t20: rgba(var(--di-on),0.55);
+    --di-t25: rgba(var(--di-on),0.55);
+    --di-t30: rgba(var(--di-on),0.55);
+    --di-t35: rgba(var(--di-on),0.55);
+    --di-t40: rgba(var(--di-on),0.6);
+    --di-t45: rgba(var(--di-on),0.65);
+    --di-t50: rgba(var(--di-on),0.65);
+    --di-t55: rgba(var(--di-on),0.7);
+    --di-t60: rgba(var(--di-on),0.72);
+    --di-t70: rgba(var(--di-on),0.85);
+    --di-info-text: var(--plex-info);
+    /* Plex orange at 70% on a white card measures ~1.8:1 — the icon
+       stays orange (that's fine on its own), but the countdown value
+       text needs an actual text tier instead. */
+    --di-idle-value: var(--di-t60);
+    /* --plex-info is a darker blue in Light theme, so black text on
+       it drops under 4:1 — needs to flip to white. */
+    --di-btn-text-on-accent: #fff;
+}
+[data-theme="light"] .di-pill {
+    border: 1px solid var(--plex-border);
+    /* The pill floats over page content, usually a white card in light
+       mode. Card-weight shadow made it read as part of the card, so use
+       the theme's elevated shadow plus a 1px contact shadow. */
+    box-shadow: var(--plex-shadow-elevated), 0 1px 2px rgba(0,0,0,0.10);
+}
+
+/* Accent colors were literals tuned for a black surface — on white,
+   swap each pill state to the semantic tokens from plex-theme.css,
+   which already carry correct Light theme values. The idle state
+   keeps the Plex brand orange as-is (used elsewhere in Light theme
+   already); dry-run maps to warning, there's no dedicated token for
+   "caution/preview" distinct from it. */
+[data-theme="light"] .di-pill--caching,
+[data-theme="light"] .di-pill--completed { --accent: var(--plex-success); }
+[data-theme="light"] .di-pill--evicting,
+[data-theme="light"] .di-pill--completed-errors,
+[data-theme="light"] .di-pill--dry-run { --accent: var(--plex-warning); }
+[data-theme="light"] .di-pill--maintenance { --accent: var(--plex-info); }
+[data-theme="light"] .di-pill--error,
+[data-theme="light"] .di-pill--disconnected { --accent: var(--plex-error); }
+
+/* --accent-dim (icon circle fill, spinner ring) needs the same
+   semantic remap as --accent — otherwise the icon's stroke color
+   and its own fill are two different, unrelated hues in Light
+   theme. Kept at a similar ~15-20% tint so the icon circle doesn't
+   turn fully solid. */
+[data-theme="light"] .di-pill--caching,
+[data-theme="light"] .di-pill--completed { --accent-dim: color-mix(in srgb, var(--plex-success) 18%, transparent); }
+[data-theme="light"] .di-pill--evicting,
+[data-theme="light"] .di-pill--completed-errors,
+[data-theme="light"] .di-pill--dry-run { --accent-dim: color-mix(in srgb, var(--plex-warning) 18%, transparent); }
+[data-theme="light"] .di-pill--maintenance { --accent-dim: color-mix(in srgb, var(--plex-info) 18%, transparent); }
+[data-theme="light"] .di-pill--error,
+[data-theme="light"] .di-pill--disconnected { --accent-dim: color-mix(in srgb, var(--plex-error) 18%, transparent); }
+
+/* The pulse halo (--accent-glow) reads as a smudge on a white card —
+   drop it in Light theme rather than trying to tune its opacity. */
+[data-theme="light"] .di-pill--caching,
+[data-theme="light"] .di-pill--evicting,
+[data-theme="light"] .di-pill--maintenance,
+[data-theme="light"] .di-pill--error,
+[data-theme="light"] .di-pill--dry-run,
+[data-theme="light"] .di-pill--completed,
+[data-theme="light"] .di-pill--completed-errors,
+[data-theme="light"] .di-pill--idle,
+[data-theme="light"] .di-pill--disconnected {
+    --accent-glow: transparent;
+}
+
+/* State colour on the pill border. Running pills carry .di-glow; finished
+   and failed pills set their own border in the dark rules above, so list
+   them here too. Keys off each state's --accent, which is already remapped
+   to the semantic tokens for light mode. Only border-color is set: the
+   dry-run pill is dashed and .di-glow sets the width, and the expanded
+   override further up still wins once a pill opens, as in dark. */
+[data-theme="light"] .di-glow,
+[data-theme="light"] .di-pill--completed,
+[data-theme="light"] .di-pill--completed-errors,
+[data-theme="light"] .di-pill--error,
+[data-theme="light"] .di-pill--disconnected,
+[data-theme="light"] .di-pill--dry-run {
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* Resting expand chevron. It is decorative, so it is not on a text tier;
+   at rest it is 20% of the foreground, which on white is a little faint.
+   Give it slightly more presence in light without approaching text weight. */
+[data-theme="light"] .di-pill__compact::after {
+    border-right-color: rgba(0,0,0,0.3);
+    border-bottom-color: rgba(0,0,0,0.3);
+}
+
+/* Fit mode: the expanded pill stays an overlay on top of the page content */
+#global-operation-banner.di-flow[data-di-expanded="tier2"] .di-pill,
+#global-operation-banner.di-flow[data-di-expanded="tier3"] .di-pill,
+#global-operation-banner.di-flow .di-pill.di-expanded {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    translate: -50% 0;
+    width: max-content;
+    max-width: min(620px, calc(100vw - 2rem));
+}
+
+/* ── Mobile responsive ───────────────────────────────── */
+@media (max-width: 768px) {
+    #global-operation-banner {
+        left: 0;
+        right: 0;
+        transform: none;
+    }
+
+    .di-pill {
+        min-width: auto;
+        max-width: none;
+        width: 100%;
+    }
+
+    .di-pill.di-expanded {
+        max-width: none;
+        min-width: auto;
+    }
+
+    /* The header is a column here: stretch the banner to the full width (the row
+       layout's flex-basis does not apply) so the pill and its overlay get a width. */
+    .page-header > #global-operation-banner.di-flow {
+        flex: 0 0 auto;
+        align-self: stretch;
+    }
+
+    #global-operation-banner.di-flow[data-di-expanded="tier2"] .di-pill,
+    #global-operation-banner.di-flow[data-di-expanded="tier3"] .di-pill,
+    #global-operation-banner.di-flow .di-pill.di-expanded {
+        left: 0;
+        right: 0;
+        translate: none;
+        width: auto;
+        min-width: 0;
+        max-width: none;
+    }
+
+    .di-pill__detail {
+        max-height: 150px;
+    }
+}
+
+/* ── Activity Filter Pills ────────────────────────────── */
+.activity-filter-bar {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
+.activity-filter-pill {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.5);
+    padding: 0.2rem 0.65rem;
+    border-radius: 14px;
+    font-size: 0.72rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    line-height: 1.4;
+}
+
+.activity-filter-pill:hover {
+    border-color: rgba(255, 255, 255, 0.25);
+    color: rgba(255, 255, 255, 0.75);
+}
+
+.activity-filter-pill.active {
+    background: var(--plex-orange, #e5a00d);
+    border-color: var(--plex-orange, #e5a00d);
+    color: #000;
+    font-weight: 600;
+}
+
+/* Light theme overrides */
+[data-theme="light"] .activity-filter-pill {
+    border-color: rgba(0, 0, 0, 0.15);
+    color: rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="light"] .activity-filter-pill:hover {
+    border-color: rgba(0, 0, 0, 0.3);
+    color: rgba(0, 0, 0, 0.75);
+}
+
+[data-theme="light"] .activity-filter-pill.active {
+    color: #000;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Recent Activity — run-grouped view (Option D)
+   Run header is clickable; member rows hide unless `.is-visible`.
+   Show-group children hide unless `.is-visible`. Movie sidecars keep
+   the existing `.af-parent` / `.af-visible` pattern.
+   ───────────────────────────────────────────────────────────────────── */
+.run-expandable-header {
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.run-expandable-header:hover td {
+    background: color-mix(in srgb, var(--plex-purple) 8%, transparent);
+}
+.run-expandable-header td {
+    padding: 0.7rem 0.75rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--plex-purple) 18%, transparent);
+}
+.run-expandable-inner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+.run-expandable-chev {
+    color: color-mix(in srgb, var(--plex-purple) 75%, transparent);
+    font-size: 1rem;
+    line-height: 1;
+    width: 1rem;
+    text-align: center;
+    transition: transform 0.15s;
+}
+.run-expandable-chev.open { transform: rotate(90deg); }
+.run-expandable-title {
+    color: color-mix(in srgb, var(--plex-purple) 95%, transparent);
+    font-weight: 500;
+    font-size: 0.85rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.run-source-ic {
+    width: 14px;
+    height: 14px;
+    stroke-width: 2;
+}
+.run-expandable-meta {
+    color: var(--plex-text-light);
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+}
+.run-expandable-stats {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* Run-header stat pills */
+.run-stat-pill {
+    padding: 0.18rem 0.55rem;
+    border-radius: var(--plex-radius-xs);
+    font-size: 0.7rem;
+    font-weight: 500;
+    transition: opacity 0.15s;
+}
+.run-stat-pill--cached {
+    background: color-mix(in srgb, var(--plex-success) 15%, transparent);
+    color: var(--plex-success);
+}
+.run-stat-pill--restored {
+    background: color-mix(in srgb, var(--plex-info) 15%, transparent);
+    color: var(--plex-info);
+}
+.run-stat-pill--size {
+    background: var(--plex-bg-hover);
+    color: var(--plex-text-light);
+    font-variant-numeric: tabular-nums;
+}
+/* Dim a stat pill when its action is filtered out (set by JS) */
+.run-stat-pill.is-dimmed {
+    opacity: 0.4;
+}
+
+/* Run member rows — hidden until parent header is open */
+.run-row { display: none; }
+.run-row.is-visible { display: table-row; }
+
+/* Show-group children — separately collapsible, hidden by default */
+.run-show-child { display: none; }
+.run-show-child.is-visible { display: table-row; }
+.run-show-parent {
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.run-show-parent:hover td {
+    background: color-mix(in srgb, var(--plex-text) 4%, transparent);
+}
+.run-show-parent .chev {
+    display: inline-block;
+    margin-right: 0.3rem;
+    color: var(--plex-text-muted);
+    font-size: 0.85rem;
+    transition: transform 0.15s;
+}
+.run-show-parent.is-open .chev { transform: rotate(90deg); }
+
+/* Show-group "N eps" badge */
+.badge-group {
+    background: color-mix(in srgb, var(--plex-purple) 18%, transparent);
+    color: var(--plex-purple);
+}
+
+/* Light theme: lower-contrast hover backgrounds */
+[data-theme="light"] .run-expandable-header:hover td {
+    background: color-mix(in srgb, var(--plex-purple) 6%, transparent);
+}
+[data-theme="light"] .run-show-parent:hover td {
+    background: rgba(0, 0, 0, 0.025);
+}
+
+/* Pinned chip — pending unpin (debounce window) */
+.pinned-row-pending-unpin {
+    opacity: 0.45;
+    text-decoration: line-through;
+    text-decoration-color: var(--plex-text-muted);
+    transition: opacity 150ms ease;
+}
+.pinned-row-pending-unpin .pinned-unpin-btn {
+    cursor: default;
+}
+
+/* ============================================================
+   Settings Search
+   See web/services/settings_search_index.py + settings_search.js
+   ============================================================ */
+.settings-search {
+    position: relative;
+    margin-bottom: 1.25rem;
+}
+.settings-search-input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background: var(--plex-bg-card);
+    border: 1px solid var(--plex-border);
+    border-radius: var(--plex-radius-md);
+    padding: 0 0.85rem;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.settings-search-input-wrap:focus-within {
+    border-color: rgba(229, 160, 13, 0.5);
+    box-shadow: 0 0 0 3px rgba(229, 160, 13, 0.12);
+}
+.settings-search-lead {
+    width: 18px;
+    height: 18px;
+    color: var(--plex-text-muted);
+    flex-shrink: 0;
+}
+#settings-search-input {
+    flex: 1;
+    background: transparent;
+    border: 0;
+    outline: 0;
+    color: var(--plex-text);
+    font-size: 1rem;
+    padding: 0.75rem 0.65rem;
+    min-width: 0;
+}
+/* Suppress the global input:focus ring (plex-theme.css) — the wrapper's
+   :focus-within already provides the visual focus indicator, so the inner ring
+   would render a confusing double-outline. */
+#settings-search-input:focus {
+    box-shadow: none;
+    border-color: transparent;
+}
+#settings-search-input::placeholder {
+    color: var(--plex-text-muted);
+}
+.settings-search-kbd {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem;
+    color: var(--plex-text-muted);
+    background: var(--plex-bg-input);
+    border: 1px solid var(--plex-border);
+    border-radius: var(--plex-radius-xs);
+    padding: 0.15rem 0.4rem;
+    flex-shrink: 0;
+}
+.settings-search-kbd .kbd-mod {
+    font-size: 0.9em;
+    opacity: 0.9;
+}
+.settings-search-clear {
+    background: transparent;
+    border: 0;
+    color: var(--plex-text-muted);
+    cursor: pointer;
+    padding: 0.25rem;
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+.settings-search-clear i {
+    width: 16px;
+    height: 16px;
+}
+.settings-search-clear:hover {
+    color: var(--plex-text);
+}
+.settings-search.has-query .settings-search-clear {
+    display: inline-flex;
+}
+.settings-search.has-query .settings-search-kbd {
+    display: none;
+}
+
+/* Results panel */
+.settings-search-results {
+    margin-top: 0.75rem;
+    background: var(--plex-bg-card);
+    border: 1px solid var(--plex-border);
+    border-radius: var(--plex-radius-md);
+    box-shadow: var(--plex-shadow-card);
+    overflow: hidden;
+    max-height: 60vh;
+    overflow-y: auto;
+    display: none;
+}
+.settings-search.has-query .settings-search-results {
+    display: block;
+}
+
+.ss-results-summary {
+    padding: 0.65rem 1rem;
+    border-bottom: 1px solid var(--plex-border);
+    font-size: 0.8rem;
+    color: var(--plex-text-muted);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+.ss-results-summary kbd {
+    font-family: ui-monospace, monospace;
+    font-size: 0.7rem;
+    background: var(--plex-bg-input);
+    border: 1px solid var(--plex-border);
+    border-radius: var(--plex-radius-xs);
+    padding: 0.1rem 0.35rem;
+    color: var(--plex-text-light);
+}
+
+.ss-results-group {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--plex-border);
+}
+.ss-results-group:last-child {
+    border-bottom: 0;
+}
+.ss-results-group-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 1rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--plex-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.ss-results-group-header i {
+    width: 12px;
+    height: 12px;
+}
+
+.ss-result-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.85rem;
+    padding: 0.7rem 1rem;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    transition: background 120ms ease, border-color 120ms ease;
+}
+.ss-result-row:hover {
+    background: var(--plex-bg-hover);
+}
+.ss-result-row.is-selected {
+    background: var(--plex-bg-hover);
+    border-left-color: var(--plex-orange);
+}
+.ss-result-icon {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    border-radius: var(--plex-radius-sm);
+    background: rgba(229, 160, 13, 0.08);
+    color: var(--plex-orange);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.ss-result-icon i {
+    width: 16px;
+    height: 16px;
+}
+.ss-result-icon.tone-info  { background: rgba(10, 132, 255, 0.10); color: var(--plex-info); }
+.ss-result-icon.tone-ok    { background: rgba(52, 199, 89, 0.10); color: var(--plex-success); }
+.ss-result-icon.tone-purple{ background: rgba(167, 139, 250, 0.12); color: var(--plex-purple); }
+.ss-result-icon.tone-warn  { background: rgba(255, 152, 0, 0.10); color: var(--plex-warning); }
+.ss-result-body {
+    flex: 1;
+    min-width: 0;
+}
+.ss-result-crumb {
+    font-size: 0.72rem;
+    color: var(--plex-text-muted);
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-bottom: 0.15rem;
+    flex-wrap: wrap;
+}
+.ss-result-crumb i {
+    width: 11px;
+    height: 11px;
+}
+.ss-result-label {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--plex-text);
+}
+.ss-result-hint {
+    font-size: 0.82rem;
+    color: var(--plex-text-muted);
+    margin-top: 0.1rem;
+    line-height: 1.35;
+}
+.ss-result-row mark {
+    background: rgba(229, 160, 13, 0.25);
+    color: var(--plex-orange-light);
+    padding: 0 0.1rem;
+    border-radius: 2px;
+}
+[data-theme="light"] .ss-result-row mark {
+    color: var(--plex-orange-dark);
+    background: rgba(229, 160, 13, 0.30);
+}
+.ss-result-arrow {
+    color: var(--plex-text-muted);
+    align-self: center;
+    flex-shrink: 0;
+}
+.ss-result-arrow i {
+    width: 14px;
+    height: 14px;
+}
+
+/* Empty state */
+.ss-empty-state {
+    padding: 1rem 1rem 0.25rem;
+}
+.ss-empty-section {
+    margin-bottom: 1rem;
+}
+.ss-empty-section:last-child {
+    margin-bottom: 0;
+}
+.ss-empty-section h4 {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--plex-text-muted);
+    letter-spacing: 0.05em;
+    margin: 0 0 0.5rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.ss-empty-section h4 i {
+    width: 12px;
+    height: 12px;
+}
+.ss-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+.ss-chip {
+    background: var(--plex-bg-input);
+    border: 1px solid var(--plex-border);
+    color: var(--plex-text);
+    padding: 0.35rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+.ss-chip:hover {
+    background: var(--plex-bg-hover);
+    border-color: var(--plex-border-light);
+}
+.ss-chip-icon {
+    width: 12px;
+    height: 12px;
+}
+
+.ss-no-results {
+    text-align: center;
+    padding: 2rem 1rem;
+    color: var(--plex-text-muted);
+}
+.ss-no-results i {
+    width: 32px;
+    height: 32px;
+    margin-bottom: 0.5rem;
+    opacity: 0.5;
+}
+.ss-no-results-hint {
+    font-size: 0.78rem;
+    margin-top: 0.4rem;
+}
+
+/* Jump-and-flash highlight on the target setting (click-through from a result).
+ * Two-phase: bright outline pulse, then a padded outline that persists until
+ * the user clicks or presses a key, so they can find their place after the
+ * pulse fades. outline-offset puts a visible gap between the element edge
+ * and the ring (no layout shift). */
+@keyframes ss-flash-pulse {
+    0%   { outline-color: rgba(229, 160, 13, 0.85); outline-offset: 2px; background-color: rgba(229, 160, 13, 0.14); }
+    40%  { outline-color: rgba(229, 160, 13, 0.95); outline-offset: 8px; background-color: rgba(229, 160, 13, 0.20); }
+    100% { outline-color: rgba(229, 160, 13, 0.55); outline-offset: 6px; background-color: rgba(229, 160, 13, 0.06); }
+}
+.ss-flash-highlight {
+    outline: 3px solid rgba(229, 160, 13, 0.85);
+    outline-offset: 2px;
+    border-radius: var(--plex-radius-sm);
+    animation: ss-flash-pulse 1100ms ease-out forwards;
+}
+.ss-flash-highlight-card {
+    border-color: rgba(229, 160, 13, 0.55) !important;
+    transition: border-color 1100ms ease;
+}
+
+/* Persistent marker after the pulse. Cleared by JS on user interaction. */
+.ss-flash-pinned {
+    border-radius: var(--plex-radius-sm);
+    outline: 2px solid rgba(229, 160, 13, 0.60);
+    outline-offset: 6px;
+    background-color: rgba(229, 160, 13, 0.05);
+    transition: outline-color 420ms ease, background-color 420ms ease;
+}
+.ss-flash-pinned.is-dismissing {
+    outline-color: rgba(229, 160, 13, 0);
+    background-color: transparent;
+}
+.ss-flash-pinned-card {
+    border-color: rgba(229, 160, 13, 0.45) !important;
+    transition: border-color 420ms ease;
+}
+.ss-flash-pinned-card.is-dismissing {
+    border-color: rgba(229, 160, 13, 0) !important;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Recently Added — small caption under a row's Pin action
+   ───────────────────────────────────────────────────────────────────── */
+.ra-status-note {
+    font-size: 0.72rem;
+    color: var(--plex-text-muted);
+    margin-top: 0.2rem;
+}
+
+/* Expandable show-group header (TV runs collapsed under one row) */
+.ra-group-header { cursor: pointer; }
+.ra-group-header:hover td { background: var(--plex-bg-hover); }
+.ra-chevron {
+    display: inline-flex;
+    color: var(--plex-text-muted);
+    transition: transform 0.15s ease;
+}
+.ra-group-header.is-open .ra-chevron { transform: rotate(90deg); }
+/* Inset surface token, so the nesting tint follows the theme. A hardcoded
+   rgba(0,0,0,0.12) composited to #E0E0E0 in light, all but identical to the
+   #DDDDE2 that tbody tr:hover paints — 1.03 contrast, i.e. no hover feedback
+   on a row that is clickable. Keep the specificity at (0,1,0): a
+   [data-theme="light"] companion would outrank tbody tr:hover and kill the
+   hover outright. */
+.ra-group-child { background: var(--plex-bg-input); }
+
+/* Per-row file-detail expander (chevron on the title cell) */
+.ra-detail-chevron {
+    display: inline-flex;
+    color: var(--plex-text-muted);
+    flex-shrink: 0;
+    transition: transform 0.15s ease;
+}
+.ra-detail-chevron i { width: 14px; height: 14px; }
+.ra-detail-chevron.open { transform: rotate(90deg); }
+
+/* File-detail sub-row: full-width colspan cell. The filename wraps inline
+   (overflow-wrap:anywhere) so long release names never widen the table, and the
+   size sits as a muted chip right after the name — not floated to the far edge.
+   padding-left aligns the name under the title text above it (past the
+   chevron + media icon); child rows have no icon so they're overridden inline. */
+.ra-detail-cell {
+    padding-left: 4rem;
+    font-size: 0.8rem;
+    color: var(--plex-text-muted, #8e8e93);
+}
+.ra-detail-name {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+/* Shared muted size chip (file-detail rows + dashboard widget). */
+.ra-size-chip {
+    display: inline-block;
+    margin-left: 0.5rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: var(--plex-radius-sm, 8px);
+    background: var(--plex-bg-hover, rgba(255, 255, 255, 0.06));
+    white-space: nowrap;
+    font-size: 0.72rem;
+    color: var(--plex-text-muted, #8e8e93);
+}
+
+/* ── Dashboard "Recently Added" widget: header + aligned columns ── */
+.ra-w-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid var(--plex-border);
+    font-size: 0.66rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--plex-text-muted);
+}
+.ra-w-head .ra-w-lead { width: 2.2rem; flex-shrink: 0; }
+.ra-w-row {
+    cursor: pointer;
+    border-top: 1px solid var(--plex-border);
+}
+.ra-w-row:first-of-type { border-top: none; }
+.ra-w-line {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0;
+    font-size: 0.85rem;
+}
+.ra-w-chevron {
+    display: inline-flex;
+    color: var(--plex-text-muted);
+    flex-shrink: 0;
+    transition: transform 0.15s ease;
+}
+.ra-w-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* Indeterminate outcome (pin state unknown / unmapped path). A dashed outline
+   reads as "not established" rather than as a settled state, without inventing
+   a new colour outside the token set. */
+.ra-badge-dashed {
+    border: 1px dashed var(--plex-border);
+    background: transparent;
+}
+
+/* Season/episode-count qualifier on a grouped show line. Inline (not a second
+   line) so grouped and ungrouped rows keep the same row height. */
+.ra-w-sub {
+    color: var(--plex-text-muted);
+    font-size: 0.76rem;
+    margin-left: 0.35rem;
+}
+.ra-w-size {
+    width: 5rem;
+    flex-shrink: 0;
+    text-align: right;
+}
+.ra-w-size .ra-size-chip { margin-left: 0; }
+.ra-w-age {
+    /* 5rem, matching .ra-w-size above: "30 days ago" overflows 4.5rem (72px)
+       at this font size now that format_cache_age has a day tier. */
+    width: 5rem;
+    flex-shrink: 0;
+    text-align: right;
+    white-space: nowrap;
+    color: var(--plex-text-muted);
+}
+.ra-w-detail { padding: 0 0 0.4rem 2.2rem; }
+.ra-w-detail-line {
+    display: flex;
+    align-items: baseline;
+    padding: 0.1rem 0;
+    font-size: 0.78rem;
+    color: var(--plex-text-muted);
+}
+/* Name shrinks (ellipsis) only as needed so the size chip hugs it, rather than
+   being pushed to the far right edge. */
+.ra-w-detail-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ==========================================================================
+   Share Alignment Warning (Libraries tab)
+   Flags a path mapping whose cache destination isn't the same Unraid share as
+   its media — the misconfiguration behind files appearing missing in Plex.
+   ========================================================================== */
+
+.share-mismatch-warning {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+    margin-bottom: 0.5rem;
+    padding: 0.5rem 0.65rem;
+    background: color-mix(in srgb, var(--plex-warning) 12%, transparent);
+    border-left: 3px solid var(--plex-warning);
+    border-radius: var(--plex-radius-sm);
+    font-size: 0.8rem;
+    color: var(--plex-warning);
+}
+
+.share-mismatch-warning__icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+}
+
+.share-mismatch-warning__body {
+    margin-top: 0.2rem;
+    color: var(--plex-text);
+    opacity: 0.85;
+    line-height: 1.45;
+}
+
+.share-mismatch-warning code {
+    padding: 0.05rem 0.3rem;
+    background: color-mix(in srgb, var(--plex-warning) 18%, transparent);
+    border-radius: 3px;
+    color: var(--plex-warning);
+    font-size: 0.95em;
+}
