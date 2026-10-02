@@ -212,7 +212,7 @@
                                 slow = setTimeout(fit, 450);
                             }
                         }).observe(banner, {
-                            childList: true, subtree: true,
+                            childList: true, // direct children only: the pill itself being replaced
                             attributes: true, attributeFilter: ['data-di-expanded']
                         });
                         if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
