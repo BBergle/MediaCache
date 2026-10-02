@@ -15,7 +15,7 @@ from typing import Callable, Dict, List, Optional, Set, Any, Tuple
 
 from web.config import DATA_DIR, CONFIG_DIR, SETTINGS_FILE
 from core.system_utils import get_array_direct_path, format_bytes, translate_container_to_host_path, translate_host_to_container_path, remove_from_exclude_file, remove_from_timestamps_file, create_dir_with_ownership, sweep_empty_folders
-from core.file_operations import PLEXCACHED_EXTENSION, VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS, MEDIA_EXTENSIONS
+from core.file_operations import PLEXCACHED_EXTENSION, PARTIAL_EXTENSION, VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS, MEDIA_EXTENSIONS
 from core.media_grouping import group_ordered
 
 
@@ -1543,6 +1543,74 @@ class MaintenanceService:
             affected_paths=affected_paths
         )
 
+    def _array_copy_matches(self, cache_path: str, array_path: str) -> Optional[str]:
+        """Return the array-side file identical to the cache copy, if any.
+
+        Checks the same-name array file first, then the .plexcached backup.
+        Size is the test, as in the caching run's in-place upgrade check: a
+        different size means the cache copy is a newer version (Sonarr/Radarr
+        upgrade, Tdarr pass) that must not be thrown away.
+        """
+        cache_size = os.path.getsize(cache_path)
+        for candidate in (array_path, array_path + PLEXCACHED_EXTENSION):
+            if os.path.exists(candidate) and os.path.getsize(candidate) == cache_size:
+                return candidate
+        return None
+
+    def _sync_one_to_array(self, cache_path: str, array_path: str,
+                           bytes_progress_callback: Optional[Callable] = None) -> Optional[str]:
+        """Move one cache file to the array. Returns an error message, or None on success.
+
+        The cache copy is what the last tool wrote, so it wins unless the array
+        already holds an identical copy. A newer cache copy is written to a
+        partial name next to the target, verified, and renamed into place
+        before the old backup and the cache copy are removed, so a failed copy
+        leaves both versions where they were.
+        """
+        backup_path = array_path + PLEXCACHED_EXTENSION
+
+        if not os.path.exists(cache_path):
+            # Nothing on cache to move; finish restoring the backup if one is left.
+            if os.path.exists(backup_path):
+                if os.path.exists(array_path):
+                    os.remove(backup_path)
+                else:
+                    os.rename(backup_path, array_path)
+            return None
+
+        match = self._array_copy_matches(cache_path, array_path)
+        if match is not None:
+            if match == backup_path:
+                os.rename(backup_path, array_path)
+            elif os.path.exists(backup_path):
+                os.remove(backup_path)
+                logging.debug(f"Deleted redundant .plexcached backup: {backup_path}")
+            os.remove(cache_path)
+            return None
+
+        if os.path.exists(array_path) or os.path.exists(backup_path):
+            logging.info(f"Cache copy differs from the array copy, keeping the cache version: "
+                         f"{os.path.basename(cache_path)}")
+
+        create_dir_with_ownership(os.path.dirname(array_path), cache_path)
+        partial_path = array_path + PARTIAL_EXTENSION
+        try:
+            self._copy_with_progress(cache_path, partial_path, bytes_progress_callback)
+            cache_size = os.path.getsize(cache_path)
+            if os.path.getsize(partial_path) != cache_size:
+                os.remove(partial_path)
+                return "Size mismatch after copy"
+            os.replace(partial_path, array_path)
+        except OSError:
+            if os.path.exists(partial_path):
+                os.remove(partial_path)
+            raise
+
+        if os.path.exists(backup_path):
+            os.remove(backup_path)
+        os.remove(cache_path)
+        return None
+
     def sync_to_array(self, paths: List[str], dry_run: bool = True,
                       stop_check: Optional[Callable[[], bool]] = None,
                       progress_callback: Optional[Callable] = None,
@@ -1551,10 +1619,12 @@ class MaintenanceService:
                       active_callback: Optional[Callable] = None) -> ActionResult:
         """Move cache files to array - handles both files with and without backups.
 
-        For each file:
-        - If a .plexcached backup exists: restore it (rename to original), delete cache copy
-        - If a duplicate exists on array: just delete cache copy
-        - If no backup/duplicate: copy to array, verify, then delete cache copy
+        For each file (see ``_sync_one_to_array``):
+        - If the array already holds an identical copy (.plexcached backup or
+          same-name file of the same size): restore it, delete cache copy
+        - Otherwise the cache copy is the version to keep (a Sonarr/Radarr
+          upgrade, a Tdarr pass, or no array copy at all): copy it to the
+          array, verify, then remove the old backup and the cache copy
         """
         if not paths:
             return ActionResult(success=False, message="No paths provided")
@@ -1566,13 +1636,11 @@ class MaintenanceService:
             for cache_path in paths:
                 array_path = self._cache_to_array_path(cache_path)
                 if array_path:
-                    has_backup, _ = self._check_plexcached_backup(cache_path)
-                    has_dup, _ = self._check_array_duplicate(cache_path)
-                    if not has_backup and not has_dup:
-                        try:
+                    try:
+                        if self._array_copy_matches(cache_path, array_path) is None:
                             total_bytes += os.path.getsize(cache_path)
-                        except OSError:
-                            pass
+                    except OSError:
+                        pass
 
             aggregator = _ByteProgressAggregator(total_bytes, bytes_progress_callback) if total_bytes > 0 else None
 
@@ -1585,44 +1653,11 @@ class MaintenanceService:
                     if not array_path:
                         return (cache_path, False, f"{os.path.basename(cache_path)}: Unknown path mapping")
 
-                    has_backup, backup_path = self._check_plexcached_backup(cache_path)
-                    has_dup, _ = self._check_array_duplicate(cache_path)
-
-                    if has_backup and backup_path:
-                        try:
-                            original_array_path = _strip_plexcached(backup_path)
-                        except ValueError as e:
-                            return (cache_path, False, str(e))
-                        if os.path.exists(original_array_path):
-                            os.remove(backup_path)
-                        else:
-                            os.rename(backup_path, original_array_path)
-                        if os.path.exists(cache_path):
-                            os.remove(cache_path)
-                        return (cache_path, True, None)
-
-                    elif has_dup:
-                        if os.path.exists(cache_path):
-                            os.remove(cache_path)
-                        return (cache_path, True, None)
-
-                    else:
-                        array_dir = os.path.dirname(array_path)
-                        create_dir_with_ownership(array_dir, cache_path)
-
-                        worker_cb = aggregator.make_worker_callback() if aggregator else None
-                        self._copy_with_progress(cache_path, array_path, worker_cb)
-
-                        if os.path.exists(array_path):
-                            cache_size = os.path.getsize(cache_path)
-                            array_size = os.path.getsize(array_path)
-                            if cache_size == array_size:
-                                os.remove(cache_path)
-                                return (cache_path, True, None)
-                            else:
-                                return (cache_path, False, f"{os.path.basename(cache_path)}: Size mismatch after copy")
-                        else:
-                            return (cache_path, False, f"{os.path.basename(cache_path)}: Copy failed")
+                    worker_cb = aggregator.make_worker_callback() if aggregator else None
+                    error = self._sync_one_to_array(cache_path, array_path, worker_cb)
+                    if error:
+                        return (cache_path, False, f"{os.path.basename(cache_path)}: {error}")
+                    return (cache_path, True, None)
 
                 except OSError as e:
                     return (cache_path, False, f"{os.path.basename(cache_path)}: {str(e)}")
@@ -1657,65 +1692,16 @@ class MaintenanceService:
                 errors.append(f"{os.path.basename(cache_path)}: Unknown path mapping")
                 continue
 
-            # Check for existing backup or duplicate
-            has_backup, backup_path = self._check_plexcached_backup(cache_path)
-            has_dup, _ = self._check_array_duplicate(cache_path)
-
             if dry_run:
                 affected += 1
             else:
                 try:
-                    if has_backup and backup_path:
-                        try:
-                            original_array_path = _strip_plexcached(backup_path)
-                        except ValueError as e:
-                            errors.append(str(e))
-                            continue
-
-                        # Check if original already exists (redundant backup scenario)
-                        if os.path.exists(original_array_path):
-                            # Original already restored - just delete the redundant .plexcached
-                            os.remove(backup_path)
-                            logging.debug(f"Deleted redundant .plexcached backup: {backup_path}")
-                        else:
-                            # Restore the .plexcached backup (rename to original)
-                            os.rename(backup_path, original_array_path)
-
-                        # Delete cache copy
-                        if os.path.exists(cache_path):
-                            os.remove(cache_path)
-                        affected += 1
-                        affected_paths.append(cache_path)
-
-                    elif has_dup:
-                        # Duplicate already exists on array, just delete cache copy
-                        if os.path.exists(cache_path):
-                            os.remove(cache_path)
-                        affected += 1
-                        affected_paths.append(cache_path)
-
+                    error = self._sync_one_to_array(cache_path, array_path, bytes_progress_callback)
+                    if error:
+                        errors.append(f"{os.path.basename(cache_path)}: {error}")
                     else:
-                        # No backup/duplicate - copy to array first
-                        array_dir = os.path.dirname(array_path)
-                        create_dir_with_ownership(array_dir, cache_path)
-
-                        # Copy file to array with progress
-                        self._copy_with_progress(cache_path, array_path, bytes_progress_callback)
-
-                        # Verify copy
-                        if os.path.exists(array_path):
-                            cache_size = os.path.getsize(cache_path)
-                            array_size = os.path.getsize(array_path)
-
-                            if cache_size == array_size:
-                                os.remove(cache_path)
-                                affected += 1
-                                affected_paths.append(cache_path)
-                            else:
-                                errors.append(f"{os.path.basename(cache_path)}: Size mismatch after copy")
-                        else:
-                            errors.append(f"{os.path.basename(cache_path)}: Copy failed")
-
+                        affected += 1
+                        affected_paths.append(cache_path)
                 except OSError as e:
                     errors.append(f"{os.path.basename(cache_path)}: {str(e)}")
 

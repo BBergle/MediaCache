@@ -355,9 +355,10 @@ class TestCheckPlexcachedBackup:
 
 class TestSyncToArray:
     """Verify sync_to_array behaviour for the three scenarios:
-    1. .plexcached backup exists -> restore it, delete cache copy
-    2. Array duplicate exists -> just delete cache copy
-    3. No backup/duplicate -> copy to array, verify, then delete cache
+    1. Identical .plexcached backup exists -> restore it, delete cache copy
+    2. Identical array copy exists -> just delete cache copy
+    3. No identical copy -> copy to array, verify, then delete cache
+       (newer-cache cases: tests/test_sync_to_array_newer_cache.py)
     """
 
     def test_dry_run_counts_all(self, tmp_path):
@@ -383,132 +384,100 @@ class TestSyncToArray:
         assert len(result.errors) == 1
         assert "Unknown path mapping" in result.errors[0]
 
-    @patch("os.path.exists")
-    @patch("os.rename")
-    @patch("os.remove")
-    def test_restores_plexcached_and_deletes_cache(
-        self, mock_remove, mock_rename, mock_exists, tmp_path
-    ):
-        """When .plexcached backup exists, rename it back and delete cache copy."""
+    @staticmethod
+    def _real_dirs(svc, tmp_path):
+        """Point the service at real cache/array directories under tmp_path."""
+        cache_root = tmp_path / "cache" / "Movies"
+        array_root = tmp_path / "user0" / "Movies"
+        cache_root.mkdir(parents=True)
+        array_root.mkdir(parents=True)
+        svc._get_paths = lambda: ([str(cache_root)], [str(array_root)])
+        return cache_root, array_root
+
+    def test_restores_plexcached_and_deletes_cache(self, tmp_path):
+        """When an identical .plexcached backup exists, rename it back and delete cache copy."""
         svc = _make_service(tmp_path)
+        cache_root, array_root = self._real_dirs(svc, tmp_path)
+        (cache_root / "Film.mkv").write_bytes(b"film" * 100)
+        (array_root / "Film.mkv.plexcached").write_bytes(b"film" * 100)
 
-        # os.path.exists calls:
-        #   _check_plexcached_backup -> plexcached_path exists? YES
-        #   _check_array_duplicate -> array_path exists? NO
-        #   original_array_path exists (redundant check)? NO
-        #   cache_path exists (before remove)? YES
-        def exists_side_effect(path):
-            if path.endswith(".plexcached"):
-                return True
-            if path == "/mnt/cache/media/Movies/Film.mkv":
-                return True
-            return False
-
-        mock_exists.side_effect = exists_side_effect
-
-        result = svc.sync_to_array(
-            ["/mnt/cache/media/Movies/Film.mkv"], dry_run=False
-        )
+        result = svc.sync_to_array([str(cache_root / "Film.mkv")], dry_run=False)
 
         assert result.success is True
         assert result.affected_count == 1
-        # .plexcached renamed to original
-        mock_rename.assert_called_once_with(
-            "/mnt/user0/media/Movies/Film.mkv.plexcached",
-            "/mnt/user0/media/Movies/Film.mkv",
-        )
-        # cache copy deleted
-        mock_remove.assert_called_once_with("/mnt/cache/media/Movies/Film.mkv")
+        assert (array_root / "Film.mkv").read_bytes() == b"film" * 100
+        assert not (array_root / "Film.mkv.plexcached").exists()
+        assert not (cache_root / "Film.mkv").exists()
 
-    @patch("os.path.exists")
-    @patch("os.remove")
-    def test_duplicate_on_array_just_deletes_cache(
-        self, mock_remove, mock_exists, tmp_path
-    ):
-        """When array duplicate exists (no .plexcached), just delete cache."""
+    def test_duplicate_on_array_just_deletes_cache(self, tmp_path):
+        """When an identical array copy exists (no .plexcached), just delete cache."""
         svc = _make_service(tmp_path)
+        cache_root, array_root = self._real_dirs(svc, tmp_path)
+        (cache_root / "Film.mkv").write_bytes(b"film" * 100)
+        (array_root / "Film.mkv").write_bytes(b"film" * 100)
 
-        def exists_side_effect(path):
-            if path.endswith(".plexcached"):
-                return False
-            # Array duplicate exists, cache exists
-            return True
-
-        mock_exists.side_effect = exists_side_effect
-
-        result = svc.sync_to_array(
-            ["/mnt/cache/media/Movies/Film.mkv"], dry_run=False
-        )
+        with patch.object(svc, "_copy_with_progress") as mock_copy:
+            result = svc.sync_to_array([str(cache_root / "Film.mkv")], dry_run=False)
 
         assert result.success is True
         assert result.affected_count == 1
+        mock_copy.assert_not_called()
+        assert not (cache_root / "Film.mkv").exists()
 
-    @patch("os.path.getsize")
-    @patch("os.path.exists")
-    @patch("os.remove")
-    @patch("os.makedirs")
-    def test_no_backup_copies_to_array_and_verifies(
-        self, mock_makedirs, mock_remove, mock_exists, mock_getsize, tmp_path
-    ):
+    def test_no_backup_copies_to_array_and_verifies(self, tmp_path):
         """No backup/duplicate: copy to array, verify size, then delete cache."""
         svc = _make_service(tmp_path)
-        mock_copy = MagicMock()
+        cache_root, array_root = self._real_dirs(svc, tmp_path)
+        (cache_root / "Film (2020)").mkdir()
+        (cache_root / "Film (2020)" / "Film.mkv").write_bytes(b"film" * 100)
 
-        cache_path = "/mnt/cache/media/Movies/Film.mkv"
-        array_path = "/mnt/user0/media/Movies/Film.mkv"
-
-        def exists_side_effect(path):
-            if path.endswith(".plexcached"):
-                return False
-            if path == array_path:
-                return mock_copy.called
-            if path == cache_path:
-                return True
-            return False
-
-        mock_exists.side_effect = exists_side_effect
-        mock_getsize.return_value = 5000  # same size for both
-
-        with patch.object(svc, "_copy_with_progress", mock_copy):
-            result = svc.sync_to_array([cache_path], dry_run=False)
+        result = svc.sync_to_array([str(cache_root / "Film (2020)" / "Film.mkv")], dry_run=False)
 
         assert result.success is True
         assert result.affected_count == 1
-        mock_copy.assert_called_once()
-        mock_remove.assert_called_once_with(cache_path)
+        assert (array_root / "Film (2020)" / "Film.mkv").read_bytes() == b"film" * 100
+        assert not (array_root / "Film (2020)" / "Film.mkv.pc-part").exists()
+        assert not (cache_root / "Film (2020)" / "Film.mkv").exists()
 
-    @patch("os.path.getsize")
-    @patch("os.path.exists")
-    @patch("os.makedirs")
-    def test_size_mismatch_does_not_delete_cache(
-        self, mock_makedirs, mock_exists, mock_getsize, tmp_path
-    ):
-        """If copy produces a size mismatch, cache must NOT be deleted."""
+    def test_size_mismatch_does_not_delete_cache(self, tmp_path):
+        """If the copy comes out the wrong size, cache must NOT be deleted."""
         svc = _make_service(tmp_path)
-        mock_copy = MagicMock()
+        cache_root, array_root = self._real_dirs(svc, tmp_path)
+        (cache_root / "Film.mkv").write_bytes(b"film" * 100)
 
-        cache_path = "/mnt/cache/media/Movies/Film.mkv"
-        array_path = "/mnt/user0/media/Movies/Film.mkv"
+        def short_copy(src, dst, cb=None):
+            with open(dst, "wb") as f:
+                f.write(b"film")
 
-        def exists_side_effect(path):
-            if path.endswith(".plexcached"):
-                return False
-            if path == array_path:
-                return mock_copy.called
-            if path == cache_path:
-                return True
-            return False
+        with patch.object(svc, "_copy_with_progress", side_effect=short_copy):
+            result = svc.sync_to_array([str(cache_root / "Film.mkv")], dry_run=False)
 
-        mock_exists.side_effect = exists_side_effect
-        # Different sizes!
-        mock_getsize.side_effect = lambda p: 5000 if p == cache_path else 3000
-
-        with patch.object(svc, "_copy_with_progress", mock_copy):
-            result = svc.sync_to_array([cache_path], dry_run=False)
-
-        # Should report the mismatch error, file not counted as affected
         assert result.affected_count == 0
         assert any("Size mismatch" in e for e in result.errors)
+        assert (cache_root / "Film.mkv").exists()
+        assert not (array_root / "Film.mkv").exists()
+        assert not (array_root / "Film.mkv.pc-part").exists()
+
+    def test_failed_copy_keeps_old_array_version_and_cache(self, tmp_path):
+        """A copy that fails part-way over an older array copy leaves both versions intact."""
+        svc = _make_service(tmp_path)
+        cache_root, array_root = self._real_dirs(svc, tmp_path)
+        (cache_root / "Film.mkv").write_bytes(b"new version" * 100)
+        (array_root / "Film.mkv.plexcached").write_bytes(b"old" * 100)
+
+        def failing_copy(src, dst, cb=None):
+            with open(dst, "wb") as f:
+                f.write(b"new")
+            raise OSError("disk full")
+
+        with patch.object(svc, "_copy_with_progress", side_effect=failing_copy):
+            result = svc.sync_to_array([str(cache_root / "Film.mkv")], dry_run=False)
+
+        assert result.affected_count == 0
+        assert (cache_root / "Film.mkv").read_bytes() == b"new version" * 100
+        assert (array_root / "Film.mkv.plexcached").read_bytes() == b"old" * 100
+        assert not (array_root / "Film.mkv").exists()
+        assert not (array_root / "Film.mkv.pc-part").exists()
 
 
 # ============================================================================
