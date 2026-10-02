@@ -192,7 +192,7 @@
     <!-- Bulk Actions -->
     <div class="flex gap-1" style="flex-wrap: wrap;">
         <div id="dup-bulk-actions" class="flex gap-1" style="display: none;">
-            <span class="text-muted">Selected: <strong id="dup-selected-count">0</strong></span>
+            <span class="text-muted">Selected: <strong id="dup-selected-count">0</strong><span id="dup-selected-size"></span></span>
             <button class="btn btn-sm btn-secondary" onclick="deleteSelectedDuplicates(true)">
                 <i data-lucide="eye"></i> Preview
             </button>
@@ -294,7 +294,7 @@
                             </thead>
                             <tbody>
                                 {% for file in item.files %}
-                                <tr>
+                                <tr data-size="{{ file.size }}">
                                     <td>
                                         {% if file.is_keeper is not true %}
                                         <input type="checkbox" class="dup-file-checkbox" value="{{ file.fs_path }}" onchange="toggleDuplicateFile(this)">

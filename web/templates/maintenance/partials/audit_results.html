@@ -119,7 +119,7 @@
         </p>
         <!-- Bulk Actions -->
         <div id="untracked-bulk-actions" class="flex gap-1 mb-1" style="display: none;">
-            <span class="text-muted">Selected: <strong id="untracked-selected-count">0</strong></span>
+            <span class="text-muted">Selected: <strong id="untracked-selected-count">0</strong><span id="untracked-selected-size"></span></span>
             <button class="btn btn-sm btn-success" onclick="keepOnCacheSelected()"
                     title="Keep on cache once — backs up to the array and excludes from the mover. Not a pin: won't re-cache automatically.">
                 <i data-lucide="hard-drive"></i> Keep on Cache
@@ -155,7 +155,7 @@
                     {% set file = group.primary %}
                     {% set children = group.children %}
                     {% set group_size = file.size + children|sum(attribute='size') if children else file.size %}
-                    <tr data-filename="{{ file.filename|lower }}" data-size="{{ group_size }}" data-age="{{ file.age_days }}" data-has-backup="{{ file.has_plexcached_backup|lower }}" data-has-dup="{{ file.has_array_duplicate|lower }}"{% if children %} class="untracked-group-row" onclick="toggleUntrackedGroup(this, event)" style="cursor: pointer;"{% endif %}>
+                    <tr data-filename="{{ file.filename|lower }}" data-size="{{ group_size }}" data-file-size="{{ file.size }}" data-age="{{ file.age_days }}" data-has-backup="{{ file.has_plexcached_backup|lower }}" data-has-dup="{{ file.has_array_duplicate|lower }}"{% if children %} class="untracked-group-row" onclick="toggleUntrackedGroup(this, event)" style="cursor: pointer;"{% endif %}>
                         <td>
                             <input type="checkbox" class="untracked-checkbox" value="{{ file.cache_path }}" onchange="toggleUntrackedFile(this){% if children %}; toggleGroupCheckbox(this){% endif %}" data-has-backup="{{ file.has_plexcached_backup|lower }}" data-has-dup="{{ file.has_array_duplicate|lower }}">
                         </td>
@@ -258,7 +258,7 @@
         <!-- Bulk Actions -->
         <div class="flex gap-1 mb-1">
             <div id="orphaned-bulk-actions" class="flex gap-1" style="display: none;">
-                <span class="text-muted">Selected: <strong id="orphaned-selected-count">0</strong></span>
+                <span class="text-muted">Selected: <strong id="orphaned-selected-count">0</strong><span id="orphaned-selected-size"></span></span>
                 <button id="restore-selected-btn" class="btn btn-sm btn-primary" onclick="restoreOrphanedSelected(false)" style="{% if orphaned_count == 0 %}display: none;{% endif %}">
                     <i data-lucide="archive-restore"></i> Restore
                 </button>
