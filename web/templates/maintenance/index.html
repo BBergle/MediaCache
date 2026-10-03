@@ -119,19 +119,6 @@ function appendPathsToForm(formData, paths) {
     formData.append('paths_json', JSON.stringify(Array.from(paths)));
 }
 
-// Format a byte count like core.system_utils.format_bytes (1024-based, 2 decimals)
-// so the pre-action selection size matches the size shown once the operation runs.
-function formatBytes(bytes) {
-    let size = Number(bytes) || 0;
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    let i = 0;
-    while (size >= 1024 && i < units.length - 1) {
-        size /= 1024;
-        i++;
-    }
-    return i === 0 ? Math.round(size) + ' B' : size.toFixed(2) + ' ' + units[i];
-}
-
 // Total size of the checked boxes matching `selector`. Every checkbox is one file, so the
 // size comes from its own row. A group row's data-size is the whole group (primary + children,
 // used for sorting), so group rows expose their own file in data-file-size to avoid
