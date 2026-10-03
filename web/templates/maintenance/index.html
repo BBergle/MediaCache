@@ -137,7 +137,14 @@ function sumCheckedSize(selector) {
 // Write " · 42.93 GB" next to a "Selected: N" counter (empty when no size is known).
 function setSelectedSize(spanId, bytes) {
     const span = document.getElementById(spanId);
-    if (span) span.textContent = bytes > 0 ? ' \u00b7 ' + formatBytes(bytes) : '';
+    if (!span) return;
+    // The size is only a hint: if formatting ever fails (e.g. a cached app.js from before
+    // formatBytes() moved there), show nothing instead of breaking the selection itself.
+    try {
+        span.textContent = bytes > 0 ? ' \u00b7 ' + formatBytes(bytes) : '';
+    } catch (e) {
+        span.textContent = '';
+    }
 }
 
 // Selected items tracking
