@@ -118,8 +118,8 @@
             These files are on cache but not managed by PlexCache. {% if is_unraid %}The Unraid mover will handle them normally.{% else %}They will not be automatically moved.{% endif %} Use the actions below to decide what happens to them:
         </p>
         <!-- Bulk Actions -->
-        <div id="untracked-bulk-actions" class="flex gap-1 mb-1" style="display: none;">
-            <span class="text-muted">Selected: <strong id="untracked-selected-count">0</strong><span id="untracked-selected-size"></span></span>
+        <div id="untracked-bulk-actions" style="display: none; flex-direction: column; align-items: flex-start; gap: 0.5rem; margin-bottom: 0;">
+            <div class="flex gap-1">
             <button class="btn btn-sm btn-success" onclick="keepOnCacheSelected()"
                     title="Keep on cache once — backs up to the array and excludes from the mover. Not a pin: won't re-cache automatically.">
                 <i data-lucide="hard-drive"></i> Keep on Cache
@@ -128,6 +128,8 @@
                     title="Move these files off the cache drive to the array, freeing cache space.">
                 <i data-lucide="database"></i> Move to Array
             </button>
+            </div>
+            <div style="font-size: 1rem; line-height: 1.3;"><span class="text-muted">Selected:</span> <strong id="untracked-selected-count">0</strong><span id="untracked-selected-size" style="font-weight: 600;"></span></div>
         </div>
     </div>
     <div class="card-body" style="padding: 0;">
@@ -256,15 +258,17 @@
             {% endif %}
         </p>
         <!-- Bulk Actions -->
-        <div class="flex gap-1 mb-1">
-            <div id="orphaned-bulk-actions" class="flex gap-1" style="display: none;">
-                <span class="text-muted">Selected: <strong id="orphaned-selected-count">0</strong><span id="orphaned-selected-size"></span></span>
+        <div class="flex gap-1 mb-1" style="align-items: flex-start;">
+            <div id="orphaned-bulk-actions" style="display: none; flex-direction: column; align-items: flex-start; gap: 0.5rem;">
+                <div class="flex gap-1">
                 <button id="restore-selected-btn" class="btn btn-sm btn-primary" onclick="restoreOrphanedSelected(false)" style="{% if orphaned_count == 0 %}display: none;{% endif %}">
                     <i data-lucide="archive-restore"></i> Restore
                 </button>
                 <button class="btn btn-sm btn-danger" onclick="deleteOrphanedSelected(false)">
                     <i data-lucide="trash-2"></i> Delete
                 </button>
+                </div>
+                <div style="font-size: 1rem; line-height: 1.3;"><span class="text-muted">Selected:</span> <strong id="orphaned-selected-count">0</strong><span id="orphaned-selected-size" style="font-weight: 600;"></span></div>
             </div>
             <div class="flex gap-1" style="margin-left: auto;">
                 {% if orphaned_count > 0 %}

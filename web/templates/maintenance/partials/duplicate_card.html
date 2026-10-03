@@ -172,17 +172,18 @@
         {% if scan_results.multi_version_count > 0 %}
         <span class="badge badge-muted" title="Intentional 4K + HD pairs — not duplicates">{{ scan_results.multi_version_count }} multi-version</span>
         {% endif %}
-        <span class="text-muted" style="margin-left: auto; font-size: 0.85rem;">
-            Scanned {{ scan_results.scanned_at | format_datetime }}
+        <span style="margin-left: auto; display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; column-gap: 1rem; row-gap: 0.25rem; font-size: 0.85rem;">
+            {% if arr_configured and scan_results.arr_enabled %}
+            <span style="color: var(--success); white-space: nowrap;">
+                <i data-lucide="check-circle" style="width: 14px; height: 14px; vertical-align: middle;"></i>
+                Sonarr/Radarr integration active
+            </span>
+            {% endif %}
+            <span class="text-muted">Scanned {{ scan_results.scanned_at | format_datetime }}</span>
         </span>
     </div>
 
-    {% if arr_configured and scan_results.arr_enabled %}
-    <p style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
-        <i data-lucide="check-circle" style="width: 14px; height: 14px; color: var(--success); vertical-align: middle;"></i>
-        <span style="color: var(--success);">Sonarr/Radarr integration active</span>
-    </p>
-    {% elif not arr_configured %}
+    {% if not arr_configured %}
     <p style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
         <i data-lucide="info" style="width: 14px; height: 14px; color: var(--plex-text-muted); vertical-align: middle;"></i>
         <span class="text-muted">Configure <a href="/settings/integrations" style="color: var(--plex-orange);">Sonarr/Radarr</a> to auto-identify orphans</span>
@@ -190,15 +191,17 @@
     {% endif %}
 
     <!-- Bulk Actions -->
-    <div class="flex gap-1" style="flex-wrap: wrap;">
-        <div id="dup-bulk-actions" class="flex gap-1" style="display: none;">
-            <span class="text-muted">Selected: <strong id="dup-selected-count">0</strong><span id="dup-selected-size"></span></span>
+    <div class="flex gap-1" style="flex-wrap: wrap; align-items: flex-start;">
+        <div id="dup-bulk-actions" style="display: none; flex-direction: column; align-items: flex-start; gap: 0.5rem; margin-bottom: 0;">
+            <div class="flex gap-1">
             <button class="btn btn-sm btn-secondary" onclick="deleteSelectedDuplicates(true)">
                 <i data-lucide="eye"></i> Preview
             </button>
             <button class="btn btn-sm btn-danger" onclick="deleteSelectedDuplicates(false)">
                 <i data-lucide="trash-2"></i> Delete Selected
             </button>
+            </div>
+            <div style="font-size: 1rem; line-height: 1.3;"><span class="text-muted">Selected:</span> <strong id="dup-selected-count">0</strong><span id="dup-selected-size" style="font-weight: 600;"></span></div>
         </div>
         <div class="flex gap-1" style="margin-left: auto;">
             {% if scan_results.arr_enabled and scan_results.orphan_count > 0 %}
