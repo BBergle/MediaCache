@@ -423,7 +423,7 @@ footer {
     font-size: 0.8rem;
     font-weight: 600;
     text-decoration: none;
-    color: var(--plex-orange, #e5a00d);
+    color: var(--plex-orange-text);
     margin-right: 0.75rem;
     animation: indicator-pulse 1.5s ease-in-out infinite;
     transition: background-color 0.2s, border-color 0.2s;
@@ -1487,7 +1487,7 @@ footer {
 /* Light theme overrides */
 [data-theme="light"] .activity-filter-pill {
     border-color: rgba(0, 0, 0, 0.15);
-    color: rgba(0, 0, 0, 0.5);
+    color: var(--plex-text-muted);
 }
 
 [data-theme="light"] .activity-filter-pill:hover {
@@ -1565,11 +1565,11 @@ footer {
 }
 .run-stat-pill--cached {
     background: color-mix(in srgb, var(--plex-success) 15%, transparent);
-    color: var(--plex-success);
+    color: var(--plex-success-text);
 }
 .run-stat-pill--restored {
     background: color-mix(in srgb, var(--plex-info) 15%, transparent);
-    color: var(--plex-info);
+    color: var(--plex-info-text);
 }
 .run-stat-pill--size {
     background: var(--plex-bg-hover);
@@ -1848,7 +1848,7 @@ footer {
     border-radius: 2px;
 }
 [data-theme="light"] .ss-result-row mark {
-    color: var(--plex-orange-dark);
+    color: var(--plex-orange-text);
     background: rgba(229, 160, 13, 0.30);
 }
 .ss-result-arrow {

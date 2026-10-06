@@ -9,7 +9,7 @@
     <div class="card-body">
         <form id="cache-settings-form" hx-put="/settings/cache" hx-target="#settings-alert-container" hx-swap="innerHTML">
 
-            <h3 style="font-size: 1rem; color: var(--plex-orange); margin-bottom: 1rem;">
+            <h3 style="font-size: 1rem; color: var(--plex-orange-text); margin-bottom: 1rem;">
                 <i data-lucide="search" style="width: 18px; height: 18px; vertical-align: middle;"></i>
                 Content Discovery
             </h3>
@@ -64,7 +64,7 @@
 
             <hr style="border-color: var(--plex-border); margin: 1.5rem 0;">
 
-            <h3 style="font-size: 1rem; color: var(--plex-orange); margin-bottom: 1rem;">
+            <h3 style="font-size: 1rem; color: var(--plex-orange-text); margin-bottom: 1rem;">
                 <i data-lucide="bookmark" style="width: 18px; height: 18px; vertical-align: middle;"></i>
                 Watchlist
             </h3>
@@ -109,7 +109,7 @@
 
             <hr style="border-color: var(--plex-border); margin: 1.5rem 0;">
 
-            <h3 style="font-size: 1rem; color: var(--plex-orange); margin-bottom: 1rem;">
+            <h3 style="font-size: 1rem; color: var(--plex-orange-text); margin-bottom: 1rem;">
                 <i data-lucide="clock" style="width: 18px; height: 18px; vertical-align: middle;"></i>
                 Retention
             </h3>
@@ -153,7 +153,7 @@
 
             <hr style="border-color: var(--plex-border); margin: 1.5rem 0;">
 
-            <h3 style="font-size: 1rem; color: var(--plex-orange); margin-bottom: 1rem;">
+            <h3 style="font-size: 1rem; color: var(--plex-orange-text); margin-bottom: 1rem;">
                 <i data-lucide="file-cog" style="width: 18px; height: 18px; vertical-align: middle;"></i>
                 File Handling
             </h3>
@@ -279,7 +279,7 @@
 
             <hr style="border-color: var(--plex-border); margin: 1.5rem 0;">
 
-            <h3 style="font-size: 1rem; color: var(--plex-orange); margin-bottom: 1rem;">
+            <h3 style="font-size: 1rem; color: var(--plex-orange-text); margin-bottom: 1rem;">
                 <i data-lucide="hard-drive" style="width: 18px; height: 18px; vertical-align: middle;"></i>
                 Storage Limits
             </h3>
@@ -302,7 +302,7 @@
                     ZFS detected: Auto-detected value ({{ drive_info.total_display | default('Unknown') }}) may not reflect true pool capacity. Enter your pool size above.
                 </div>
                 {% else %}
-                <div id="drive_size_display" class="form-hint" style="color: var(--plex-orange); margin-top: 0.25rem;">
+                <div id="drive_size_display" class="form-hint" style="color: var(--plex-orange-text); margin-top: 0.25rem;">
                     {% if drive_info.is_manual_override %}
                     Using manual size: {{ drive_info.total_display }}
                     {% else %}
@@ -321,7 +321,7 @@
                            placeholder="500GB or 75%"
                            oninput="updateCacheCalculations()">
                     <div class="form-hint">Maximum <strong>total drive usage</strong> before PlexCache stops caching (e.g., 500GB or 75%). Includes all files on the drive, not just PlexCache-managed files. Leave empty for no cap.</div>
-                    <div id="cache_limit_calculated" class="form-hint" style="color: var(--plex-orange); margin-top: 0.25rem;"></div>
+                    <div id="cache_limit_calculated" class="form-hint" style="color: var(--plex-orange-text); margin-top: 0.25rem;"></div>
                     <div id="cache_limit_warning" class="form-hint" style="display: none; color: var(--plex-error); margin-top: 0.25rem;">
                         <i data-lucide="alert-triangle" style="width: 14px; height: 14px; vertical-align: middle;"></i>
                         <span id="cache_limit_warning_text"></span>
@@ -337,7 +337,7 @@
                            placeholder="50GB or 5%"
                            oninput="updateCacheCalculations()">
                     <div class="form-hint">Safety floor: always keep at least this much free space on the drive (e.g., 50GB or 5%). Useful when other apps also write to the cache drive. Leave empty to disable.</div>
-                    <div id="min_free_space_calculated" class="form-hint" style="color: var(--plex-orange); margin-top: 0.25rem;"></div>
+                    <div id="min_free_space_calculated" class="form-hint" style="color: var(--plex-orange-text); margin-top: 0.25rem;"></div>
                     <div id="min_free_space_warning" class="form-hint" style="display: none; color: var(--plex-error); margin-top: 0.25rem;">
                         <i data-lucide="alert-triangle" style="width: 14px; height: 14px; vertical-align: middle;"></i>
                         <span id="min_free_space_warning_text"></span>
@@ -354,7 +354,7 @@
                        placeholder="500GB or 75%"
                        oninput="updateCacheCalculations()">
                 <div class="form-hint">Maximum space for <strong>PlexCache-managed files only</strong> (excludes other apps on the drive). Unlike Cache Limit which counts all drive usage. Leave empty to disable.</div>
-                <div id="plexcache_quota_calculated" class="form-hint" style="color: var(--plex-orange); margin-top: 0.25rem;"></div>
+                <div id="plexcache_quota_calculated" class="form-hint" style="color: var(--plex-orange-text); margin-top: 0.25rem;"></div>
                 <div id="plexcache_quota_warning" class="form-hint" style="display: none; color: var(--plex-error); margin-top: 0.25rem;">
                     <i data-lucide="alert-triangle" style="width: 14px; height: 14px; vertical-align: middle;"></i>
                     <span id="plexcache_quota_warning_text"></span>
@@ -363,7 +363,7 @@
 
             <hr style="border-color: var(--plex-border); margin: 1.5rem 0;">
 
-            <h3 style="font-size: 1rem; color: var(--plex-orange); margin-bottom: 1rem;">
+            <h3 style="font-size: 1rem; color: var(--plex-orange-text); margin-bottom: 1rem;">
                 <i data-lucide="trash-2" style="width: 18px; height: 18px; vertical-align: middle;"></i>
                 Eviction
             </h3>
@@ -386,7 +386,7 @@
                                value="{{ settings.cache_eviction_threshold_percent | default(95) }}" min="50" max="100"
                                oninput="updateCacheCalculations()">
                         <div class="form-hint">Start evicting low-priority files when total drive usage exceeds this percentage of your Cache Limit</div>
-                        <div id="eviction_threshold_calculated" class="form-hint" style="color: var(--plex-orange); margin-top: 0.25rem;"></div>
+                        <div id="eviction_threshold_calculated" class="form-hint" style="color: var(--plex-orange-text); margin-top: 0.25rem;"></div>
                     </div>
 
                     <div class="form-group" data-setting-id="eviction_min_priority">
@@ -406,7 +406,7 @@
 
             <hr style="border-color: var(--plex-border); margin: 1.5rem 0;">
 
-            <h3 style="font-size: 1rem; color: var(--plex-orange); margin-bottom: 1rem;">
+            <h3 style="font-size: 1rem; color: var(--plex-orange-text); margin-bottom: 1rem;">
                 <i data-lucide="sliders" style="width: 18px; height: 18px; vertical-align: middle;"></i>
                 Advanced
             </h3>
@@ -495,7 +495,7 @@
 
         <hr style="border-color: var(--plex-border); margin: 1.5rem 0;">
 
-        <h3 style="font-size: 1rem; color: var(--plex-orange); margin-bottom: 1rem;">
+        <h3 style="font-size: 1rem; color: var(--plex-orange-text); margin-bottom: 1rem;">
             <i data-lucide="list" style="width: 18px; height: 18px; vertical-align: middle;"></i>
             Currently Pinned
         </h3>

@@ -526,7 +526,7 @@ function repairAllRepairable(isDryRun = false) {
     const action = isDryRun ? 'Preview' : 'Repair';
     const message = `
         <div class="confirm-section">
-            <h4 style="margin: 0 0 0.5rem 0; color: var(--plex-orange);">
+            <h4 style="margin: 0 0 0.5rem 0; color: var(--plex-orange-text);">
                 <i data-lucide="wrench" style="width: 18px; height: 18px; vertical-align: middle;"></i>
                 ${action} All Repairable Backups
             </h4>
@@ -715,7 +715,7 @@ function updateDuplicateActions() {
 function startDuplicateScan() {
     const message = `
         <div class="confirm-section">
-            <h4 style="margin: 0 0 0.5rem 0; color: var(--plex-orange);">
+            <h4 style="margin: 0 0 0.5rem 0; color: var(--plex-orange-text);">
                 <i data-lucide="scan-search" style="width: 18px; height: 18px; vertical-align: middle;"></i>
                 Scan Plex Libraries
             </h4>

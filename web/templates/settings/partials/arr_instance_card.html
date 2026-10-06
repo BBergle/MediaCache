@@ -54,7 +54,7 @@
             <div class="card-body">
                 <form hx-put="/settings/integrations/instances/{{ index }}" hx-target="#arr-instance-{{ index }}" hx-swap="outerHTML">
                     <div class="flex items-center justify-between mb-2">
-                        <strong style="color: var(--plex-orange);">Editing: {{ instance.name }}</strong>
+                        <strong style="color: var(--plex-orange-text);">Editing: {{ instance.name }}</strong>
                         <button type="button" class="btn btn-sm btn-secondary" onclick="toggleInstanceEdit({{ index }})">
                             <i data-lucide="x"></i> Cancel
                         </button>

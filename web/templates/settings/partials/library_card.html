@@ -84,7 +84,7 @@
                         </div>
                         {% if is_docker and mapping.host_cache_path and mapping.host_cache_path != mapping.cache_path %}
                         <div>
-                            <span class="text-muted" style="color: var(--plex-orange);">Host Cache:</span><br>
+                            <span class="text-muted" style="color: var(--plex-orange-text);">Host Cache:</span><br>
                             <code>{{ mapping.host_cache_path }}</code>
                         </div>
                         {% endif %}
@@ -166,7 +166,7 @@
 
                             {% if is_docker %}
                             <div class="form-group mb-1">
-                                <label style="color: var(--plex-orange);">Host Cache Path (Docker)</label>
+                                <label style="color: var(--plex-orange-text);">Host Cache Path (Docker)</label>
                                 <input type="text" name="host_cache_path_{{ loop.index0 }}"
                                        value="{{ mapping.host_cache_path or mapping.cache_path or '' }}"
                                        class="path-browse-input"
