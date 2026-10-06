@@ -107,3 +107,33 @@ if (typeof window.formatBytes !== 'function') {
         return i === 0 ? Math.round(size) + ' B' : size.toFixed(2) + ' ' + units[i];
     };
 }
+
+// Operation pill keyboard access. Pills are focusable (tabindex="0"); Enter or
+// Space acts like a click (expand / detail / collapse), Escape collapses and
+// returns focus to the pill. Delegated once here because the pill markup is
+// swapped by HTMX every few seconds.
+document.addEventListener('keydown', function(e) {
+    var banner = document.getElementById('global-operation-banner');
+    if (!banner || !banner.contains(e.target)) return;
+    var pill = e.target.classList && e.target.classList.contains('di-pill') ? e.target : null;
+    if (pill && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        pill.click();
+    } else if (e.key === 'Escape' && typeof diSmoothSetState === 'function') {
+        diSmoothSetState('false');
+        var focusPill = banner.querySelector('.di-pill');
+        if (focusPill) focusPill.focus();
+    }
+});
+
+// The Dashboard header used to keep its own Verbose toggle under a separate key.
+// Carry a saved preference over to the pill's setting once, then drop the old key.
+try {
+    var legacyVerbose = localStorage.getItem('plexcache_dashboard_verbose');
+    if (legacyVerbose !== null) {
+        if (localStorage.getItem('verbose_mode') === null) {
+            localStorage.setItem('verbose_mode', legacyVerbose === 'true' ? 'true' : 'false');
+        }
+        localStorage.removeItem('plexcache_dashboard_verbose');
+    }
+} catch (e) { /* storage unavailable: nothing to migrate */ }

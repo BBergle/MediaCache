@@ -47,6 +47,7 @@ function diSetExpandState(state) {
     // Also apply classes for JS-generated pills (completion banners)
     var pill = document.querySelector('#global-operation-banner .di-pill');
     if (pill) {
+        pill.setAttribute('aria-expanded', state === 'tier2' || state === 'tier3' ? 'true' : 'false');
         pill.classList.remove('di-expanded', 'di-detail');
         if (state === 'tier2') pill.classList.add('di-expanded');
         if (state === 'tier3') { pill.classList.add('di-expanded'); pill.classList.add('di-detail'); }
@@ -452,7 +453,7 @@ document.addEventListener('htmx:afterSwap', function(evt) {
 {% set poll_interval = '8s' if (blocked_message is defined and blocked_message) else '2s' %}
 <div class="di-pill di-pill--{{ color_mod }} di-glow" data-state="maint-running"
      hx-get="/api/operation-banner" hx-trigger="every {{ poll_interval }}" hx-swap="innerHTML" hx-target="#global-operation-banner"
-     onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()">
+     onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()" tabindex="0">
 
     <!-- Compact view -->
     <div class="di-pill__compact">
@@ -618,7 +619,7 @@ document.addEventListener('htmx:afterSwap', function(evt) {
     document.getElementById('global-operation-banner').innerHTML = `
         <div class="di-pill di-pill--${colorMod}" data-state="maint-completed"
              hx-get="/api/operation-banner" hx-trigger="every 10s" hx-swap="innerHTML" hx-target="#global-operation-banner"
-             onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()">
+             onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()" tabindex="0">
             <div class="di-pill__compact">
                 <div class="di-pill__left">
                     <div class="di-icon"><i data-lucide="${iconName}" style="width: 14px; height: 14px;"></i></div>
@@ -722,7 +723,7 @@ function dismissMaintCompletionBanner() {
    MAINTENANCE FAILED — Red pill
    ═══════════════════════════════════════════════════════════ #}
 <div class="di-pill di-pill--error" data-state="maint-failed"
-     onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()">
+     onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()" tabindex="0">
     <div class="di-pill__compact">
         <div class="di-pill__left">
             <div class="di-icon"><i data-lucide="x-circle" style="width: 14px; height: 14px;"></i></div>
@@ -778,7 +779,7 @@ function dismissMaintCompletionBanner() {
 
 <div class="di-pill di-pill--{{ color_mod }} di-glow" data-state="op-running-{{ color_mod }}"
      hx-get="/api/operation-banner" hx-trigger="every {{ poll_interval }}" hx-swap="innerHTML" hx-target="#global-operation-banner"
-     onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()">
+     onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()" tabindex="0">
 
     <!-- Compact view -->
     <div class="di-pill__compact">
@@ -1121,7 +1122,7 @@ function dismissMaintCompletionBanner() {
     document.getElementById('global-operation-banner').innerHTML = `
         <div class="di-pill di-pill--${colorMod}" data-state="op-completed"
              hx-get="/api/operation-banner" hx-trigger="every 10s" hx-swap="innerHTML" hx-target="#global-operation-banner"
-             onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()">
+             onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()" tabindex="0">
             <div class="di-pill__compact">
                 <div class="di-pill__left">
                     <div class="di-icon"><i data-lucide="${iconName}" style="width: 14px; height: 14px;"></i></div>
@@ -1216,7 +1217,7 @@ function dismissCompletionBanner() {
    OPERATION FAILED — Red pill
    ═══════════════════════════════════════════════════════════ #}
 <div class="di-pill di-pill--error" data-state="op-failed"
-     onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()">
+     onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()" tabindex="0">
     <div class="di-pill__compact">
         <div class="di-pill__left">
             <div class="di-icon"><i data-lucide="x-circle" style="width: 14px; height: 14px;"></i></div>
@@ -1254,7 +1255,7 @@ function dismissCompletionBanner() {
    ═══════════════════════════════════════════════════════════ #}
 <div class="di-pill di-pill--maintenance" data-state="queue-countdown"
      hx-get="/api/operation-banner" hx-trigger="every 2s" hx-swap="innerHTML" hx-target="#global-operation-banner"
-     onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()">
+     onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()" tabindex="0">
     <div class="di-pill__compact">
         <div class="di-pill__left">
             <div class="di-icon"><i data-lucide="list-ordered" style="width: 14px; height: 14px;"></i></div>
@@ -1344,7 +1345,7 @@ function dismissCompletionBanner() {
    ═══════════════════════════════════════════════════════════ #}
 <div class="di-pill di-pill--idle" data-state="queue-paused"
      hx-get="/api/operation-banner" hx-trigger="every 10s" hx-swap="innerHTML" hx-target="#global-operation-banner"
-     onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()">
+     onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()" tabindex="0">
     <div class="di-pill__compact">
         <div class="di-pill__left">
             <div class="di-icon" style="background: color-mix(in srgb, var(--plex-warning) 15%, transparent); color: var(--plex-warning);"><i data-lucide="pause" style="width: 14px; height: 14px;"></i></div>
@@ -1406,7 +1407,7 @@ function dismissCompletionBanner() {
 {% if scheduler_status is defined and scheduler_status and scheduler_status.next_run_relative %}
 <div class="di-pill di-pill--idle" id="idle-countdown-pill" data-state="idle"
      hx-get="/api/operation-banner" hx-trigger="every 10s" hx-swap="innerHTML" hx-target="#global-operation-banner"
-     onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()">
+     onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()" tabindex="0">
 
     <!-- Compact view -->
     <div class="di-pill__compact">
@@ -1416,6 +1417,11 @@ function dismissCompletionBanner() {
         </div>
         <div class="di-pill__right">
             <span class="di-metric" style="color: var(--di-idle-value); font-weight: 400; font-size: 0.8rem;">{{ scheduler_status.next_run_relative }}</span>
+            <button type="button" class="di-btn di-btn--primary di-btn--run" title="Run now" aria-label="Run now"
+                    onmouseenter="clearTimeout(_diHoverTimer);" onmouseleave="diHoverIn();"
+                    onclick="event.stopPropagation(); diTriggerRun(false);">
+                <i data-lucide="play"></i>Run
+            </button>
         </div>
     </div>
 
@@ -1474,13 +1480,20 @@ function diTriggerRun(dryRun) {
 {# ── No schedule configured — persistent "Ready" pill with quick actions ── #}
 <div class="di-pill di-pill--idle" id="idle-ready-pill" data-state="idle-ready"
      hx-get="/api/operation-banner" hx-trigger="every 10s" hx-swap="innerHTML" hx-target="#global-operation-banner"
-     onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()">
+     onmouseenter="diHoverIn()" onmouseleave="diHoverOut()" onclick="diPillClick()" tabindex="0">
 
     <!-- Compact view -->
     <div class="di-pill__compact">
         <div class="di-pill__left">
             <i data-lucide="play" style="width: 13px; height: 13px; color: var(--plex-orange); opacity: 0.6;"></i>
             <span style="font-size: 0.78rem; color:var(--di-t50);">PlexCache</span>
+        </div>
+        <div class="di-pill__right">
+            <button type="button" class="di-btn di-btn--primary di-btn--run" title="Run now" aria-label="Run now"
+                    onmouseenter="clearTimeout(_diHoverTimer);" onmouseleave="diHoverIn();"
+                    onclick="event.stopPropagation(); diTriggerRun(false);">
+                <i data-lucide="play"></i>Run
+            </button>
         </div>
     </div>
 

@@ -25,7 +25,6 @@ def dashboard(request: Request):
     operation_runner = get_operation_runner()
 
     # Only get operation status - stats will be lazy loaded
-    stats = {"is_running": operation_runner.is_running}
     op_status = operation_runner.get_status_dict()
 
     retention_hours = _get_activity_retention_hours()
@@ -36,7 +35,6 @@ def dashboard(request: Request):
         "dashboard.html",
         {
             "page_title": "Dashboard",
-            "stats": stats,
             "op_status": op_status,
             "retention_label": retention_label
         }

@@ -12,31 +12,6 @@
             <p>PlexCache-D Status Overview</p>
         </div>
     </div>
-    <div class="action-buttons">
-        <form id="run-form" style="display: inline-flex; align-items: center; gap: 0.75rem;"
-              hx-post="/operations/run"
-              hx-target="#global-operation-banner"
-              hx-swap="innerHTML">
-            <label class="switch" style="margin: 0;">
-                <input type="checkbox" id="verbose-toggle" name="verbose" value="true">
-                <span style="font-size: 0.85rem;">Verbose</span>
-            </label>
-            <input type="hidden" id="dry-run-input" name="dry_run" value="false">
-            <button type="submit" class="btn btn-primary"
-                    hx-indicator="#run-spinner"
-                    {% if stats.is_running %}disabled{% endif %}>
-                <span id="run-spinner" class="htmx-indicator spinner"></span>
-                <i data-lucide="play" class="htmx-hide-on-request"></i>
-                <span class="htmx-hide-on-request">Run Now</span>
-            </button>
-            <button type="button" class="btn btn-secondary"
-                    onclick="document.getElementById('dry-run-input').value='true'; document.getElementById('run-form').requestSubmit(); document.getElementById('dry-run-input').value='false';"
-                    {% if stats.is_running %}disabled{% endif %}>
-                <i data-lucide="eye"></i>
-                Dry Run
-            </button>
-        </form>
-    </div>
 </header>
 
 <!-- Config health warnings (issue #136) - empty unless a path_mapping issue is detected -->
@@ -125,27 +100,6 @@
 </div>
 
 <script>
-// Persist verbose toggle preference
-const VERBOSE_PREF_KEY = 'plexcache_dashboard_verbose';
-
-function loadVerbosePreference() {
-    const saved = localStorage.getItem(VERBOSE_PREF_KEY);
-    if (saved === 'true') {
-        document.getElementById('verbose-toggle').checked = true;
-    }
-}
-
-function saveVerbosePreference() {
-    const checked = document.getElementById('verbose-toggle').checked;
-    localStorage.setItem(VERBOSE_PREF_KEY, checked ? 'true' : 'false');
-}
-
-// Load preference on page load
-document.addEventListener('DOMContentLoaded', loadVerbosePreference);
-
-// Save preference when toggle changes
-document.getElementById('verbose-toggle').addEventListener('change', saveVerbosePreference);
-
 // ── Activity Runs (Option D run-grouped view) ──────────────────────────
 // Use `var` so re-execution after HTMX swap of recent_activity.html doesn't
 // throw on `const` redeclaration (the partial includes its own <script>).

@@ -652,6 +652,23 @@ footer {
     color: #000;
 }
 .di-btn--primary:hover { background: #f0b020; }
+/* Compact "Run" button on the idle pill (replaces the Dashboard header controls) */
+.di-btn--run {
+    padding: 0.25rem 0.65rem 0.25rem 0.55rem;
+    gap: 0.3rem;
+    border-radius: var(--plex-radius-lg);
+    font-size: 0.75rem;
+    font-weight: 700;
+}
+.di-btn--run svg { width: 11px; height: 11px; fill: currentColor; }
+@media (pointer: coarse) {
+    .di-btn--run { padding: 0.45rem 0.9rem 0.45rem 0.75rem; }
+}
+.di-pill:focus-visible,
+.di-btn:focus-visible {
+    outline: 2px solid var(--plex-orange);
+    outline-offset: 2px;
+}
 .di-btn--secondary {
     background: rgba(var(--di-on),0.08);
     color: var(--di-t70);
@@ -1879,7 +1896,7 @@ footer {
     border: 1px solid var(--plex-border);
     color: var(--plex-text);
     padding: 0.35rem 0.7rem;
-    border-radius: 999px;
+    border-radius: var(--plex-radius-lg);
     font-size: 0.82rem;
     cursor: pointer;
     transition: background 120ms ease, border-color 120ms ease;
