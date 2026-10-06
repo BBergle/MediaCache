@@ -474,13 +474,15 @@ footer {
     display: none;
 }
 
-/* Global Operation Banner - centered within content-wrapper */
+/* Global Operation Banner - centered within content-wrapper.
+   z-index 100: above page content, below the theme toggle (101), the sidebar (160)
+   and the mobile header (200), so it can never cover the navigation (#216). */
 #global-operation-banner {
     position: absolute;
     top: 0;
     left: 50%;
     transform: translateX(-50%);
-    z-index: 9999;
+    z-index: 100;
     pointer-events: none;
     display: flex;
     justify-content: center;
@@ -492,6 +494,28 @@ footer {
 
 #global-operation-banner > * {
     pointer-events: auto;
+}
+
+/* Fit mode (#216): the fit check in base.html adds .di-flow when the centred pill
+   would collide with the page title, the action buttons or the theme toggle (narrow
+   windows, high zoom, phones). The banner then becomes a full-width row of the page
+   header, ordered after the buttons, and moves back up as soon as there is room. */
+.page-header > #global-operation-banner.di-flow {
+    position: relative;
+    top: auto;
+    left: auto;
+    right: auto;
+    transform: none;
+    order: 1;
+    flex: 1 1 100%;
+    min-height: 38px;
+    align-items: flex-start;
+}
+
+/* Dashboard/Maintenance start with a light "Updated ... / Refresh" row instead of a
+   card, so in fit mode the space below the pill can be a bit tighter. */
+.content-wrapper:has(#global-operation-banner.di-flow) .stats-header {
+    margin-top: -0.75rem;
 }
 
 
@@ -1357,6 +1381,18 @@ footer {
     border-bottom-color: rgba(0,0,0,0.3);
 }
 
+/* Fit mode: the expanded pill stays an overlay on top of the page content */
+#global-operation-banner.di-flow[data-di-expanded="tier2"] .di-pill,
+#global-operation-banner.di-flow[data-di-expanded="tier3"] .di-pill,
+#global-operation-banner.di-flow .di-pill.di-expanded {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    translate: -50% 0;
+    width: max-content;
+    max-width: min(620px, calc(100vw - 2rem));
+}
+
 /* ── Mobile responsive ───────────────────────────────── */
 @media (max-width: 768px) {
     #global-operation-banner {
@@ -1374,6 +1410,24 @@ footer {
     .di-pill.di-expanded {
         max-width: none;
         min-width: auto;
+    }
+
+    /* The header is a column here: stretch the banner to the full width (the row
+       layout's flex-basis does not apply) so the pill and its overlay get a width. */
+    .page-header > #global-operation-banner.di-flow {
+        flex: 0 0 auto;
+        align-self: stretch;
+    }
+
+    #global-operation-banner.di-flow[data-di-expanded="tier2"] .di-pill,
+    #global-operation-banner.di-flow[data-di-expanded="tier3"] .di-pill,
+    #global-operation-banner.di-flow .di-pill.di-expanded {
+        left: 0;
+        right: 0;
+        translate: none;
+        width: auto;
+        min-width: 0;
+        max-width: none;
     }
 
     .di-pill__detail {
