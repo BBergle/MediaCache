@@ -45,6 +45,15 @@ def test_idle_pill_has_run_button(scheduler_status, pill_id):
     assert "clearTimeout(_diHoverTimer)" in compact
 
 
+def test_ready_pill_label_uses_app_icon():
+    """With a Run button on the pill, a play icon beside "PlexCache" would read as a second action."""
+    html = _render(scheduler_status=None)
+    pill = html[html.index('id="idle-ready-pill"'):]
+    left = pill[pill.index('class="di-pill__left"'):pill.index('class="di-pill__right"')]
+    assert 'data-lucide="hard-drive"' in left
+    assert 'data-lucide="play"' not in left
+
+
 def test_run_button_stops_click_reaching_the_pill():
     html = _render(scheduler_status={"next_run_relative": "32m"})
     button = re.search(r'<button[^>]*di-btn--run[^>]*>', html, re.S).group(0)
