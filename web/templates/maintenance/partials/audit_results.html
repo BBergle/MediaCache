@@ -919,7 +919,7 @@ function moveToArraySelected() {
         whatWillHappen = `
             <strong style="color: var(--warning);">What will happen:</strong>
             <ul style="margin: 0.5rem 0 0 1.5rem; padding: 0;">
-                <li><strong>${hasBackupCount}</strong> file(s) with existing backup/copy: Restore the array copy if it matches, otherwise copy the newer cache version over it, then delete cache copy</li>
+                <li><strong>${hasBackupCount}</strong> file(s) with existing backup/copy: Restore the array copy if it matches, otherwise copy the cache version over it, then delete cache copy. If the array copy is the newer one, both are left in place for review</li>
                 <li><strong>${noCopyCount}</strong> file(s) without backup: Copy to array first, then delete cache copy</li>
             </ul>
         `;
@@ -929,6 +929,7 @@ function moveToArraySelected() {
             <ol style="margin: 0.5rem 0 0 1.5rem; padding: 0;">
                 <li>If the array copy matches the cache copy, restore it (rename <code>.plexcached</code> back to original)</li>
                 <li>If the cache copy differs, it is the newer version: copy it to the array and verify</li>
+                <li>If the array copy was changed after the cache copy, leave both in place and report it for review</li>
                 <li>Delete the cache copy</li>
             </ol>
         `;
