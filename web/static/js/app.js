@@ -90,3 +90,20 @@ function toggleEditMode(index) {
     }
     lucide.createIcons();
 }
+
+// Format a byte count like core.system_utils.format_bytes (1024-based, 2 decimals,
+// e.g. "42.93 GB"), so sizes computed in the browser match the ones the server renders.
+// settings/cache.html declares its own GB/TB-only formatBytes() before this file loads;
+// leave that one alone so its output does not change.
+if (typeof window.formatBytes !== 'function') {
+    window.formatBytes = function formatBytes(bytes) {
+        var size = Number(bytes) || 0;
+        var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        var i = 0;
+        while (size >= 1024 && i < units.length - 1) {
+            size /= 1024;
+            i++;
+        }
+        return i === 0 ? Math.round(size) + ' B' : size.toFixed(2) + ' ' + units[i];
+    };
+}

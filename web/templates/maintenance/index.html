@@ -119,6 +119,34 @@ function appendPathsToForm(formData, paths) {
     formData.append('paths_json', JSON.stringify(Array.from(paths)));
 }
 
+// Total size of the checked boxes matching `selector`. Every checkbox is one file, so the
+// size comes from its own row. A group row's data-size is the whole group (primary + children,
+// used for sorting), so group rows expose their own file in data-file-size to avoid
+// counting the children twice when the group checkbox selects them too.
+function sumCheckedSize(selector) {
+    let total = 0;
+    document.querySelectorAll(selector + ':checked').forEach(cb => {
+        const row = cb.closest('tr');
+        if (!row) return;
+        const size = parseInt(row.dataset.fileSize || row.dataset.size, 10);
+        if (size > 0) total += size;
+    });
+    return total;
+}
+
+// Write " · 42.93 GB" next to a "Selected: N" counter (empty when no size is known).
+function setSelectedSize(spanId, bytes) {
+    const span = document.getElementById(spanId);
+    if (!span) return;
+    // The size is only a hint: if formatting ever fails (e.g. a cached app.js from before
+    // formatBytes() moved there), show nothing instead of breaking the selection itself.
+    try {
+        span.textContent = bytes > 0 ? ' \u00b7 ' + formatBytes(bytes) : '';
+    } catch (e) {
+        span.textContent = '';
+    }
+}
+
 // Selected items tracking
 let selectedUntrackedFiles = new Set();
 let selectedOrphanedBackups = new Set();
@@ -155,6 +183,7 @@ function updateUntrackedActions() {
         if (count > 0) {
             bulkActions.style.display = 'flex';
             countSpan.textContent = count;
+            setSelectedSize('untracked-selected-size', sumCheckedSize('.untracked-checkbox'));
         } else {
             bulkActions.style.display = 'none';
         }
@@ -193,6 +222,7 @@ function updateOrphanedActions() {
         if (count > 0) {
             bulkActions.style.display = 'flex';
             countSpan.textContent = count;
+            setSelectedSize('orphaned-selected-size', sumCheckedSize('.orphaned-checkbox'));
 
             // Only show restore button if at least one orphaned (not redundant) backup is selected
             if (restoreBtn) {
@@ -675,6 +705,7 @@ function updateDuplicateActions() {
         if (count > 0) {
             bulkActions.style.display = 'flex';
             if (countSpan) countSpan.textContent = count;
+            setSelectedSize('dup-selected-size', sumCheckedSize('.dup-file-checkbox'));
         } else {
             bulkActions.style.display = 'none';
         }
