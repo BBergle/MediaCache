@@ -85,7 +85,7 @@
             <div class="alert" style="margin-bottom: 1rem; background: rgba(229, 160, 13, 0.1); border: 1px solid rgba(229, 160, 13, 0.3); color: var(--plex-text);">
                 <i data-lucide="container" style="color: var(--plex-orange); flex-shrink: 0;"></i>
                 <div style="font-size: 0.9rem;">
-                    <strong style="color: var(--plex-orange);">Docker Detected: Host Cache Path</strong>
+                    <strong style="color: var(--plex-orange-text);">Docker Detected: Host Cache Path</strong>
                     <p style="margin: 0.25rem 0 0 0; color: var(--plex-text-muted);">
                         If your Docker volume mounts remap cache paths (e.g., <code>/mnt/cache_downloads:/mnt/cache</code>),
                         set <strong>Host Cache</strong> to what the host sees (e.g., <code>/mnt/cache_downloads/Movies/</code>).
@@ -125,7 +125,7 @@
                             </div>
                             {% if is_docker %}
                             <div style="display: flex; gap: 0.5rem; align-items: center;" class="host-cache-path-row">
-                                <strong style="width: 110px; font-size: 0.85rem; color: var(--plex-orange);">Host Cache:</strong>
+                                <strong style="width: 110px; font-size: 0.85rem; color: var(--plex-orange-text);">Host Cache:</strong>
                                 <input type="text" name="mapping_host_cache_path_{{ loop.index0 }}" value="{{ mapping.host_cache_path or mapping.cache_path or '' }}"
                                        class="path-browse-input" style="flex: 1;" placeholder="/mnt/cache_downloads/Movies/">
                             </div>
@@ -194,7 +194,7 @@
         // Build host cache path row only for Docker
         const hostCacheRow = isDocker ? `
                     <div style="display: flex; gap: 0.5rem; align-items: center;" class="host-cache-path-row">
-                        <strong style="width: 110px; font-size: 0.85rem; color: var(--plex-orange);">Host Cache:</strong>
+                        <strong style="width: 110px; font-size: 0.85rem; color: var(--plex-orange-text);">Host Cache:</strong>
                         <input type="text" name="mapping_host_cache_path_${mappingCount}" value="${cacheDir}/"
                                class="path-browse-input" style="flex: 1;" placeholder="/mnt/cache_downloads/Movies/">
                     </div>

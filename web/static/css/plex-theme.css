@@ -29,6 +29,15 @@ body {
     --plex-user-admin: var(--plex-orange);
     --plex-user-home: var(--plex-info);
     --plex-user-shared: var(--plex-success);
+    /* Text-on-surface variants of the accent colours. In dark mode they are the
+       accents themselves; light mode overrides them with deeper shades, because
+       Plex orange and the bright semantic colours are too light to read as text
+       on white (#e5a00d is about 2:1). Use these for text, keep the plain accent
+       tokens for icons, fills, borders and bars. */
+    --plex-orange-text: var(--plex-orange);
+    --plex-orange-text-lg: var(--plex-orange);  /* large display numbers */
+    --plex-success-text: var(--plex-success);
+    --plex-info-text: var(--plex-info);
     --sidebar-width: 200px;
     --sidebar-collapsed: 60px;
 
@@ -81,6 +90,10 @@ body {
     --plex-warning: #c77c02;
     --plex-info: #0066cc;
     --plex-purple: #6d4cd8;
+    --plex-orange-text: #9e6700;     /* 4.8:1 on white */
+    --plex-orange-text-lg: #b87800;  /* 3.7:1 on white, large text (3:1 needed) */
+    --plex-success-text: #1a6e2f;    /* 5.5:1 on the success badge tint */
+    --plex-info-text: #0058b0;       /* 5.9:1 on the info badge tint */
     --plex-shadow-card: 0 1px 3px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.05);
     --plex-shadow-elevated: 0 4px 12px rgba(0,0,0,0.10), 0 0 0 1px rgba(0,0,0,0.07);
 }
@@ -98,6 +111,17 @@ body {
 [data-theme="light"] th { color: var(--plex-text-light); }
 [data-theme="light"] .stat-detail { opacity: 0.85; }
 [data-theme="light"] .page-subtitle { color: var(--plex-text-light); }
+/* Active nav item: dark label on the orange tint, orange kept on the icon and
+   a left accent bar. Orange-on-orange text measured 2.1:1. */
+[data-theme="light"] .sidebar-nav li a.active {
+    color: var(--plex-text);
+    background: rgba(229, 160, 13, 0.12);
+    box-shadow: inset 3px 0 0 var(--plex-orange);
+}
+[data-theme="light"] .sidebar-nav li a.active svg { color: var(--plex-orange); }
+/* Footer: opacity on top of the muted grey left the version at 2.1:1 */
+[data-theme="light"] footer,
+[data-theme="light"] footer .version { opacity: 1; }
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
@@ -685,7 +709,7 @@ body {
 }
 
 .stat-card-link:hover .stat-card-header {
-    color: var(--plex-orange);
+    color: var(--plex-orange-text);
 }
 
 .stat-card-header {
@@ -710,7 +734,7 @@ body {
 }
 
 .stat-value.orange {
-    color: var(--plex-orange);
+    color: var(--plex-orange-text-lg);
 }
 
 .stat-value.success {
@@ -794,7 +818,7 @@ body {
 
 .badge-success {
     background: rgba(76, 175, 80, 0.15);
-    color: var(--plex-success);
+    color: var(--plex-success-text);
 }
 
 .badge-warning {
@@ -809,7 +833,7 @@ body {
 
 .badge-info {
     background: rgba(33, 150, 243, 0.15);
-    color: var(--plex-info);
+    color: var(--plex-info-text);
 }
 
 .badge-muted {
@@ -825,7 +849,7 @@ body {
 
 .badge-pinned {
     background: rgba(229, 160, 13, 0.18);
-    color: var(--plex-orange);
+    color: var(--plex-orange-text);
 }
 
 .user-badge--admin {
@@ -888,7 +912,7 @@ th.sortable {
 }
 
 th.sortable:hover {
-    color: var(--plex-orange);
+    color: var(--plex-orange-text);
     background: rgba(229, 160, 13, 0.1);
 }
 
@@ -1668,7 +1692,7 @@ textarea {
 }
 
 .tab.active {
-    color: var(--plex-orange);
+    color: var(--plex-orange-text);
     border-bottom-color: var(--plex-orange);
 }
 
@@ -1831,7 +1855,7 @@ pre.log-output-wrapped {
 .search-toggle:has(input:checked) {
     background: rgba(229, 160, 13, 0.15);
     border-color: var(--plex-orange);
-    color: var(--plex-orange);
+    color: var(--plex-orange-text);
 }
 
 .search-toggle span {
@@ -1914,7 +1938,7 @@ pre.log-output-wrapped {
 }
 
 .search-results.has-results {
-    color: var(--plex-orange);
+    color: var(--plex-orange-text);
 }
 
 .search-highlight {
@@ -2221,7 +2245,7 @@ td.user-badges .badge {
 .activity-value {
     font-size: 1.75rem;
     font-weight: 700;
-    color: var(--plex-orange);
+    color: var(--plex-orange-text);
     line-height: 1;
 }
 
@@ -2395,7 +2419,7 @@ td.user-badges .badge {
 
 .infinity-symbol {
     font-size: 1.2em;
-    color: var(--plex-orange);
+    color: var(--plex-orange-text);
     margin-right: 0.25rem;
 }
 
@@ -2963,11 +2987,11 @@ footer .version {
 
 .expand-toggle:hover {
     background: var(--plex-bg-hover);
-    color: var(--plex-orange);
+    color: var(--plex-orange-text);
 }
 
 .expand-toggle.expanded {
-    color: var(--plex-orange);
+    color: var(--plex-orange-text);
 }
 
 .expandable-row:hover {

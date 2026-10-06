@@ -42,7 +42,7 @@
                     </div>
                     {% if is_docker and mapping.host_cache_path and mapping.host_cache_path != mapping.cache_path %}
                     <div>
-                        <span class="text-muted" style="color: var(--plex-orange);">Host Cache:</span><br>
+                        <span class="text-muted" style="color: var(--plex-orange-text);">Host Cache:</span><br>
                         <code>{{ mapping.host_cache_path }}</code>
                     </div>
                     {% endif %}
@@ -57,7 +57,7 @@
             <div class="card-body">
                 <form hx-put="/settings/paths/{{ index }}" hx-target="#mapping-{{ index }}" hx-swap="outerHTML">
                     <div class="flex items-center justify-between mb-2">
-                        <strong style="color: var(--plex-orange);">Editing: {{ mapping.name }}</strong>
+                        <strong style="color: var(--plex-orange-text);">Editing: {{ mapping.name }}</strong>
                         <button type="button" class="btn btn-sm btn-secondary" onclick="toggleEditMode({{ index }})">
                             <i data-lucide="x"></i> Cancel
                         </button>
@@ -98,7 +98,7 @@
 
                     {% if is_docker %}
                     <div class="form-group mb-2">
-                        <label style="color: var(--plex-orange);">Host Cache Path (Docker)</label>
+                        <label style="color: var(--plex-orange-text);">Host Cache Path (Docker)</label>
                         <input type="text" name="host_cache_path" value="{{ mapping.host_cache_path or mapping.cache_path or '' }}"
                                placeholder="e.g., /mnt/cache_downloads/Movies/">
                         <div class="form-hint">

@@ -12,7 +12,7 @@
         {% if not library_cards %}
         <div class="alert alert-info">
             <i data-lucide="alert-circle"></i>
-            <span>Unable to fetch libraries from Plex. Check your <a href="/settings/plex" style="color: var(--plex-orange);">server connection</a>.</span>
+            <span>Unable to fetch libraries from Plex. Check your <a href="/settings/plex" style="color: var(--plex-orange-text);">server connection</a>.</span>
         </div>
         {% endif %}
 
@@ -42,7 +42,7 @@
         <hr style="border-color: var(--plex-border); margin: 1.5rem 0;">
 
         <details data-setting-id="path_mappings">
-            <summary style="cursor: pointer; color: var(--plex-orange);">
+            <summary style="cursor: pointer; color: var(--plex-orange-text);">
                 <i data-lucide="plus"></i> Add Custom Path Mapping
             </summary>
 
@@ -76,7 +76,7 @@
 
                 {% if is_docker %}
                 <div class="form-group">
-                    <label for="new_host_cache_path" style="color: var(--plex-orange);">Host Cache Path (Docker)</label>
+                    <label for="new_host_cache_path" style="color: var(--plex-orange-text);">Host Cache Path (Docker)</label>
                     <input type="text" id="new_host_cache_path" name="host_cache_path"
                            class="path-browse-input"
                            placeholder="/mnt/cache_downloads/media/tv">

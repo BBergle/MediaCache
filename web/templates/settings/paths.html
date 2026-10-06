@@ -18,7 +18,7 @@
         <hr style="border-color: var(--plex-border); margin: 1.5rem 0;">
 
         <details>
-            <summary style="cursor: pointer; color: var(--plex-orange);">
+            <summary style="cursor: pointer; color: var(--plex-orange-text);">
                 <i data-lucide="plus"></i> Add New Path Mapping
             </summary>
 
@@ -60,7 +60,7 @@
 
                 {% if is_docker %}
                 <div class="form-group">
-                    <label for="new_host_cache_path" style="color: var(--plex-orange);">Host Cache Path (Docker)</label>
+                    <label for="new_host_cache_path" style="color: var(--plex-orange-text);">Host Cache Path (Docker)</label>
                     <input type="text" id="new_host_cache_path" name="host_cache_path" placeholder="/mnt/cache_downloads/media/tv">
                     <div class="form-hint">
                         The actual host path {% if is_unraid %}Unraid{% else %}the host{% endif %} sees. Only needed if Docker remaps your cache path
