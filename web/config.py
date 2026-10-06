@@ -43,29 +43,8 @@ IMAGE_TAG = os.environ.get("IMAGE_TAG", "latest")
 templates.env.globals["image_tag"] = IMAGE_TAG
 
 
-# Versioned static URLs. Browsers keep /static files across updates, so a new
-# template could run against last release's app.js or custom.css. The query
-# string is a hash of the file's contents, so the URL changes exactly when the
-# file does, on Docker, git checkouts and dev builds alike.
-_static_hashes: dict = {}
-
-
-def static_url(path: str) -> str:
-    """Return ``/static/<path>?v=<content hash>`` for a file under web/static."""
-    file_path = STATIC_DIR / path
-    try:
-        mtime = file_path.stat().st_mtime_ns
-    except OSError:
-        return f"/static/{path}"
-    cached = _static_hashes.get(path)
-    if cached is None or cached[0] != mtime:
-        import hashlib
-        digest = hashlib.sha1(file_path.read_bytes()).hexdigest()[:10]
-        cached = (mtime, digest)
-        _static_hashes[path] = cached
-    return f"/static/{path}?v={cached[1]}"
-
-
+# Versioned /static URLs for CSS/JS (see web/static_assets.py)
+from web.static_assets import static_url
 templates.env.globals["static_url"] = static_url
 
 

@@ -14,16 +14,19 @@ from pathlib import Path
 
 import pytest
 
-import web.config as web_config
-from web.config import static_url
+# Import the helper module directly, not web.config: several test modules replace
+# web.config in sys.modules with a MagicMock at import time.
+import web.static_assets as static_assets
+from web.static_assets import static_url
 
-TEMPLATES_DIR = Path(web_config.TEMPLATES_DIR)
+WEB_DIR = Path(__file__).resolve().parents[1] / "web"
+TEMPLATES_DIR = WEB_DIR / "templates"
 
 
 @pytest.fixture
 def static_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(web_config, "STATIC_DIR", tmp_path)
-    monkeypatch.setattr(web_config, "_static_hashes", {})
+    monkeypatch.setattr(static_assets, "STATIC_DIR", tmp_path)
+    monkeypatch.setattr(static_assets, "_static_hashes", {})
     return tmp_path
 
 
@@ -59,7 +62,9 @@ def test_missing_file_falls_back_to_plain_url(static_dir):
 
 
 def test_registered_as_template_global():
-    assert web_config.templates.env.globals["static_url"] is static_url
+    config_source = (WEB_DIR / "config.py").read_text(encoding="utf-8")
+    assert "from web.static_assets import static_url" in config_source
+    assert 'templates.env.globals["static_url"] = static_url' in config_source
 
 
 def test_real_static_files_resolve():
