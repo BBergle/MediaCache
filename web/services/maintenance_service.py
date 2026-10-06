@@ -1557,6 +1557,26 @@ class MaintenanceService:
                 return candidate
         return None
 
+    # Filesystems that store modification times coarsely (FAT keeps 2 seconds)
+    # can make an untouched copy look slightly newer; ignore differences this small.
+    _NEWER_MTIME_TOLERANCE_SECONDS = 2
+
+    def _newer_array_copy(self, cache_path: str, array_path: str) -> Optional[str]:
+        """Return the array-side file that was modified after the cache copy, if any.
+
+        Caching keeps the original modification time (copystat on the cache
+        copy, rename for the .plexcached backup), so an untouched pair has
+        matching mtimes and whichever side a tool rewrote is the newer one.
+        A newer array copy means the cache copy is stale and must not be
+        copied over it.
+        """
+        cache_mtime = os.path.getmtime(cache_path)
+        for candidate in (array_path, array_path + PLEXCACHED_EXTENSION):
+            if (os.path.exists(candidate)
+                    and os.path.getmtime(candidate) > cache_mtime + self._NEWER_MTIME_TOLERANCE_SECONDS):
+                return candidate
+        return None
+
     def _sync_one_to_array(self, cache_path: str, array_path: str,
                            bytes_progress_callback: Optional[Callable] = None) -> Optional[str]:
         """Move one cache file to the array. Returns an error message, or None on success.
@@ -1587,6 +1607,11 @@ class MaintenanceService:
                 logging.debug(f"Deleted redundant .plexcached backup: {backup_path}")
             os.remove(cache_path)
             return None
+
+        if self._newer_array_copy(cache_path, array_path) is not None:
+            logging.warning(f"Array copy is newer than the cache copy, leaving both in place: "
+                            f"{os.path.basename(cache_path)}")
+            return "Array copy is newer than the cache copy, left both in place for review"
 
         if os.path.exists(array_path) or os.path.exists(backup_path):
             logging.info(f"Cache copy differs from the array copy, keeping the cache version: "
@@ -1622,6 +1647,8 @@ class MaintenanceService:
         For each file (see ``_sync_one_to_array``):
         - If the array already holds an identical copy (.plexcached backup or
           same-name file of the same size): restore it, delete cache copy
+        - If the array copy was modified after the cache copy, the cache copy
+          is stale: leave both in place and report it for review
         - Otherwise the cache copy is the version to keep (a Sonarr/Radarr
           upgrade, a Tdarr pass, or no array copy at all): copy it to the
           array, verify, then remove the old backup and the cache copy
@@ -1637,7 +1664,8 @@ class MaintenanceService:
                 array_path = self._cache_to_array_path(cache_path)
                 if array_path:
                     try:
-                        if self._array_copy_matches(cache_path, array_path) is None:
+                        if (self._array_copy_matches(cache_path, array_path) is None
+                                and self._newer_array_copy(cache_path, array_path) is None):
                             total_bytes += os.path.getsize(cache_path)
                     except OSError:
                         pass
