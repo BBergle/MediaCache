@@ -9,15 +9,15 @@
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 
     <!-- Lucide Icons (vendored) -->
-    <script src="/static/js/vendor/lucide.min.js"></script>
+    <script src="{{ static_url('js/vendor/lucide.min.js') }}"></script>
 
     <!-- Custom Plex Theme -->
-    <link rel="stylesheet" href="/static/css/plex-theme.css">
-    <link rel="stylesheet" href="/static/css/custom.css">
+    <link rel="stylesheet" href="{{ static_url('css/plex-theme.css') }}">
+    <link rel="stylesheet" href="{{ static_url('css/custom.css') }}">
 
     <!-- HTMX (vendored) -->
-    <script src="/static/js/vendor/htmx.min.js"></script>
-    <script src="/static/js/vendor/htmx-ws.js"></script>
+    <script src="{{ static_url('js/vendor/htmx.min.js') }}"></script>
+    <script src="{{ static_url('js/vendor/htmx-ws.js') }}"></script>
 
     <!-- Apply saved theme and sidebar state immediately to prevent flash -->
     <script>
@@ -229,7 +229,7 @@
     </div>
 
     <!-- Custom JavaScript -->
-    <script src="/static/js/app.js"></script>
+    <script src="{{ static_url('js/app.js') }}"></script>
     <script>
         // Initialize Lucide icons
         lucide.createIcons();

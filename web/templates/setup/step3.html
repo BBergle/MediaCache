@@ -165,7 +165,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/path-browser.js"></script>
+<script src="{{ static_url('js/path-browser.js') }}"></script>
 <script>
     let mappingCount = {{ path_mappings | length if path_mappings else 0 }};
     const isDocker = {{ 'true' if is_docker else 'false' }};

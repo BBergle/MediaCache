@@ -43,6 +43,11 @@ IMAGE_TAG = os.environ.get("IMAGE_TAG", "latest")
 templates.env.globals["image_tag"] = IMAGE_TAG
 
 
+# Versioned /static URLs for CSS/JS (see web/static_assets.py)
+from web.static_assets import static_url
+templates.env.globals["static_url"] = static_url
+
+
 def _parse_tag_label(tag: str) -> str:
     """Derive a short display label from a Docker image tag.
 
