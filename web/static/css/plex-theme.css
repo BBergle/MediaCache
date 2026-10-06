@@ -119,6 +119,8 @@ body {
     box-shadow: inset 3px 0 0 var(--plex-orange);
 }
 [data-theme="light"] .sidebar-nav li a.active svg { color: var(--plex-orange); }
+/* Collapsed sidebar marks the active item with its bottom border instead */
+[data-theme="light"] .sidebar.collapsed .sidebar-nav li a.active { box-shadow: inset 0 -3px 0 var(--plex-orange); }
 /* Footer: opacity on top of the muted grey left the version at 2.1:1 */
 [data-theme="light"] footer,
 [data-theme="light"] footer .version { opacity: 1; }
@@ -248,9 +250,12 @@ body {
     box-shadow: 0 0 12px rgba(229,160,13,0.06);
 }
 
-.sidebar-nav li a i {
-    width: 20px;
-    height: 20px;
+/* Lucide swaps each <i data-lucide> for an <svg> at load, so size the svg too.
+   flex-shrink: 0 keeps the icon from being squeezed in the collapsed sidebar. */
+.sidebar-nav li a i,
+.sidebar-nav li a svg {
+    width: 24px;
+    height: 24px;
     flex-shrink: 0;
 }
 
@@ -276,9 +281,10 @@ body {
     border-color: rgba(244, 67, 54, 0.3);
 }
 
-.sidebar-logout-btn i {
-    width: 18px;
-    height: 18px;
+.sidebar-logout-btn i,
+.sidebar-logout-btn svg {
+    width: 24px;
+    height: 24px;
     flex-shrink: 0;
 }
 
@@ -288,7 +294,7 @@ body {
 
 .sidebar.collapsed .sidebar-logout-btn {
     justify-content: center;
-    padding: 0.6rem;
+    padding: 0.6rem 0;
 }
 
 .sidebar-footer {
@@ -351,9 +357,10 @@ body {
     border-color: var(--plex-border-light);
 }
 
-.sidebar-collapse-btn i {
-    width: 18px;
-    height: 18px;
+.sidebar-collapse-btn i,
+.sidebar-collapse-btn svg {
+    width: 24px;
+    height: 24px;
     flex-shrink: 0;
     transition: transform 0.3s ease;
 }
@@ -364,7 +371,7 @@ body {
 
 .sidebar.collapsed .sidebar-collapse-btn {
     justify-content: center;
-    padding: 0.6rem;
+    padding: 0.6rem 0;
 }
 
 /* ==================== Collapsed Sidebar ==================== */
@@ -373,29 +380,41 @@ body {
     width: var(--sidebar-collapsed);
 }
 
-.sidebar.collapsed .sidebar-brand-text,
 .sidebar.collapsed .sidebar-nav li a span,
 .sidebar.collapsed .sidebar-footer small {
     display: none;
 }
 
+/* Hide the brand text without removing it from the layout, so the brand row
+   keeps its expanded height and the nav below does not move up. */
+.sidebar.collapsed .sidebar-brand-text {
+    visibility: hidden;
+    width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
 .sidebar.collapsed .sidebar-brand {
     justify-content: center;
+    gap: 0;
     padding: 0.85rem 0.5rem;
 }
 
+/* Same vertical padding and border as expanded, so every item keeps its
+   height; only the horizontal padding goes, to centre the icon. */
 .sidebar.collapsed .sidebar-nav li a {
     justify-content: center;
-    padding: 0.75rem;
-    border-bottom: 3px solid transparent;
+    padding: 0.6rem 0;
     position: relative;
 }
 
+/* Active marker drawn as an inset shadow so it takes no extra height */
 .sidebar.collapsed .sidebar-nav li a.active {
-    border-bottom-color: var(--plex-orange);
+    box-shadow: inset 0 -3px 0 var(--plex-orange), 0 0 12px rgba(229, 160, 13, 0.06);
 }
 
-.sidebar.collapsed .sidebar-collapse-btn i {
+.sidebar.collapsed .sidebar-collapse-btn i,
+.sidebar.collapsed .sidebar-collapse-btn svg {
     transform: rotate(180deg);
 }
 
@@ -2808,6 +2827,16 @@ footer .version {
     .sidebar.collapsed .sidebar-brand-text,
     .sidebar.collapsed .sidebar-nav li a span {
         display: flex;
+    }
+
+    .sidebar.collapsed .sidebar-brand-text {
+        visibility: visible;
+        width: auto;
+        overflow: visible;
+    }
+
+    .sidebar.collapsed .sidebar-brand {
+        gap: 0.75rem;
     }
 
     .sidebar.collapsed .sidebar-nav li a span {
