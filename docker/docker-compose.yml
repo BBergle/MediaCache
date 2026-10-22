@@ -18,7 +18,7 @@ version: "3.8"
 services:
   plexcache:
     # Use pre-built image from GitHub Container Registry
-    image: ghcr.io/studionirin/plexcache-d:latest
+    image: ghcr.io/bbergle/mediacache:latest
     # Or build locally (uncomment for development):
     # build:
     #   context: ..
