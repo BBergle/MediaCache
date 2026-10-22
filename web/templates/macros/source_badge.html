@@ -16,11 +16,11 @@
 #}
 
 {% set SOURCE_TOOLTIPS = {
-    'ondeck':          'On a Plex user\'s OnDeck, so PlexCache keeps it on cache for now.',
-    'watchlist':       'On a Plex user\'s Watchlist, so PlexCache keeps it on cache for now.',
+    'ondeck':          'On a Plex user\'s OnDeck, so MediaCache keeps it on cache for now.',
+    'watchlist':       'On a Plex user\'s Watchlist, so MediaCache keeps it on cache for now.',
     'stale_ondeck':    'Cached for OnDeck, but it has since dropped off. The next run moves it back to the array.',
     'stale_watchlist': 'Cached for a Watchlist, but it has since dropped off. The next run moves it back to the array.',
-    'other':           'On cache, but PlexCache no longer has a reason to keep it. The next run moves it back to the array.'
+    'other':           'On cache, but MediaCache no longer has a reason to keep it. The next run moves it back to the array.'
 } %}
 
 {% macro ondeck_badge() -%}

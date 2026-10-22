@@ -43,7 +43,7 @@ class TestOnDeckRetentionNamesItsMechanism:
 
     def test_names_the_epoch(self):
         hint = _hint_for("ondeck_retention_days")
-        assert "PlexCache first saw it" in hint, hint
+        assert "MediaCache first saw it" in hint, hint
 
     def test_states_the_across_all_users_rule(self):
         """AND across users, not OR: the last user to finish decides."""
@@ -84,7 +84,7 @@ class TestRetentionClocksAreQualified:
     def test_section_says_clocks_need_runs(self):
         html = CACHE_HTML.read_text(encoding="utf-8")
         retention = html[html.index(">\n                Retention"):]
-        assert "only advance while PlexCache is running" in " ".join(retention.split())
+        assert "only advance while MediaCache is running" in " ".join(retention.split())
 
 
 class TestPerUserCouplingIsDocumented:

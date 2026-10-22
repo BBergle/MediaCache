@@ -34,12 +34,12 @@
             width: 64px;
             height: 64px;
             margin: 0 auto 1rem;
-            background: linear-gradient(135deg, var(--plex-orange), #c98d0c);
+            background: linear-gradient(135deg, var(--plex-orange), #22d3ee);
             border-radius: 16px;
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 4px 24px rgba(229, 160, 13, 0.25);
+            box-shadow: 0 4px 24px color-mix(in srgb, var(--plex-orange) 25%, transparent);
         }
 
         .login-brand-icon i {
@@ -86,8 +86,8 @@
         .btn-plex {
             width: 100%;
             padding: 0.75rem 1rem;
-            background: rgba(229, 160, 13, 0.08);
-            border: 1px solid rgba(229, 160, 13, 0.4);
+            background: color-mix(in srgb, var(--plex-orange) 8%, transparent);
+            border: 1px solid color-mix(in srgb, var(--plex-orange) 40%, transparent);
             border-radius: 8px;
             color: #fff;
             font-weight: 600;
@@ -101,8 +101,8 @@
         }
 
         .btn-plex:hover {
-            background: rgba(229, 160, 13, 0.15);
-            border-color: rgba(229, 160, 13, 0.6);
+            background: color-mix(in srgb, var(--plex-orange) 15%, transparent);
+            border-color: color-mix(in srgb, var(--plex-orange) 60%, transparent);
         }
 
         .btn-plex:disabled {
@@ -173,7 +173,7 @@
         .login-input:focus {
             outline: none;
             border-color: var(--plex-orange);
-            box-shadow: 0 0 0 3px rgba(229, 160, 13, 0.15);
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--plex-orange) 15%, transparent);
         }
 
         .login-input + .login-input {

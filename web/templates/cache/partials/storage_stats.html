@@ -65,7 +65,7 @@
             <!-- Stats Grid -->
             <div class="cache-limit-stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
                 <div class="cache-limit-stat">
-                    <span class="cache-limit-label" title="All files on the cache drive (PlexCache + other applications + system files)">Total Drive Usage:</span>
+                    <span class="cache-limit-label" title="All files on the cache drive (MediaCache + other applications + system files)">Total Drive Usage:</span>
                     <span class="cache-limit-value">{{ data.storage.used_display }}</span>
                 </div>
                 <div class="cache-limit-stat">
@@ -88,20 +88,20 @@
 
             <div style="font-size: 0.8rem; color: var(--plex-text-muted); margin-bottom: 0.75rem;">
                 <i data-lucide="info" style="width: 13px; height: 13px; vertical-align: middle;"></i>
-                Limit applies to <strong>all files</strong> on the drive. The gray bar ("Other") includes any files not managed by PlexCache, such as other applications, downloads, or system files.
+                Limit applies to <strong>all files</strong> on the drive. The gray bar ("Other") includes any files not managed by MediaCache, such as other applications, downloads, or system files.
             </div>
 
             <!-- Visual Bar with Markers - Stacked Bar Design -->
             <div class="drive-usage-bar-container" style="position: relative; margin-bottom: 0.5rem;">
                 <!-- The bar background represents total drive capacity -->
                 <div class="drive-usage-bar" style="height: 24px; background: var(--plex-bg-card); border-radius: var(--plex-radius-xs); position: relative; overflow: visible; border: 1px solid var(--plex-border);">
-                    <!-- Stacked bar: Other files (gray) + PlexCache (context-aware color) -->
+                    <!-- Stacked bar: Other files (gray) + MediaCache (context-aware color) -->
                     <div style="display: flex; height: 100%; border-radius: 3px; overflow: hidden;">
                         <!-- Other files segment (gray) -->
                         {% if data.storage.other_drive_percent > 0 %}
                         <div class="other-files-fill" style="width: {{ data.storage.other_drive_percent }}%; height: 100%; background: var(--plex-text-muted); transition: width 0.3s ease;" title="Other files: {{ data.storage.other_drive_size_display }}"></div>
                         {% endif %}
-                        <!-- PlexCache segment (context-aware color) -->
+                        <!-- MediaCache segment (context-aware color) -->
                         {% if data.storage.cached_percent > 0 %}
                         <div class="plexcache-fill" style="width: {{ data.storage.cached_percent }}%; height: 100%; transition: width 0.3s ease;
                             {% if data.storage.cache_bar_status == 'over' %}
@@ -111,7 +111,7 @@
                             {% else %}
                             background: var(--plex-success);
                             {% endif %}
-                        " title="PlexCache: {{ data.storage.cached_size_display }}"></div>
+                        " title="MediaCache: {{ data.storage.cached_size_display }}"></div>
                         {% endif %}
                     </div>
 
@@ -165,7 +165,7 @@
                         background: var(--plex-success);
                         {% endif %}
                     "></div>
-                    <span>PlexCache ({{ data.storage.cached_size_display }})</span>
+                    <span>MediaCache ({{ data.storage.cached_size_display }})</span>
                 </div>
             </div>
         </div>
@@ -173,20 +173,20 @@
 </div>
 {% endif %}
 
-<!-- PlexCache Quota Status -->
+<!-- MediaCache Quota Status -->
 {% if data.storage.plexcache_quota_bytes > 0 %}
 <div class="card mb-2">
     <div class="card-header">
         <i data-lucide="package"></i>
-        <h2>PlexCache Quota</h2>
-        <span class="text-muted" style="font-size: 0.8rem; margin-left: auto;">PlexCache-managed files only</span>
+        <h2>MediaCache Quota</h2>
+        <span class="text-muted" style="font-size: 0.8rem; margin-left: auto;">MediaCache-managed files only</span>
     </div>
     <div class="card-body">
         <div class="cache-limit-info">
             <!-- Stats Grid -->
             <div class="cache-limit-stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
                 <div class="cache-limit-stat">
-                    <span class="cache-limit-label" title="Total size of all PlexCache-managed files (from the exclude list)">Tracked Size:</span>
+                    <span class="cache-limit-label" title="Total size of all MediaCache-managed files (from the exclude list)">Tracked Size:</span>
                     <span class="cache-limit-value">{{ data.storage.cached_size_display }}</span>
                 </div>
                 <div class="cache-limit-stat">
@@ -203,7 +203,7 @@
 
             <div style="font-size: 0.8rem; color: var(--plex-text-muted); margin-bottom: 0.75rem;">
                 <i data-lucide="info" style="width: 13px; height: 13px; vertical-align: middle;"></i>
-                Unlike Cache Limit, this only counts <strong>PlexCache-managed files</strong> — other apps on the drive don't count toward this quota.
+                Unlike Cache Limit, this only counts <strong>MediaCache-managed files</strong> — other apps on the drive don't count toward this quota.
             </div>
 
             <!-- Simple progress bar: tracked_size / quota -->
@@ -217,7 +217,7 @@
                         {% else %}
                         background: var(--plex-success);
                         {% endif %}
-                    " title="PlexCache: {{ data.storage.cached_size_display }}"></div>
+                    " title="MediaCache: {{ data.storage.cached_size_display }}"></div>
                 </div>
             </div>
 
@@ -257,7 +257,7 @@
                 <div class="breakdown-bar">
                     <div class="breakdown-fill ondeck" style="width: {{ data.breakdown.ondeck.percent }}%"></div>
                 </div>
-                <div class="breakdown-percent">{{ data.breakdown.ondeck.percent }}% of PlexCache data</div>
+                <div class="breakdown-percent">{{ data.breakdown.ondeck.percent }}% of MediaCache data</div>
             </a>
             <a href="/cache?source=watchlist" class="breakdown-card breakdown-watchlist">
                 <div class="breakdown-header">
@@ -272,11 +272,11 @@
                 <div class="breakdown-bar">
                     <div class="breakdown-fill watchlist" style="width: {{ data.breakdown.watchlist.percent }}%"></div>
                 </div>
-                <div class="breakdown-percent">{{ data.breakdown.watchlist.percent }}% of PlexCache data</div>
+                <div class="breakdown-percent">{{ data.breakdown.watchlist.percent }}% of MediaCache data</div>
             </a>
             {% if data.breakdown.released.count > 0 %}
             <a href="/cache?source=released" class="breakdown-card breakdown-released"
-               title="Handed back to the Unraid mover. Still on cache but no longer held back, so the mover relocates these on its own schedule. PlexCache keeps tracking them and will move them itself if the cache runs out of room first.">
+               title="Handed back to the Unraid mover. Still on cache but no longer held back, so the mover relocates these on its own schedule. MediaCache keeps tracking them and will move them itself if the cache runs out of room first.">
                 <div class="breakdown-header">
                     <i data-lucide="send"></i>
                     <span>Released</span>
@@ -289,7 +289,7 @@
                 <div class="breakdown-bar">
                     <div class="breakdown-fill released" style="width: {{ data.breakdown.released.percent }}%"></div>
                 </div>
-                <div class="breakdown-percent">{{ data.breakdown.released.percent }}% of PlexCache data</div>
+                <div class="breakdown-percent">{{ data.breakdown.released.percent }}% of MediaCache data</div>
             </a>
             {% endif %}
             {% if data.breakdown.other.count > 0 %}
@@ -307,7 +307,7 @@
                 <div class="breakdown-bar">
                     <div class="breakdown-fill other" style="width: {{ data.breakdown.other.percent }}%"></div>
                 </div>
-                <div class="breakdown-percent">{{ data.breakdown.other.percent }}% of PlexCache data</div>
+                <div class="breakdown-percent">{{ data.breakdown.other.percent }}% of MediaCache data</div>
             </a>
             {% endif %}
         </div>
