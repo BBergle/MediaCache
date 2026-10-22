@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from web.config import DATA_DIR, SETTINGS_FILE
+from core.media_servers import enabled_media_servers
 from core.file_operations import is_sidecar_candidate, name_matches_video_stem
 from core.system_utils import get_array_direct_path, format_bytes, format_cache_age
 from core.media_grouping import format_season_range, group_ordered, stable_group_id
@@ -146,7 +147,7 @@ class RecentlyAddedService:
             logger.warning(f"RecentlyAddedService: settings not loadable: {e}")
             return self._empty_result("MediaCache is not configured yet.")
 
-        if config.plex.media_server == "jellyfin":
+        if "plex" not in enabled_media_servers(config.plex.media_server):
             return self._empty_result("Recently Added needs Plex, so it isn't available with Jellyfin.")
         if not config.plex.plex_url or not config.plex.plex_token:
             return self._empty_result("Plex server is not configured.")

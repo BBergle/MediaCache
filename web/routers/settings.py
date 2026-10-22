@@ -17,6 +17,7 @@ from starlette.datastructures import ImmutableMultiDict
 from web.config import templates, CONFIG_DIR, PLEXCACHE_PRODUCT_VERSION
 from web.dependencies import parse_form
 from web.services import get_settings_service, get_scheduler_service
+from core.media_servers import enabled_media_servers, media_server_value, server_label
 from core.system_utils import get_disk_usage, detect_zfs, parse_size_bytes
 from core.file_operations import (
     PRIORITY_RANGE_ONDECK_MIN,
@@ -71,6 +72,7 @@ def settings_index(request: Request):
             "page_title": "Settings",
             "active_tab": "plex",
             "settings": settings,
+            "enabled_servers": enabled_media_servers(settings["media_server"]),
         }
     )
 
@@ -88,6 +90,7 @@ def settings_plex(request: Request):
             "page_title": "Plex Server Settings",
             "active_tab": "plex",
             "settings": settings,
+            "enabled_servers": enabled_media_servers(settings["media_server"]),
         }
     )
 
@@ -130,22 +133,32 @@ def get_plex_users(request: Request):
 
 @router.post("/plex/test", response_class=HTMLResponse)
 def test_plex_connection(request: Request):
-    """Test Plex connection and return detailed status"""
+    """Test each enabled media server and return one combined status"""
     settings_service = get_settings_service()
     settings = settings_service.get_plex_settings()
+    servers = enabled_media_servers(settings["media_server"])
 
-    if settings["media_server"] == "jellyfin":
-        return _test_jellyfin_connection(request, settings)
+    results = []
+    for server in servers:
+        ok, message = (_test_jellyfin_connection(settings) if server == "jellyfin"
+                       else _test_plex_connection(settings_service, settings))
+        results.append((ok, f"{server_label(server)}: {message}" if len(servers) > 1 else message))
 
+    return templates.TemplateResponse(
+        request,
+        "partials/alert.html",
+        {"type": "success" if all(ok for ok, _ in results) else "error",
+         "message": " \u00b7 ".join(message for _, message in results)}
+    )
+
+
+def _test_plex_connection(settings_service, settings: dict):
+    """Test the saved Plex URL/token; returns (ok, message)"""
     plex_url = settings.get("plex_url", "")
     plex_token = settings.get("plex_token", "")
 
     if not plex_url or not plex_token:
-        return templates.TemplateResponse(
-            request,
-            "partials/alert.html",
-            {"type": "error", "message": "Missing Plex URL or token. Save settings first."}
-        )
+        return False, "Missing Plex URL or token. Save settings first."
 
     try:
         from plexapi.server import PlexServer
@@ -157,11 +170,7 @@ def test_plex_connection(request: Request):
         # Clear any previous error
         settings_service._last_plex_error = None
 
-        return templates.TemplateResponse(
-            request,
-            "partials/alert.html",
-            {"type": "success", "message": f"Connected to '{server_name}' as {username}"}
-        )
+        return True, f"Connected to '{server_name}' as {username}"
     except Exception as e:
         error_msg = str(e)
         # Provide helpful error messages
@@ -175,46 +184,38 @@ def test_plex_connection(request: Request):
             hint = "Invalid token. Try re-authenticating with Get Token."
         else:
             hint = f"Error: {error_msg[:150]}"
-
-        return templates.TemplateResponse(
-            request,
-            "partials/alert.html",
-            {"type": "error", "message": hint}
-        )
+        return False, hint
 
 
-def _test_jellyfin_connection(request: Request, settings: dict):
-    """Test the saved Jellyfin URL/API key/user"""
+def _test_jellyfin_connection(settings: dict):
+    """Test the saved Jellyfin URL/API key/user; returns (ok, message)"""
     if not settings["jellyfin_url"] or not settings["jellyfin_api_key"]:
-        return templates.TemplateResponse(
-            request,
-            "partials/alert.html",
-            {"type": "error", "message": "Missing Jellyfin URL or API key. Save settings first."}
-        )
+        return False, "Missing Jellyfin URL or API key. Save settings first."
     from core.jellyfin_api import JellyfinManager
     jellyfin = JellyfinManager(settings["jellyfin_url"], settings["jellyfin_api_key"],
                                settings["jellyfin_user"], timeout=10)
     try:
         jellyfin.connect()
     except ConnectionError as e:
-        return templates.TemplateResponse(
-            request, "partials/alert.html", {"type": "error", "message": str(e)[:200]}
-        )
-    return templates.TemplateResponse(
-        request,
-        "partials/alert.html",
-        {"type": "success", "message": f"Connected to Jellyfin as {jellyfin.main_user}"}
-    )
+        return False, str(e)[:200]
+    return True, f"Connected to Jellyfin as {jellyfin.main_user}"
 
 
 @router.put("/plex", response_class=HTMLResponse)
 def save_plex_settings(request: Request, form_data: ImmutableMultiDict = Depends(parse_form)):
-    """Save media server connection settings (Plex URL + token, or Jellyfin)"""
+    """Save media server connection settings (Plex URL + token, Jellyfin, or both)"""
     settings_service = get_settings_service()
 
     settings = {key: form_data.get(key, "").strip()
                 for key in ("plex_url", "plex_token", "jellyfin_url", "jellyfin_api_key", "jellyfin_user")}
-    settings["media_server"] = "jellyfin" if form_data.get("media_server") == "jellyfin" else "plex"
+    media_server = media_server_value(form_data.get("plex_enabled") == "on",
+                                      form_data.get("jellyfin_enabled") == "on")
+    if media_server is None:
+        return templates.TemplateResponse(
+            request, "partials/alert.html",
+            {"type": "error", "message": "Turn on at least one media server."}
+        )
+    settings["media_server"] = media_server
     success = settings_service.save_plex_settings(settings)
 
     if success:

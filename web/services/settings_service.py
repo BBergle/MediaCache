@@ -912,36 +912,36 @@ class SettingsService:
 
         return self._save_raw(raw)
 
-    def check_plex_connection(self) -> bool:
-        """Check if the configured media server (Plex, or Jellyfin) is reachable"""
+    def check_media_server_connections(self) -> Dict[str, bool]:
+        """Reachability of each enabled media server, keyed by server name"""
+        import requests
+        from core.jellyfin_api import JellyfinManager
+        from core.media_servers import enabled_media_servers
         settings = self.get_plex_settings()
-        if settings["media_server"] == "jellyfin":
-            import requests
-            from core.jellyfin_api import JellyfinManager
-            jellyfin = JellyfinManager(settings["jellyfin_url"], settings["jellyfin_api_key"], timeout=5)
+        result = {}
+        for server in enabled_media_servers(settings["media_server"]):
+            if server == "jellyfin":
+                jellyfin = JellyfinManager(settings["jellyfin_url"], settings["jellyfin_api_key"],
+                                           settings["jellyfin_user"], timeout=5)
+                try:
+                    jellyfin._get("/System/Info")
+                    result[server] = True
+                except requests.RequestException:
+                    result[server] = False
+                continue
+            plex_url = settings.get("plex_url", "")
+            plex_token = settings.get("plex_token", "")
             try:
-                jellyfin._get("/System/Info")
-                return True
-            except requests.RequestException:
-                return False
-        plex_url = settings.get("plex_url", "")
-        plex_token = settings.get("plex_token", "")
+                result[server] = bool(plex_url and plex_token) and requests.get(
+                    plex_url.rstrip('/') + '/', headers={"X-Plex-Token": plex_token}, timeout=5
+                ).status_code == 200
+            except (requests.RequestException, OSError):
+                result[server] = False
+        return result
 
-        if not plex_url or not plex_token:
-            return False
-
-        try:
-            import requests
-            # Simple health check
-            url = plex_url.rstrip('/') + '/'
-            response = requests.get(
-                url,
-                headers={"X-Plex-Token": plex_token},
-                timeout=5
-            )
-            return response.status_code == 200
-        except (requests.RequestException, OSError):
-            return False
+    def check_plex_connection(self) -> bool:
+        """True when every enabled media server (Plex and/or Jellyfin) is reachable"""
+        return all(self.check_media_server_connections().values())
 
     def _is_plex_cache_valid(self) -> bool:
         """Check if Plex cache is still valid"""

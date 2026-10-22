@@ -55,14 +55,12 @@ def is_setup_complete() -> bool:
     settings_service = get_settings_service()
     settings = settings_service.get_all()
 
-    if settings.get("media_server") == "jellyfin":
-        return bool(settings.get("jellyfin_url") and settings.get("jellyfin_api_key"))
-
-    # Setup is complete if we have Plex URL and token configured
-    plex_url = settings.get("PLEX_URL", "")
-    plex_token = settings.get("PLEX_TOKEN", "")
-
-    return bool(plex_url and plex_token)
+    from core.media_servers import enabled_media_servers
+    ready = {
+        "plex": bool(settings.get("PLEX_URL") and settings.get("PLEX_TOKEN")),
+        "jellyfin": bool(settings.get("jellyfin_url") and settings.get("jellyfin_api_key")),
+    }
+    return all(ready[s] for s in enabled_media_servers(settings.get("media_server")))
 
 
 def get_or_create_client_id(settings: Dict) -> str:

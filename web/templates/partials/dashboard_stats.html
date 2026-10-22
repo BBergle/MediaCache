@@ -139,16 +139,18 @@
     </div>
     {% endif %}
     <div class="mt-1" style="text-align: center;">
-        {% if stats.plex_connected %}
+        {% for server in stats.server_status %}
+        {% if server.connected %}
         <span class="badge badge-success">
             <i data-lucide="plug"></i>
-            {{ media_server_name() }} Connected
+            {{ server.name }} Connected
         </span>
         {% else %}
         <span class="badge badge-warning">
             <i data-lucide="plug-off"></i>
-            {{ media_server_name() }} Not Connected
+            {{ server.name }} Not Connected
         </span>
         {% endif %}
+        {% endfor %}
     </div>
 </a>

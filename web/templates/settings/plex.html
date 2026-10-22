@@ -9,11 +9,18 @@
     </div>
     <div class="card-body">
         <div class="form-group" data-setting-id="media_server">
-            <label for="media_server">Media Server</label>
-            <select id="media_server" name="media_server" style="width: auto;" onchange="toggleMediaServer()">
-                <option value="plex" {% if settings.media_server != 'jellyfin' %}selected{% endif %}>Plex</option>
-                <option value="jellyfin" {% if settings.media_server == 'jellyfin' %}selected{% endif %}>Jellyfin (experimental)</option>
-            </select>
+            <label>Media Servers</label>
+            {% for key, label in (("plex", "Plex"), ("jellyfin", "Jellyfin (experimental)")) %}
+            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem;">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="{{ key }}_enabled" name="{{ key }}_enabled" value="on"
+                           {% if key in enabled_servers %}checked{% endif %}
+                           onchange="toggleMediaServer()">
+                    <span class="toggle-slider"></span>
+                </label>
+                <label for="{{ key }}_enabled" style="margin-bottom: 0;">{{ label }}</label>
+            </div>
+            {% endfor %}
             <div class="form-hint">
                 Jellyfin drives caching runs only: Continue Watching + Next Up as OnDeck, Favorites as Watchlist.
                 Pinned media, Recently Added and RSS watchlists stay Plex-only.
@@ -113,11 +120,10 @@
 </div>
 
 <script>
-    // Show only the selected server's fields; hidden fields must not block submit
+    // Show only the enabled servers' fields; hidden fields must not block submit
     function toggleMediaServer() {
-        const server = document.getElementById('media_server').value;
         document.querySelectorAll('[data-server]').forEach(section => {
-            const active = section.dataset.server === server;
+            const active = document.getElementById(section.dataset.server + '_enabled').checked;
             section.style.display = active ? '' : 'none';
             section.querySelectorAll('[data-required]').forEach(input => input.required = active);
         });
