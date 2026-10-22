@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- Page Header -->
+<header class="page-header">
+    <div class="page-title">
+        <div class="page-title-icon">
+            <i data-lucide="sparkles"></i>
+        </div>
+        <div>
+            <h1>Recently Added</h1>
+            <p>New media in your libraries and where it physically lives</p>
+        </div>
+    </div>
+    <div class="action-buttons">
+        <button class="btn btn-secondary"
+                hx-get="/recently-added/list"
+                hx-target="#ra-content"
+                hx-swap="innerHTML"
+                hx-include="#ra-days-input">
+            <i data-lucide="refresh-cw"></i>
+            Refresh
+        </button>
+    </div>
+</header>
+
+<!-- Concept explainer -->
+<div class="alert alert-info" style="margin-bottom: 1.5rem;">
+    <i data-lucide="info"></i>
+    <span>
+        New media is cached automatically once it hits your Watchlist or On&nbsp;Deck.
+        To hold something on the cache yourself, <strong>Pin</strong> it: items already on
+        the cache drive are pinned instantly (no copy); items on the array are copied over on
+        the next run. Pins stay until you unpin them.
+    </span>
+</div>
+
+<!-- Lazy-loaded content (stat cards + filters + table) -->
+{# Refetches on pin/unpin: the pin button swaps only its own <form>, so without
+   this the row's outcome badge, status note and group header keep asserting the
+   pre-click state — and after an *unpin* the badge still promises the file stays
+   on cache while a background eviction of it has already started. The small
+   delay lets the toggle's own swap land first. RecentlyAdded._state restores the
+   user's filters and expanded groups after the swap. #}
+<div id="ra-content"
+     hx-get="/recently-added/list"
+     hx-include="#ra-days-input"
+     hx-trigger="load, pinned-updated from:body delay:400ms"
+     hx-swap="innerHTML">
+    <div class="card">
+        <div class="card-body" style="text-align: center; padding: 3rem;">
+            <span class="spinner" style="width: 28px; height: 28px;"></span>
+            <div class="text-muted" style="margin-top: 0.75rem;">Loading recently added media...</div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Client-side filtering over the loaded rows (library + search + location).
+// The "Added Within" (days) dropdown re-fetches from the server via HTMX.
+var RecentlyAdded = window.RecentlyAdded || (function () {
+    function getControls() {
+        return {
+            lib: document.getElementById('ra-lib-filter'),
+            search: document.getElementById('ra-search'),
+            activePill: document.querySelector('.ra-loc-pill.active'),
+        };
+    }
+
+    // The user's current view, kept in memory so it survives an HTMX swap of
+    // #ra-content (the pin/unpin refetch). Deliberately not persisted: a stale
+    // search term restored on a fresh page load would look like a bug.
+    // `expanded` holds show groups by data-group-id; `details` holds leaf rows
+    // by data-row-id. Both are view state and both must survive the pin/unpin
+    // refetch — inspecting a row's files and then pinning it is the page's main
+    // sequence, and the pin swaps #ra-content out from under the expansion.
+    var _state = { lib: '', term: '', loc: 'all', expanded: {}, details: {} };
+
+    // Does a single media row match the active library/search/location filters?
+    function rowMatches(row, lib, term, loc) {
+        var matchLib = lib === 'all' || row.getAttribute('data-library') === lib;
+        var matchLoc = loc === 'all' || row.getAttribute('data-loc') === loc;
+        var matchTerm = !term || (row.getAttribute('data-title') || '').indexOf(term) !== -1;
+        return matchLib && matchLoc && matchTerm;
+    }
+
+    // A leaf row's detail sub-rows (.associated-sub-row) follow it directly.
+    // Open or close all of them together, chevron included. Takes the target
+    // state rather than toggling each sub-row, so a row can be restored to a
+    // known state instead of only flipped from whatever it currently shows.
+    function setDetail(leafRow, open) {
+        var chev = leafRow.querySelector('.ra-detail-chevron');
+        if (chev) chev.classList.toggle('open', open);
+        var s = leafRow.nextElementSibling;
+        while (s && s.classList.contains('associated-sub-row')) {
+            s.classList.toggle('af-visible', open);
+            s = s.nextElementSibling;
+        }
+    }
+
+    // Collapse a leaf row's details when the row itself is hidden, so a row
+    // filtered out of view cannot leave its sub-rows on screen. Forgetting the
+    // row here as well keeps what is remembered in step with what is shown:
+    // filtering discards detail state deliberately, so clearing the filter must
+    // not spring rows back open on its own.
+    function resetDetailRows(leafRow, visible) {
+        if (visible) return;
+        setDetail(leafRow, false);
+        var id = leafRow.getAttribute('data-row-id');
+        if (id) delete _state.details[id];
+    }
+
+    function apply() {
+        var c = getControls();
+        if (!c.lib && !c.search && !c.activePill) return;
+        var lib = c.lib ? c.lib.value : 'all';
+        var term = c.search ? c.search.value.trim().toLowerCase() : '';
+        var loc = c.activePill ? c.activePill.getAttribute('data-loc') : 'all';
+
+        var anyRows = false;
+        var shown = 0;
+
+        // Standalone rows (movies + single episodes).
+        document.querySelectorAll('#ra-table-body .ra-item').forEach(function (row) {
+            anyRows = true;
+            var visible = rowMatches(row, lib, term, loc);
+            row.style.display = visible ? '' : 'none';
+            resetDetailRows(row, visible);
+            if (visible) shown++;
+        });
+
+        // Show groups: header shows when any child matches; children show only
+        // when the group is expanded AND they match.
+        document.querySelectorAll('#ra-table-body .ra-group-header').forEach(function (header) {
+            anyRows = true;
+            var gid = header.getAttribute('data-group-id');
+            var expanded = header.classList.contains('is-open');
+            var children = document.querySelectorAll(
+                '#ra-table-body .ra-group-child[data-group="' + gid + '"]');
+            var anyMatch = false;
+            children.forEach(function (child) {
+                var m = rowMatches(child, lib, term, loc);
+                if (m) anyMatch = true;
+                var visible = m && expanded;
+                child.style.display = visible ? '' : 'none';
+                resetDetailRows(child, visible);
+            });
+            header.style.display = anyMatch ? '' : 'none';
+            if (anyMatch) shown++;
+        });
+
+        var empty = document.getElementById('ra-no-match');
+        if (empty) empty.style.display = (shown === 0 && anyRows) ? '' : 'none';
+    }
+
+    function toggleGroup(header) {
+        header.classList.toggle('is-open');
+        var gid = header.getAttribute('data-group-id');
+        if (gid) {
+            if (header.classList.contains('is-open')) _state.expanded[gid] = true;
+            else delete _state.expanded[gid];
+        }
+        apply();
+    }
+
+    // Re-apply the remembered view to freshly-swapped markup. Without this a
+    // pin/unpin refetch silently resets the library filter, the search term,
+    // the location pill and every expanded group — trading one wrong-state bug
+    // for another. Group ids are stable across renders (core.media_grouping's
+    // stable_group_id derives them from the grouping key, not list position),
+    // which is what makes restoring expansion by id work.
+    function restore() {
+        var lib = document.getElementById('ra-lib-filter');
+        if (lib && _state.lib) {
+            lib.value = _state.lib;
+            // The Library options are built from whatever rows the server
+            // returned, so a narrower window — or an item ageing out between
+            // refetches — can drop the selected library entirely. Assigning a
+            // value no <option> carries leaves the select at selectedIndex -1
+            // with value "", which matches no row: every row would hide behind
+            // "No items match" under a blank dropdown, with nothing on screen
+            // explaining why. Fall back to showing everything.
+            if (lib.selectedIndex === -1) { lib.value = 'all'; _state.lib = 'all'; }
+        }
+        var search = document.getElementById('ra-search');
+        if (search && _state.term) search.value = _state.term;
+
+        if (_state.loc && _state.loc !== 'all') {
+            document.querySelectorAll('.ra-loc-pill').forEach(function (p) {
+                p.classList.toggle('active', p.getAttribute('data-loc') === _state.loc);
+            });
+        }
+
+        document.querySelectorAll('#ra-table-body .ra-group-header').forEach(function (h) {
+            if (_state.expanded[h.getAttribute('data-group-id')]) h.classList.add('is-open');
+        });
+
+        // Re-open the rows whose file details were showing. Safe to run before
+        // apply(): apply() only ever collapses details for rows it hides, so a
+        // row restored here and then filtered out still ends up closed.
+        document.querySelectorAll('#ra-table-body .ra-row').forEach(function (r) {
+            if (_state.details[r.getAttribute('data-row-id')]) setDetail(r, true);
+        });
+    }
+
+    // Expand/collapse a leaf row's file-detail sub-rows.
+    function toggleDetail(td) {
+        var row = td.closest ? td.closest('tr') : null;
+        if (!row) return;
+        var chev = row.querySelector('.ra-detail-chevron');
+        var open = !(chev && chev.classList.contains('open'));
+        setDetail(row, open);
+        var id = row.getAttribute('data-row-id');
+        if (id) {
+            if (open) _state.details[id] = true;
+            else delete _state.details[id];
+        }
+    }
+
+    function setPill(pill) {
+        document.querySelectorAll('.ra-loc-pill').forEach(function (p) {
+            p.classList.remove('active');
+        });
+        pill.classList.add('active');
+        _state.loc = pill.getAttribute('data-loc') || 'all';
+        apply();
+    }
+
+    // Event delegation survives HTMX swaps of #ra-content.
+    document.addEventListener('input', function (e) {
+        if (e.target && (e.target.id === 'ra-lib-filter' || e.target.id === 'ra-search')) {
+            if (e.target.id === 'ra-lib-filter') _state.lib = e.target.value;
+            else _state.term = e.target.value;
+            apply();
+        }
+    });
+    document.addEventListener('click', function (e) {
+        var pill = e.target.closest ? e.target.closest('.ra-loc-pill') : null;
+        if (pill) setPill(pill);
+    });
+    document.body.addEventListener('htmx:afterSwap', function (e) {
+        if (e.detail.target && e.detail.target.id === 'ra-content') {
+            restore();
+            apply();
+        }
+    });
+
+    return { apply: apply, setPill: setPill, toggleGroup: toggleGroup,
+             toggleDetail: toggleDetail, restore: restore };
+})();
+</script>
+{% endblock %}

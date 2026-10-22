@@ -1,0 +1,305 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- Page Header -->
+<header class="page-header">
+    <div class="page-title">
+        <div class="page-title-icon">
+            <i data-lucide="layout-dashboard"></i>
+        </div>
+        <div>
+            <h1>Dashboard</h1>
+            <p>MediaCache Status Overview</p>
+        </div>
+    </div>
+</header>
+
+<!-- Config health warnings (issue #136) - empty unless a path_mapping issue is detected -->
+<div id="config-health-banner"
+     hx-get="/api/config-health"
+     hx-trigger="load"
+     hx-swap="innerHTML"></div>
+
+<!-- Stats Row - lazy loaded -->
+<div id="stats-container"
+     hx-get="/api/dashboard/stats-content"
+     hx-trigger="load"
+     hx-swap="innerHTML">
+    {% include "partials/dashboard_skeleton.html" %}
+</div>
+
+<!-- Recently Added (visibility into new media + where it lives) -->
+<div class="card">
+    <div class="card-header">
+        <i data-lucide="sparkles"></i>
+        <h2>Recently Added</h2>
+        <a href="/recently-added" class="btn btn-sm btn-secondary" style="margin-left: auto;">
+            View all <i data-lucide="arrow-right"></i>
+        </a>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        <div id="recently-added-widget"
+             hx-get="/recently-added/widget"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <div class="text-muted" style="text-align: center; padding: 1.5rem; font-size: 0.85rem;">
+                <span class="spinner" style="width: 18px; height: 18px;"></span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Activity (Last 24 Hours) -->
+<div class="card">
+    <div class="card-header">
+        <i data-lucide="activity"></i>
+        <h2>Recent Activity</h2>
+        <span class="text-muted" style="font-size: 0.75rem; margin-left: auto;">Last {{ retention_label }}</span>
+    </div>
+    <div class="activity-filter-bar" id="activity-filter-bar" style="padding: 0.75rem 1.25rem;">
+        <button class="activity-filter-pill active" data-filter="all">All</button>
+        <button class="activity-filter-pill" data-filter="Cached">Cached</button>
+        <button class="activity-filter-pill" data-filter="Restored">Restored</button>
+        {# Runs write "Moved"; maintenance sync-to-array writes "Moved to Array".
+           Both mean "copied back to the array", so one pill matches both — it
+           previously sent only "Moved to Array" and missed every run entry. #}
+        <button class="activity-filter-pill" data-filter="Moved|Moved to Array">Moved</button>
+        <button class="activity-filter-pill" data-filter="Released">Released</button>
+        <button class="activity-filter-pill" data-filter="other">Other</button>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        <div class="recent-activity-scroll">
+            <table class="recent-activity-table">
+                <colgroup>
+                    <col class="activity-col-time">
+                    <col class="activity-col-action">
+                    <col class="activity-col-file">
+                    <col class="activity-col-users">
+                    <col class="activity-col-size">
+                </colgroup>
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Action</th>
+                        <th>File</th>
+                        <th>Users</th>
+                        <th>Size</th>
+                    </tr>
+                </thead>
+                <tbody id="recent-activity" hx-get="/operations/activity" hx-trigger="load, every 60s">
+                    <tr>
+                        <td colspan="5" class="text-muted" style="text-align: center; padding: 2rem;">
+                            <span class="di-spinner" style="width: 20px; height: 20px; display: inline-block; margin-bottom: 0.5rem; border-top-color: var(--plex-text-muted); border-right-color: transparent;"></span>
+                            <div style="font-size: 0.85rem;">Loading activity...</div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+// ── Activity Runs (Option D run-grouped view) ──────────────────────────
+// Use `var` so re-execution after HTMX swap of recent_activity.html doesn't
+// throw on `const` redeclaration (the partial includes its own <script>).
+var ActivityRuns = window.ActivityRuns || {
+    EXPANDED_RUNS_KEY: 'plexcache_dashboard_expanded_runs',
+    // Actions covered by a specific pill, derived from the pills themselves so
+    // the two can't drift. The hardcoded list previously named 'Protected',
+    // which has no pill — so those rows matched neither their own filter nor
+    // "Other" and were reachable only under "All".
+    knownActions: function() {
+        var acts = [];
+        document.querySelectorAll('#activity-filter-bar .activity-filter-pill[data-filter]')
+            .forEach(function(pill) {
+                var f = pill.getAttribute('data-filter');
+                if (f === 'all' || f === 'other') return;
+                f.split('|').forEach(function(a) {
+                    if (a && acts.indexOf(a) === -1) acts.push(a);
+                });
+            });
+        return acts;
+    },
+
+    loadExpandedRuns: function() {
+        try {
+            return new Set(JSON.parse(localStorage.getItem(this.EXPANDED_RUNS_KEY) || '[]'));
+        } catch (e) { return new Set(); }
+    },
+    saveExpandedRuns: function(set) {
+        try {
+            localStorage.setItem(this.EXPANDED_RUNS_KEY, JSON.stringify(Array.from(set)));
+        } catch (e) {}
+    },
+
+    getActiveFilter: function() {
+        var active = document.querySelector('.activity-filter-pill.active');
+        return active ? active.getAttribute('data-filter') : 'all';
+    },
+
+    toggleRun: function(headerEl) {
+        var runId = headerEl.getAttribute('data-run-id');
+        if (!runId) return;
+        var isOpen = headerEl.classList.toggle('is-open');
+        var chev = headerEl.querySelector('.run-expandable-chev');
+        if (chev) chev.classList.toggle('open', isOpen);
+
+        var memberSel = '.run-row[data-run-member="' + CSS.escape(runId) + '"]';
+        document.querySelectorAll(memberSel).forEach(function(row) {
+            if (!isOpen) {
+                row.classList.remove('is-visible');
+                return;
+            }
+            // Re-expanding: show-children obey their show-parent's open state
+            var showChild = row.getAttribute('data-show-child');
+            if (showChild) {
+                var parent = document.querySelector('.run-show-parent[data-show-id="' + CSS.escape(showChild) + '"]');
+                row.classList.toggle('is-visible', !!(parent && parent.classList.contains('is-open')));
+            } else {
+                row.classList.add('is-visible');
+            }
+        });
+
+        // Movie sidecars (rendered by the af_expand_rows macro) carry
+        // data-run-member but use the af-visible class. Collapse them too
+        // when the run collapses so they don't visually orphan.
+        if (!isOpen) {
+            var sidecarSel = '.associated-sub-row[data-run-member="' + CSS.escape(runId) + '"]';
+            document.querySelectorAll(sidecarSel).forEach(function(row) {
+                row.classList.remove('af-visible');
+            });
+            // Reset the af-expanded flag on the parent so the badge re-shows
+            document.querySelectorAll('.af-parent[data-run-member="' + CSS.escape(runId) + '"]').forEach(function(parent) {
+                parent.classList.remove('af-expanded');
+            });
+        }
+
+        var expanded = this.loadExpandedRuns();
+        if (isOpen) { expanded.add(runId); } else { expanded.delete(runId); }
+        this.saveExpandedRuns(expanded);
+
+        this.applyFilter(this.getActiveFilter());
+    },
+
+    toggleShow: function(parentEl) {
+        var showId = parentEl.getAttribute('data-show-id');
+        if (!showId) return;
+        var isOpen = parentEl.classList.toggle('is-open');
+        var sel = '.run-show-child[data-show-child="' + CSS.escape(showId) + '"]';
+        document.querySelectorAll(sel).forEach(function(row) {
+            row.classList.toggle('is-visible', isOpen);
+        });
+        this.applyFilter(this.getActiveFilter());
+    },
+
+    applyFilter: function(filter) {
+        var tbody = document.getElementById('recent-activity');
+        if (!tbody) return;
+        var self = this;
+
+        // Per-row filter decision
+        var known = self.knownActions();
+        tbody.querySelectorAll('.run-row[data-action]').forEach(function(row) {
+            var action = row.getAttribute('data-action');
+            // A pill may name several actions ("Moved|Moved to Array") when one
+            // user-facing outcome has more than one internal label.
+            var pass = (
+                filter === 'all' ||
+                (filter === 'other' && known.indexOf(action) === -1) ||
+                filter.split('|').indexOf(action) !== -1
+            );
+            row.dataset.filterPass = pass ? '1' : '0';
+            // When filtered out, force-hide via inline style (overrides .is-visible)
+            row.style.display = pass ? '' : 'none';
+        });
+
+        // Per-run header: hide if no member passes; dim partial stat pills
+        tbody.querySelectorAll('.run-expandable-header').forEach(function(header) {
+            var runId = header.getAttribute('data-run-id');
+            var members = tbody.querySelectorAll('.run-row[data-run-member="' + CSS.escape(runId) + '"][data-action]');
+            var anyPass = Array.from(members).some(function(r) { return r.dataset.filterPass === '1'; });
+            header.style.display = anyPass ? '' : 'none';
+
+            var filesCached = parseInt(header.getAttribute('data-files-cached') || '0', 10);
+            var filesRestored = parseInt(header.getAttribute('data-files-restored') || '0', 10);
+            header.querySelectorAll('.run-stat-pill[data-stat]').forEach(function(pill) {
+                var stat = pill.getAttribute('data-stat');
+                var dim = false;
+                if (filter === 'Cached') {
+                    dim = (stat !== 'Cached');
+                } else if (filter === 'Restored' || filter === 'Moved to Array') {
+                    dim = (stat !== 'Restored');
+                } else if (filter === 'other') {
+                    dim = (stat === 'Cached' || stat === 'Restored');
+                }
+                pill.classList.toggle('is-dimmed', dim);
+                if (dim) {
+                    var orig = stat === 'Cached' ? filesCached : filesRestored;
+                    pill.setAttribute('title', orig + ' ' + stat.toLowerCase() + ' (filtered out)');
+                } else {
+                    pill.removeAttribute('title');
+                }
+            });
+        });
+
+        // Hide date headers whose runs are all hidden
+        tbody.querySelectorAll('.date-group-header').forEach(function(header) {
+            var dateKey = header.getAttribute('data-date-group');
+            var visibleRuns = false;
+            var node = header.nextElementSibling;
+            while (node && !node.classList.contains('date-group-header')) {
+                if (node.classList.contains('run-expandable-header') && node.style.display !== 'none') {
+                    visibleRuns = true;
+                    break;
+                }
+                node = node.nextElementSibling;
+            }
+            header.style.display = visibleRuns ? '' : 'none';
+        });
+    },
+
+    restoreState: function() {
+        var tbody = document.getElementById('recent-activity');
+        if (!tbody) return;
+        var expanded = this.loadExpandedRuns();
+
+        var headers = tbody.querySelectorAll('.run-expandable-header');
+        headers.forEach(function(header, idx) {
+            var runId = header.getAttribute('data-run-id');
+            // Newest run always starts expanded regardless of stored state
+            var shouldOpen = idx === 0 || expanded.has(runId);
+            header.classList.toggle('is-open', shouldOpen);
+            var chev = header.querySelector('.run-expandable-chev');
+            if (chev) chev.classList.toggle('open', shouldOpen);
+
+            tbody.querySelectorAll('.run-row[data-run-member="' + CSS.escape(runId) + '"]').forEach(function(row) {
+                var showChild = row.getAttribute('data-show-child');
+                if (showChild) {
+                    row.classList.remove('is-visible');  // shows always start collapsed
+                } else {
+                    row.classList.toggle('is-visible', shouldOpen);
+                }
+            });
+        });
+        this.applyFilter(this.getActiveFilter());
+    },
+};
+
+// Filter pill click → apply filter
+document.querySelector('.activity-filter-bar')?.addEventListener('click', function(e) {
+    var pill = e.target.closest('.activity-filter-pill');
+    if (!pill) return;
+    document.querySelectorAll('.activity-filter-pill').forEach(function(p) { p.classList.remove('active'); });
+    pill.classList.add('active');
+    ActivityRuns.applyFilter(pill.getAttribute('data-filter'));
+});
+
+// Restore expanded-run state after every HTMX swap
+document.body.addEventListener('htmx:afterSwap', function(e) {
+    if (e.detail.target && e.detail.target.id === 'recent-activity') {
+        ActivityRuns.restoreState();
+    }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ page_title | default('MediaCache') }}{% endblock %} - MediaCache</title>
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+
+    <!-- Lucide Icons (vendored) -->
+    <script src="{{ static_url('js/vendor/lucide.min.js') }}"></script>
+
+    <!-- Custom Plex Theme -->
+    <link rel="stylesheet" href="{{ static_url('css/plex-theme.css') }}">
+    <link rel="stylesheet" href="{{ static_url('css/custom.css') }}">
+
+    <!-- HTMX (vendored) -->
+    <script src="{{ static_url('js/vendor/htmx.min.js') }}"></script>
+    <script src="{{ static_url('js/vendor/htmx-ws.js') }}"></script>
+
+    <!-- Apply saved theme and sidebar state immediately to prevent flash -->
+    <script>
+        (function() {
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+
+            // Apply saved sidebar collapsed state
+            const sidebarCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
+            if (sidebarCollapsed) {
+                document.documentElement.classList.add('sidebar-collapsed-init');
+            }
+        })();
+    </script>
+
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <!-- Mobile Header -->
+    <header class="mobile-header">
+        <button class="hamburger-btn" onclick="toggleSidebar()" aria-label="Toggle menu">
+            <i data-lucide="menu"></i>
+        </button>
+        <div class="mobile-brand">
+            <div class="sidebar-brand-icon"><i data-lucide="hard-drive"></i></div>
+            <span>MediaCache</span>
+        </div>
+        <div class="mobile-actions">
+            <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                <i data-lucide="sun" class="icon-sun"></i>
+                <i data-lucide="moon" class="icon-moon"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Sidebar Overlay -->
+    <div class="sidebar-overlay" onclick="closeSidebar()"></div>
+
+    <div class="app-container">
+        <!-- Sidebar -->
+        <nav class="sidebar">
+            <div class="sidebar-brand">
+                <div class="sidebar-brand-icon"><i data-lucide="hard-drive"></i></div>
+                <div class="sidebar-brand-text">
+                    <span>MediaCache</span>
+                    <small class="sidebar-brand-version">v{{ product_version }}{% if tag_label %} <span class="dev-badge">{{ tag_label }}</span>{% endif %}</small>
+                </div>
+            </div>
+            <ul class="sidebar-nav">
+                <li>
+                    <a href="/" data-tooltip="Dashboard" {% if page_title == 'Dashboard' %}class="active"{% endif %}>
+                        <i data-lucide="layout-dashboard"></i>
+                        <span>Dashboard</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/cache" data-tooltip="Cached Files" {% if page_title == 'Cached Files' %}class="active"{% endif %}>
+                        <i data-lucide="database"></i>
+                        <span>Cached Files</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/recently-added" data-tooltip="Recently Added" {% if page_title == 'Recently Added' %}class="active"{% endif %}>
+                        <i data-lucide="sparkles"></i>
+                        <span>Recently Added</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/cache/drive" data-tooltip="Storage" {% if page_title == 'Storage' %}class="active"{% endif %}>
+                        <i data-lucide="hard-drive"></i>
+                        <span>Storage</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/settings" data-tooltip="Settings" {% if 'Settings' in page_title|default('') %}class="active"{% endif %}>
+                        <i data-lucide="settings"></i>
+                        <span>Settings</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/logs" data-tooltip="Logs" {% if page_title == 'Logs' %}class="active"{% endif %}>
+                        <i data-lucide="file-text"></i>
+                        <span>Logs</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/maintenance" data-tooltip="Maintenance" {% if page_title == 'Maintenance' %}class="active"{% endif %}>
+                        <i data-lucide="wrench"></i>
+                        <span>Maintenance</span>
+                    </a>
+                </li>
+            </ul>
+            {% if request.state.user is defined and request.state.user %}
+            <form method="post" action="/auth/logout" style="margin: 0; padding: 0 0.5rem;">
+                <button type="submit" class="sidebar-logout-btn" title="Sign out ({{ request.state.user.plex_username }})">
+                    <i data-lucide="log-out"></i>
+                    <span>Sign Out</span>
+                </button>
+            </form>
+            {% endif %}
+            <div class="sidebar-footer">
+                <button class="sidebar-collapse-btn" onclick="toggleSidebarCollapse()" title="Collapse sidebar">
+                    <i data-lucide="panel-left-close"></i>
+                    <span>Collapse</span>
+                </button>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="content-wrapper">
+                <!-- Theme toggle - positioned top-right of content area -->
+                <div class="top-controls">
+                    <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                        <i data-lucide="sun" class="icon-sun"></i>
+                        <i data-lucide="moon" class="icon-moon"></i>
+                    </button>
+                </div>
+
+                <!-- Global Operation Status Banner -->
+                <div id="global-operation-banner"
+                     hx-get="/api/operation-banner"
+                     hx-trigger="load, pinned-eviction-started from:body"
+                     hx-swap="innerHTML">
+                </div>
+                <script>
+                    // Scroll to top when an unpin kicks off a background eviction
+                    // so the user sees the banner spin up.
+                    document.body.addEventListener('pinned-eviction-started', function() {
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                    });
+                </script>
+
+                <!-- Alert container for toast notifications -->
+                <div id="alert-container"></div>
+
+                {% block content %}{% endblock %}
+
+                <script>
+                    // Operation pill placement (#216). The pill stays centred on top of the page
+                    // (Dynamic-Island style) as long as it does not collide with the page title,
+                    // the action buttons or the theme toggle. If it would, it gets .di-flow and
+                    // becomes a full-width row of the header, below the buttons. Measured with
+                    // .di-flow removed, so it moves back up as soon as there is room again.
+                    (function () {
+                        var banner = document.getElementById('global-operation-banner');
+                        var header = document.querySelector('.content-wrapper > .page-header');
+                        if (!banner || !header) return;
+                        // Child of the header so the fit mode can place it in the header flow;
+                        // the default state is absolutely positioned and does not affect the layout.
+                        var title = header.querySelector(':scope > .page-title');
+                        header.insertBefore(banner, title ? title.nextSibling : header.firstChild);
+
+                        function collides(a, b, gap) {
+                            if (!b || !b.width || !b.height) return false;
+                            return a.left < b.right + gap && a.right + gap > b.left &&
+                                   a.top < b.bottom && a.bottom > b.top;
+                        }
+
+                        function fit() {
+                            var state = banner.getAttribute('data-di-expanded');
+                            if (state === 'tier2' || state === 'tier3') return; // expanded overlay: keep mode
+                            if (!banner.querySelector('.di-pill')) return;
+                            var inFlow = banner.classList.contains('di-flow');
+                            if (inFlow) banner.classList.remove('di-flow');
+                            var rect = banner.getBoundingClientRect();
+                            var gap = inFlow ? 40 : 16; // hysteresis: no flip-flopping at the edge
+                            var hit = [
+                                header.querySelector(':scope > .page-title'),
+                                header.querySelector(':scope > .action-buttons'),
+                                document.querySelector('.top-controls')
+                            ].some(function (el) {
+                                return el && collides(rect, el.getBoundingClientRect(), gap);
+                            });
+                            if (hit) banner.classList.add('di-flow');
+                        }
+
+                        // Content swaps are handled synchronously (microtask, before the next paint),
+                        // so the pill never flashes in the wrong place. Expand/collapse animations
+                        // are re-checked once they are done.
+                        var slow = null;
+                        if (window.ResizeObserver) {
+                            new ResizeObserver(function () { requestAnimationFrame(fit); }).observe(header);
+                        } else {
+                            window.addEventListener('resize', fit);
+                        }
+                        // Banner content is replaced by htmx and by diTriggerRun() (innerHTML)
+                        new MutationObserver(function (list) {
+                            if (list.some(function (m) { return m.type === 'childList'; })) fit();
+                            if (list.some(function (m) { return m.type === 'attributes'; })) {
+                                clearTimeout(slow);
+                                slow = setTimeout(fit, 450);
+                            }
+                        }).observe(banner, {
+                            childList: true, // direct children only: the pill itself being replaced
+                            attributes: true, attributeFilter: ['data-di-expanded']
+                        });
+                        if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
+                        window.addEventListener('load', fit);
+                        fit();
+                    })();
+                </script>
+
+                <footer>
+                    MediaCache Web UI <span class="version">v{{ web_version }}</span>
+                </footer>
+            </div>
+        </main>
+    </div>
+
+    <!-- Custom JavaScript -->
+    <script src="{{ static_url('js/app.js') }}"></script>
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+
+        // Re-initialize icons after HTMX swaps + scroll to alert if populated
+        document.addEventListener('htmx:afterSwap', function(e) {
+            lucide.createIcons();
+            var id = e.detail.target.id;
+            if ((id === 'settings-alert-container' || id === 'alert-container') && e.detail.target.innerHTML.trim()) {
+                e.detail.target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        });
+
+        // Theme toggle
+        function toggleTheme() {
+            const html = document.documentElement;
+            const current = html.getAttribute('data-theme');
+            const next = current === 'light' ? 'dark' : 'light';
+
+            if (next === 'dark') {
+                html.removeAttribute('data-theme');
+                localStorage.removeItem('theme');
+            } else {
+                html.setAttribute('data-theme', next);
+                localStorage.setItem('theme', next);
+            }
+
+            // Re-init icons to update theme toggle icons
+            lucide.createIcons();
+        }
+
+        // Mobile sidebar toggle
+        function toggleSidebar() {
+            document.querySelector('.sidebar').classList.toggle('open');
+            document.querySelector('.sidebar-overlay').classList.toggle('active');
+        }
+
+        function closeSidebar() {
+            document.querySelector('.sidebar').classList.remove('open');
+            document.querySelector('.sidebar-overlay').classList.remove('active');
+        }
+
+        // Close sidebar on nav link click (mobile)
+        document.querySelectorAll('.sidebar-nav a').forEach(link => {
+            link.addEventListener('click', () => {
+                if (window.innerWidth <= 768) {
+                    closeSidebar();
+                }
+            });
+        });
+
+        // Close sidebar on escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeSidebar();
+            }
+        });
+
+        // Sidebar collapse toggle (desktop)
+        function toggleSidebarCollapse() {
+            const sidebar = document.querySelector('.sidebar');
+            const appContainer = document.querySelector('.app-container');
+            const isCollapsed = sidebar.classList.toggle('collapsed');
+            appContainer.classList.toggle('sidebar-collapsed', isCollapsed);
+            document.body.classList.toggle('sidebar-collapsed', isCollapsed);
+
+            // Persist state
+            localStorage.setItem('sidebarCollapsed', isCollapsed);
+
+            // Remove init class if present (no longer needed after first toggle)
+            document.documentElement.classList.remove('sidebar-collapsed-init');
+
+            // Re-init icons
+            lucide.createIcons();
+        }
+
+        // Initialize sidebar collapsed state on page load
+        (function initSidebarState() {
+            const sidebarCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
+            if (sidebarCollapsed) {
+                const sidebar = document.querySelector('.sidebar');
+                const appContainer = document.querySelector('.app-container');
+                if (sidebar && appContainer) {
+                    sidebar.classList.add('collapsed');
+                    appContainer.classList.add('sidebar-collapsed');
+                    document.body.classList.add('sidebar-collapsed');
+                }
+                // Remove the init class since we've applied the proper classes
+                document.documentElement.classList.remove('sidebar-collapsed-init');
+            }
+        })();
+    </script>
+    <!-- Banner live log stream — persists outside HTMX-swapped banner area -->
+    <script>
+    window.BannerLogStream = (function() {
+        var buffer = [];
+        var socket = null;
+        var reconnectTimer = null;
+        var MAX_LINES = 5;
+
+        function esc(text) {
+            var d = document.createElement('div');
+            d.textContent = text;
+            return d.innerHTML;
+        }
+
+        function connect() {
+            if (socket) return;
+            var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            socket = new WebSocket(proto + '//' + location.host + '/logs/ws?source=live');
+
+            socket.onmessage = function(e) {
+                try {
+                    var data = JSON.parse(e.data);
+                    if (data.type === 'initial') {
+                        buffer = (data.lines || []).slice(-MAX_LINES);
+                    } else if (data.type === 'append') {
+                        (data.lines || []).forEach(function(l) { buffer.push(l); });
+                        while (buffer.length > MAX_LINES) buffer.shift();
+                    } else { return; } // heartbeat/error — skip render
+                    renderIfVisible();
+                } catch (err) {}
+            };
+
+            socket.onclose = function() {
+                socket = null;
+                // Auto-reconnect if a running pill still exists
+                if (document.querySelector('.di-pill.di-glow')) {
+                    reconnectTimer = setTimeout(connect, 3000);
+                }
+            };
+            socket.onerror = function() {};
+        }
+
+        function disconnect() {
+            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+            if (socket) { socket.close(); socket = null; }
+            buffer = [];
+        }
+
+        function renderIfVisible() {
+            var container = document.getElementById('di-log-lines');
+            if (!container || buffer.length === 0) return;
+
+            var html = '';
+            buffer.forEach(function(line) {
+                var text = typeof line === 'string' ? line : (line.raw || '');
+                if (text.length > 120) text = text.substring(0, 117) + '...';
+                html += '<div class="di-file-row" style="font-family: monospace; font-size: 0.7rem;">' +
+                        '<span class="di-file-row__name">' + esc(text) + '</span></div>';
+            });
+            container.innerHTML = html;
+        }
+
+        return { connect: connect, disconnect: disconnect, renderIfVisible: renderIfVisible };
+    })();
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

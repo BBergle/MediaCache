@@ -1,0 +1,1052 @@
+"""Maintenance runner service - runs heavy maintenance actions in a background thread"""
+
+import json
+import logging
+import os
+import tempfile
+import threading
+import time
+import uuid
+from datetime import datetime, timedelta
+from enum import Enum
+from typing import Optional, Callable, Any, Dict, List
+from dataclasses import dataclass, field
+
+from web.services.maintenance_service import ActionResult
+from core.system_utils import format_bytes, format_duration
+
+# Backward-compatible aliases for any external imports
+_format_duration = format_duration
+_format_bytes = format_bytes
+
+logger = logging.getLogger(__name__)
+
+
+# Actions that should run asynchronously (heavy I/O)
+ASYNC_ACTIONS = {
+    "protect-with-backup",
+    "sync-to-array",
+    "fix-with-backup",
+    "restore-plexcached",
+    "delete-plexcached",
+    "repair-plexcached",
+    "scan-duplicates",
+    "delete-duplicates",
+    "delete-extensionless",
+    "evict-files",
+    "cache-pinned",
+}
+
+# Human-readable display names for actions (progress messages)
+ACTION_DISPLAY = {
+    "protect-with-backup": "Keeping {count} file(s) on cache...",
+    "sync-to-array": "Moving {count} file(s) to array...",
+    "fix-with-backup": "Fixing {count} file(s) with backup...",
+    "restore-plexcached": "Restoring {count} backup(s)...",
+    "delete-plexcached": "Deleting {count} backup(s)...",
+    "repair-plexcached": "Repairing {count} backup(s)...",
+    "scan-duplicates": "Scanning Plex libraries...",
+    "delete-duplicates": "Deleting {count} duplicate(s)...",
+    "delete-extensionless": "Deleting {count} extensionless file(s)...",
+    "evict-files": "Evicting {count} file(s) from cache...",
+    "cache-pinned": "Caching {count} pinned file(s)...",
+}
+
+# Outcome-oriented labels for history entries
+ACTION_HISTORY_LABELS = {
+    "protect-with-backup": "Keep on Cache",
+    "sync-to-array": "Move to Array",
+    "fix-with-backup": "Fix with Backup",
+    "restore-plexcached": "Restore Backup",
+    "delete-plexcached": "Delete Backup",
+    "repair-plexcached": "Repair Backup",
+    "add-to-exclude": "Add to Exclude",
+    "clean-exclude": "Clean Exclude",
+    "clean-timestamps": "Clean Timestamps",
+    "fix-timestamps": "Fix Timestamps",
+    "resolve-duplicate": "Resolve Duplicate",
+    "scan-duplicates": "Duplicate Scan",
+    "delete-duplicates": "Delete Duplicates",
+    "delete-extensionless": "Delete Extensionless",
+    "evict-files": "Evict from Cache",
+    "cache-pinned": "Cache Pinned",
+}
+
+
+class MaintenanceState(str, Enum):
+    """Maintenance runner states"""
+    IDLE = "idle"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+@dataclass
+class MaintenanceHistoryEntry:
+    """A single recorded maintenance action for the history log"""
+    id: str
+    action_name: str
+    action_display: str
+    timestamp: str          # ISO 8601 start time
+    completed_at: str       # ISO 8601 completion time
+    duration_seconds: float
+    duration_display: str
+    file_count: int
+    affected_count: int
+    success: bool
+    was_stopped: bool
+    errors: List[str] = field(default_factory=list)
+    error_count: int = 0
+    affected_files: List[str] = field(default_factory=list)
+    source: str = "async"   # "async" or "sync"
+    message: str = ""       # ActionResult summary message
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "action_name": self.action_name,
+            "action_display": self.action_display,
+            "timestamp": self.timestamp,
+            "completed_at": self.completed_at,
+            "duration_seconds": self.duration_seconds,
+            "duration_display": self.duration_display,
+            "file_count": self.file_count,
+            "affected_count": self.affected_count,
+            "success": self.success,
+            "was_stopped": self.was_stopped,
+            "errors": self.errors,
+            "error_count": self.error_count,
+            "affected_files": self.affected_files,
+            "source": self.source,
+            "message": self.message,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MaintenanceHistoryEntry":
+        return cls(
+            id=data.get("id", str(uuid.uuid4())),
+            action_name=data.get("action_name", ""),
+            action_display=data.get("action_display", ""),
+            timestamp=data.get("timestamp", ""),
+            completed_at=data.get("completed_at", ""),
+            duration_seconds=data.get("duration_seconds", 0),
+            duration_display=data.get("duration_display", ""),
+            file_count=data.get("file_count", 0),
+            affected_count=data.get("affected_count", 0),
+            success=data.get("success", True),
+            was_stopped=data.get("was_stopped", False),
+            errors=data.get("errors", []),
+            error_count=data.get("error_count", 0),
+            affected_files=data.get("affected_files", []),
+            source=data.get("source", "async"),
+            message=data.get("message", ""),
+        )
+
+
+class MaintenanceHistory:
+    """Thread-safe persistent storage for maintenance action history.
+
+    Stores entries in DATA_DIR/maintenance_history.json with automatic
+    pruning (30 days max age, 100 entry cap).
+    """
+
+    MAX_ENTRIES = 100
+    MAX_AGE_DAYS = 30
+
+    def __init__(self):
+        from web.config import DATA_DIR
+        self._file = DATA_DIR / "maintenance_history.json"
+        self._lock = threading.Lock()
+
+    def _load(self) -> List[dict]:
+        """Load entries from disk. Returns empty list on error."""
+        try:
+            if self._file.exists():
+                with open(self._file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except (json.JSONDecodeError, IOError, OSError) as e:
+            logger.warning(f"Failed to load maintenance history: {e}")
+        return []
+
+    def _save(self, entries: List[dict]):
+        """Atomic save: write to temp file then replace."""
+        self._file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(self._file.parent), suffix=".tmp"
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(entries, f, indent=2)
+                os.replace(tmp_path, str(self._file))
+            except OSError:
+                # Clean up temp file on failure
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+        except (IOError, OSError) as e:
+            logger.error(f"Failed to save maintenance history: {e}")
+
+    def _prune(self, entries: List[dict]) -> List[dict]:
+        """Remove entries older than MAX_AGE_DAYS, then cap at MAX_ENTRIES."""
+        cutoff = (datetime.now() - timedelta(days=self.MAX_AGE_DAYS)).isoformat()
+        entries = [e for e in entries if e.get("timestamp", "") >= cutoff]
+        return entries[:self.MAX_ENTRIES]
+
+    def record(self, entry: "MaintenanceHistoryEntry"):
+        """Add a new history entry (newest first) and save."""
+        with self._lock:
+            entries = self._load()
+            entries.insert(0, entry.to_dict())
+            entries = self._prune(entries)
+            self._save(entries)
+
+    def get_all(self) -> List["MaintenanceHistoryEntry"]:
+        """Return all entries (newest first)."""
+        with self._lock:
+            entries = self._load()
+        return [MaintenanceHistoryEntry.from_dict(e) for e in entries]
+
+    def get_recent(self, limit: int = 20) -> List["MaintenanceHistoryEntry"]:
+        """Return the most recent `limit` entries."""
+        with self._lock:
+            entries = self._load()
+        return [MaintenanceHistoryEntry.from_dict(e) for e in entries[:limit]]
+
+    def total_count(self) -> int:
+        """Return the total number of entries on disk."""
+        with self._lock:
+            return len(self._load())
+
+
+# Singleton
+_maintenance_history: Optional[MaintenanceHistory] = None
+_maintenance_history_lock = threading.Lock()
+
+
+def get_maintenance_history() -> MaintenanceHistory:
+    """Get or create the maintenance history singleton"""
+    global _maintenance_history
+    if _maintenance_history is None:
+        with _maintenance_history_lock:
+            if _maintenance_history is None:
+                _maintenance_history = MaintenanceHistory()
+    return _maintenance_history
+
+
+@dataclass
+class QueuedAction:
+    """A maintenance action waiting in the queue"""
+    id: str                          # uuid4 for removal
+    action_name: str                 # e.g. "protect-with-backup"
+    display_name: str                # From ACTION_HISTORY_LABELS
+    service_method: Callable
+    method_args: tuple
+    method_kwargs: dict              # Original kwargs (before callback injection)
+    file_count: int
+    max_workers: int
+    on_complete: Optional[Callable]
+    queued_at: datetime
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "action_name": self.action_name,
+            "display_name": self.display_name,
+            "file_count": self.file_count,
+            "queued_at": self.queued_at.isoformat(),
+        }
+
+
+@dataclass
+class MaintenanceResult:
+    """Result of a maintenance action"""
+    state: MaintenanceState
+    action_name: str = ""
+    action_display: str = ""
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    duration_seconds: float = 0
+    action_result: Optional[ActionResult] = None
+    error_message: Optional[str] = None
+    file_count: int = 0
+    files_processed: int = 0       # Count of completed files
+    current_file: str = ""         # Basename of file currently being processed
+    current_file_index: int = 0    # 1-based index (0 = not started)
+    bytes_total: int = 0           # Total bytes of current file being copied
+    bytes_copied: int = 0          # Bytes copied so far for current file
+    copy_start_time: Optional[float] = None  # time.time() when current copy began
+    parallel: bool = False         # True when using parallel file operations
+    max_workers: int = 1           # Concurrency level for parallel mode
+    active_files: list = field(default_factory=list)  # Basenames of in-flight files (parallel)
+
+
+class MaintenanceRunner:
+    """Service for running heavy maintenance actions in a background thread.
+
+    Similar to OperationRunner but simpler - no log parsing, no PlexCacheApp coupling.
+    Just runs a service method and captures the ActionResult.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._state = MaintenanceState.IDLE
+        self._result: Optional[MaintenanceResult] = None
+        self._thread: Optional[threading.Thread] = None
+        self._stop_requested = False
+        # Queue state
+        self._queue: List[QueuedAction] = []
+        self._max_queue_size = 5
+        self._queue_paused = False
+        self._dequeue_timer: Optional[threading.Timer] = None
+        self._countdown_started_at: Optional[datetime] = None
+        # Run grouping: minted at start_action(), attached to every FileActivity
+        # so the dashboard's run-grouped Recent Activity view can bucket entries.
+        self._run_id: Optional[str] = None
+        # Pre-action size snapshot: many maintenance actions delete/move the
+        # affected files, so post-action `os.path.getsize` returns 0. Capture
+        # sizes up front (input paths always exist at start) so the activity
+        # feed shows real sizes for "Restored", "Moved to Array", etc.
+        self._path_sizes: Dict[str, int] = {}
+
+    @property
+    def state(self) -> MaintenanceState:
+        with self._lock:
+            return self._state
+
+    @property
+    def is_running(self) -> bool:
+        return self.state == MaintenanceState.RUNNING
+
+    @property
+    def stop_requested(self) -> bool:
+        with self._lock:
+            return self._stop_requested
+
+    @property
+    def result(self) -> Optional[MaintenanceResult]:
+        with self._lock:
+            return self._result
+
+    def start_action(
+        self,
+        action_name: str,
+        service_method: Callable,
+        method_args: tuple = (),
+        method_kwargs: Optional[dict] = None,
+        file_count: int = 0,
+        on_complete: Optional[Callable] = None,
+        max_workers: int = 1,
+    ) -> bool:
+        """Start a maintenance action in a background thread.
+
+        Args:
+            action_name: Action identifier (e.g., "protect-with-backup")
+            service_method: The maintenance service method to call
+            method_args: Positional args for the method
+            method_kwargs: Keyword args for the method
+            file_count: Number of files being processed (for display)
+            on_complete: Optional callback when action completes
+            max_workers: Concurrency level (>1 enables parallel mode)
+
+        Returns:
+            True if started, False if already running or blocked
+        """
+        if method_kwargs is None:
+            method_kwargs = {}
+
+        parallel = max_workers > 1
+
+        # Check mutual exclusion with OperationRunner
+        from web.services.operation_runner import get_operation_runner
+        if get_operation_runner().is_running:
+            logger.info("Maintenance action blocked - PlexCache operation in progress")
+            return False
+
+        with self._lock:
+            if self._state == MaintenanceState.RUNNING:
+                logger.info("Maintenance action blocked - another maintenance action in progress")
+                return False
+
+            self._state = MaintenanceState.RUNNING
+            self._stop_requested = False
+            self._run_id = uuid.uuid4().hex
+            self._path_sizes = self._snapshot_path_sizes(method_args, method_kwargs)
+
+            display = ACTION_DISPLAY.get(action_name, "Running maintenance action...")
+            display = display.format(count=file_count)
+
+            self._result = MaintenanceResult(
+                state=MaintenanceState.RUNNING,
+                action_name=action_name,
+                action_display=display,
+                started_at=datetime.now(),
+                file_count=file_count,
+                parallel=parallel,
+                max_workers=max_workers,
+            )
+
+        # Inject stop_check into kwargs so service methods can check for stop
+        method_kwargs["stop_check"] = lambda: self._stop_requested
+
+        # Inject progress_callback so service methods can report per-file progress
+        if parallel:
+            # Parallel mode: called when a file COMPLETES, not when it starts.
+            # completed_count is passed directly (no -1 offset).
+            # Byte progress is aggregate — do NOT reset per-file.
+            def _progress_callback(completed_count: int, total: int, filename: str):
+                with self._lock:
+                    if self._result:
+                        self._result.current_file_index = completed_count
+                        self._result.current_file = filename
+                        self._result.files_processed = completed_count
+        else:
+            # Sequential mode: called when a file STARTS processing.
+            # current_index is 1-based; files_processed = index - 1.
+            def _progress_callback(current_index: int, total: int, filename: str):
+                with self._lock:
+                    if self._result:
+                        self._result.current_file_index = current_index
+                        self._result.current_file = filename
+                        self._result.files_processed = current_index - 1  # previous file is done
+                        # Reset byte progress for new file
+                        self._result.bytes_total = 0
+                        self._result.bytes_copied = 0
+                        self._result.copy_start_time = None
+
+        method_kwargs["progress_callback"] = _progress_callback
+
+        # Inject bytes_progress_callback for chunked copy progress
+        def _bytes_callback(bytes_copied: int, bytes_total: int):
+            with self._lock:
+                if self._result:
+                    if bytes_copied == 0:
+                        self._result.copy_start_time = time.time()
+                    self._result.bytes_copied = bytes_copied
+                    self._result.bytes_total = bytes_total
+
+        method_kwargs["bytes_progress_callback"] = _bytes_callback
+
+        # Pass max_workers through to service method
+        method_kwargs["max_workers"] = max_workers
+
+        # Inject active_callback for parallel mode (tracks in-flight filenames)
+        if parallel:
+            def _active_callback(active_list: list):
+                with self._lock:
+                    if self._result:
+                        self._result.active_files = active_list
+            method_kwargs["active_callback"] = _active_callback
+
+        self._thread = threading.Thread(
+            target=self._run_action,
+            args=(action_name, service_method, method_args, method_kwargs, on_complete),
+            daemon=True,
+        )
+        self._thread.start()
+
+        logger.info(f"Maintenance action started: {action_name} ({file_count} files)")
+        return True
+
+    def stop_action(self) -> bool:
+        """Request the current maintenance action to stop.
+
+        Returns:
+            True if stop was requested, False if not running
+        """
+        with self._lock:
+            if self._state != MaintenanceState.RUNNING:
+                return False
+            self._stop_requested = True
+
+        logger.info("Maintenance action stop requested")
+        return True
+
+    def dismiss(self):
+        """Reset COMPLETED/FAILED state back to IDLE."""
+        with self._lock:
+            if self._state in (MaintenanceState.COMPLETED, MaintenanceState.FAILED):
+                self._state = MaintenanceState.IDLE
+                # Keep _result for reference but update state
+                if self._result:
+                    self._result.state = MaintenanceState.IDLE
+
+    # ── Queue management ────────────────────────────────────────
+
+    @property
+    def queue_count(self) -> int:
+        with self._lock:
+            return len(self._queue)
+
+    @property
+    def queue(self) -> List[dict]:
+        """Serialized queue for API/templates."""
+        with self._lock:
+            return [item.to_dict() for item in self._queue]
+
+    @property
+    def queue_paused(self) -> bool:
+        with self._lock:
+            return self._queue_paused
+
+    def enqueue_action(
+        self,
+        action_name: str,
+        service_method: Callable,
+        method_args: tuple = (),
+        method_kwargs: Optional[dict] = None,
+        file_count: int = 0,
+        on_complete: Optional[Callable] = None,
+        max_workers: int = 1,
+    ) -> Optional[str]:
+        """Add an action to the queue. Returns queue item ID or None if full."""
+        with self._lock:
+            if len(self._queue) >= self._max_queue_size:
+                return None
+
+            item_id = str(uuid.uuid4())
+            display_name = ACTION_HISTORY_LABELS.get(action_name, action_name)
+            item = QueuedAction(
+                id=item_id,
+                action_name=action_name,
+                display_name=display_name,
+                service_method=service_method,
+                method_args=method_args,
+                method_kwargs=method_kwargs or {},
+                file_count=file_count,
+                max_workers=max_workers,
+                on_complete=on_complete,
+                queued_at=datetime.now(),
+            )
+            self._queue.append(item)
+            logger.info(f"Queued maintenance action: {display_name} (#{len(self._queue)})")
+            return item_id
+
+    def merge_into_queued(self, action_name: str, additional_paths: List[str]) -> bool:
+        """Append paths to the tail-most queued action of the same name.
+
+        Used when a caller would otherwise create a near-duplicate queue
+        entry (e.g. rapid unpin clicks each spawning their own evict-files
+        job). Merging keeps the queue from filling up with sibling jobs
+        and removes the 10-second countdown gap between each.
+
+        Only merges into queued items, never the currently running action
+        (its path list is being iterated by the service). The merged
+        action keeps the original `max_workers` / `on_complete` /
+        `method_kwargs` — only the path list and `file_count` change.
+
+        Returns True if merged, False if no compatible queue tail item
+        exists (caller should fall back to `enqueue_action`).
+        """
+        if not additional_paths:
+            return False
+
+        with self._lock:
+            for item in reversed(self._queue):
+                if item.action_name != action_name:
+                    continue
+                if not item.method_args or not isinstance(item.method_args[0], list):
+                    continue
+
+                existing = list(item.method_args[0])
+                existing_set = set(existing)
+                added = 0
+                for p in additional_paths:
+                    if p not in existing_set:
+                        existing.append(p)
+                        existing_set.add(p)
+                        added += 1
+
+                if added == 0:
+                    return True  # All paths already in queue — caller can stop
+
+                item.method_args = (existing,) + item.method_args[1:]
+                item.file_count = len(existing)
+                logger.info(
+                    f"Merged {added} path(s) into queued action: {item.display_name} "
+                    f"(now {item.file_count} file(s))"
+                )
+                return True
+
+            return False
+
+    def remove_from_queue(self, item_id: str) -> bool:
+        """Remove an item from the queue by ID."""
+        with self._lock:
+            for i, item in enumerate(self._queue):
+                if item.id == item_id:
+                    removed = self._queue.pop(i)
+                    logger.info(f"Removed from queue: {removed.display_name}")
+                    return True
+            return False
+
+    def clear_queue(self) -> int:
+        """Clear all queued items. Returns count cleared."""
+        with self._lock:
+            count = len(self._queue)
+            self._queue.clear()
+            if count > 0:
+                logger.info(f"Cleared {count} item(s) from maintenance queue")
+            return count
+
+    def pause_queue(self):
+        """Pause the queue — items remain but won't auto-start."""
+        with self._lock:
+            self._queue_paused = True
+            if self._dequeue_timer:
+                self._dequeue_timer.cancel()
+                self._dequeue_timer = None
+                self._countdown_started_at = None
+        logger.info("Maintenance queue paused")
+
+    def resume_queue(self):
+        """Resume the queue and try to start the next action."""
+        with self._lock:
+            self._queue_paused = False
+        logger.info("Maintenance queue resumed")
+        self._try_dequeue()
+
+    def _try_dequeue(self):
+        """Start a 10-second countdown before executing the next queued action."""
+        with self._lock:
+            if self._queue_paused:
+                return
+            if self._state == MaintenanceState.RUNNING:
+                return
+            if not self._queue:
+                return
+            # Check OperationRunner
+            from web.services.operation_runner import get_operation_runner
+            if get_operation_runner().is_running:
+                return
+            # Cancel existing timer if any
+            if self._dequeue_timer:
+                self._dequeue_timer.cancel()
+
+            # Auto-dismiss completed/failed state so the countdown pill shows
+            if self._state in (MaintenanceState.COMPLETED, MaintenanceState.FAILED):
+                self._state = MaintenanceState.IDLE
+                if self._result:
+                    self._result.state = MaintenanceState.IDLE
+
+            self._countdown_started_at = datetime.now()
+            self._dequeue_timer = threading.Timer(10.0, self._execute_next_queued)
+            self._dequeue_timer.daemon = True
+            self._dequeue_timer.start()
+            logger.info(f"Queue countdown started — next action in 10s: {self._queue[0].display_name}")
+
+    def _execute_next_queued(self):
+        """Pop the next item from the queue and start it."""
+        with self._lock:
+            self._dequeue_timer = None
+            self._countdown_started_at = None
+            if not self._queue:
+                return
+            item = self._queue.pop(0)
+
+        logger.info(f"Auto-starting queued action: {item.display_name}")
+        started = self.start_action(
+            action_name=item.action_name,
+            service_method=item.service_method,
+            method_args=item.method_args,
+            method_kwargs=item.method_kwargs,
+            file_count=item.file_count,
+            on_complete=item.on_complete,
+            max_workers=item.max_workers,
+        )
+        if not started:
+            logger.warning(f"Failed to auto-start queued action: {item.display_name}")
+
+    def skip_next_queued(self):
+        """Cancel countdown, discard the next item, try the following one."""
+        with self._lock:
+            if self._dequeue_timer:
+                self._dequeue_timer.cancel()
+                self._dequeue_timer = None
+                self._countdown_started_at = None
+            if self._queue:
+                skipped = self._queue.pop(0)
+                logger.info(f"Skipped queued action: {skipped.display_name}")
+        self._try_dequeue()
+
+    def start_next_now(self):
+        """Cancel countdown and immediately execute the next queued action."""
+        with self._lock:
+            if self._dequeue_timer:
+                self._dequeue_timer.cancel()
+                self._dequeue_timer = None
+                self._countdown_started_at = None
+        self._execute_next_queued()
+
+    # Maps action names to activity feed display strings
+    ACTION_ACTIVITY_LABELS = {
+        "protect-with-backup": "Protected",
+        "sync-to-array": "Moved to Array",
+        "fix-with-backup": "Fixed",
+        "restore-plexcached": "Restored Backup",
+        "delete-plexcached": "Deleted Backup",
+        "evict-files": "Restored",
+        "cache-pinned": "Cached",
+    }
+
+    @staticmethod
+    def _snapshot_path_sizes(method_args: tuple, method_kwargs: dict) -> Dict[str, int]:
+        """Record sizes of input file paths before the action runs.
+
+        Most maintenance actions take the path list as the first positional
+        arg or a `paths`/`cache_paths` kwarg; the files always exist at
+        start (else the action couldn't operate on them). Sampling here
+        gives us authoritative sizes for the activity feed even after the
+        files are deleted, renamed, or moved by the action.
+        """
+        candidates = []
+        if method_args and isinstance(method_args[0], list):
+            candidates = method_args[0]
+        else:
+            for key in ("paths", "cache_paths"):
+                value = (method_kwargs or {}).get(key)
+                if isinstance(value, list):
+                    candidates = value
+                    break
+
+        sizes: Dict[str, int] = {}
+        for path in candidates:
+            if not isinstance(path, str):
+                continue
+            try:
+                sizes[path] = os.path.getsize(path)
+            except OSError:
+                pass
+        return sizes
+
+    def _resolve_size_for_activity(self, path: str) -> int:
+        """Look up the file's size, preferring the pre-action snapshot.
+
+        Falls back to a live `os.path.getsize` for actions that don't pass
+        the path list as an arg (e.g. `cache-pinned` resolves its own
+        targets internally — the cache file exists post-action there).
+        """
+        size = self._path_sizes.get(path, 0)
+        if size:
+            return size
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return 0
+
+    def _record_maintenance_activity(self, action_name: str, action_result: ActionResult):
+        """Record maintenance file operations to the shared activity feed."""
+        if not action_result or not action_result.affected_paths:
+            return
+
+        label = self.ACTION_ACTIVITY_LABELS.get(action_name)
+        if not label:
+            return
+
+        from core.activity import record_file_activity
+
+        for path in action_result.affected_paths:
+            filename = os.path.basename(path)
+            size_bytes = self._resolve_size_for_activity(path)
+
+            record_file_activity(
+                action=label,
+                filename=filename,
+                size_bytes=size_bytes,
+                run_id=self._run_id,
+                run_source="maintenance",
+            )
+
+    def _save_run_summary(self, action_name: str, action_result: Optional[ActionResult]):
+        """Persist a run summary so the dashboard's Recent Activity grouping
+        can display real start/end times for maintenance runs alongside
+        cache and restore runs."""
+        if not self._run_id or not self._result:
+            return
+
+        from core.activity import save_run_summary
+
+        result = self._result
+        if result.error_message:
+            status = "failed"
+        elif self._stop_requested:
+            status = "stopped"
+        else:
+            status = "completed"
+
+        affected_count = action_result.affected_count if action_result else 0
+        error_count = len(action_result.errors) if action_result else 0
+
+        save_run_summary(self._run_id, {
+            "run_source": "maintenance",
+            "status": status,
+            "started_at": result.started_at.isoformat() if result.started_at else datetime.now().isoformat(),
+            "completed_at": result.completed_at.isoformat() if result.completed_at else datetime.now().isoformat(),
+            "duration_seconds": round(result.duration_seconds, 1),
+            "action_name": action_name,
+            "action_display": ACTION_HISTORY_LABELS.get(action_name, action_name),
+            "affected_count": affected_count,
+            "error_count": error_count,
+            "dry_run": False,
+        })
+
+    def _record_history(self, action_name: str, action_result: Optional[ActionResult]):
+        """Record this action to the persistent maintenance history."""
+        try:
+            result = self._result
+            if not result:
+                return
+
+            errors = []
+            error_count = 0
+            affected_count = 0
+            affected_files = []
+
+            if action_result:
+                errors = action_result.errors[:20]
+                error_count = len(action_result.errors)
+                affected_count = action_result.affected_count
+                affected_files = [
+                    os.path.basename(p) for p in action_result.affected_paths[:25]
+                ]
+
+            entry = MaintenanceHistoryEntry(
+                id=str(uuid.uuid4()),
+                action_name=action_name,
+                action_display=ACTION_HISTORY_LABELS.get(action_name, action_name),
+                timestamp=result.started_at.isoformat() if result.started_at else datetime.now().isoformat(),
+                completed_at=result.completed_at.isoformat() if result.completed_at else datetime.now().isoformat(),
+                duration_seconds=round(result.duration_seconds, 1),
+                duration_display=_format_duration(result.duration_seconds),
+                file_count=result.file_count,
+                affected_count=affected_count,
+                success=action_result.success if action_result else (result.error_message is None),
+                was_stopped=self._stop_requested,
+                errors=errors,
+                error_count=error_count,
+                affected_files=affected_files,
+                source="async",
+                message=action_result.message if action_result else "",
+            )
+
+            get_maintenance_history().record(entry)
+        except Exception as e:
+            logger.error(f"Failed to record maintenance history: {e}")
+
+    def _run_action(
+        self,
+        action_name: str,
+        service_method: Callable,
+        method_args: tuple,
+        method_kwargs: dict,
+        on_complete: Optional[Callable],
+    ):
+        """Execute the maintenance action in the background thread."""
+        start_time = time.time()
+        error_message = None
+        action_result = None
+
+        try:
+            action_result = service_method(*method_args, **method_kwargs)
+
+            if self._stop_requested:
+                logger.info(f"Maintenance action stopped by user: {action_name}")
+            else:
+                logger.info(f"Maintenance action completed: {action_name}")
+
+            # Record successful file operations to the activity feed
+            if action_result and action_result.affected_paths:
+                try:
+                    self._record_maintenance_activity(action_name, action_result)
+                except Exception as e:
+                    logger.error(f"Failed to record maintenance activity: {e}")
+
+        except Exception as e:
+            error_message = str(e)
+            logger.exception(f"Maintenance action failed: {action_name}")
+
+        finally:
+            duration = time.time() - start_time
+
+            with self._lock:
+                self._result.completed_at = datetime.now()
+                self._result.duration_seconds = duration
+                self._result.action_result = action_result
+
+                # Clear progress fields on completion
+                if not self._stop_requested:
+                    self._result.files_processed = self._result.file_count
+                self._result.current_file = ""
+                self._result.current_file_index = 0
+                self._result.bytes_total = 0
+                self._result.bytes_copied = 0
+                self._result.copy_start_time = None
+                self._result.active_files = []
+
+                if error_message:
+                    self._result.state = MaintenanceState.FAILED
+                    self._result.error_message = error_message
+                    self._state = MaintenanceState.FAILED
+                else:
+                    self._result.state = MaintenanceState.COMPLETED
+                    self._state = MaintenanceState.COMPLETED
+
+            # Record to persistent history
+            self._record_history(action_name, action_result)
+
+            # Persist run summary for the dashboard's Recent Activity grouping
+            try:
+                self._save_run_summary(action_name, action_result)
+            except Exception as e:
+                logger.error(f"Failed to save maintenance run summary: {e}")
+
+            # Call on_complete callback (e.g., cache invalidation)
+            if on_complete:
+                try:
+                    on_complete()
+                except Exception as e:
+                    logger.error(f"on_complete callback failed: {e}")
+
+            # Queue management: pause on stop, try dequeue on normal completion
+            if self._stop_requested:
+                self.pause_queue()
+            else:
+                self._try_dequeue()
+
+    def get_status_dict(self) -> dict:
+        """Get status as a dictionary for banner rendering."""
+        result = self.result
+
+        if result is None or self.state == MaintenanceState.IDLE:
+            status = {
+                "state": MaintenanceState.IDLE.value,
+                "is_running": False,
+            }
+            # Always include queue info even when idle
+            with self._lock:
+                status["queue_count"] = len(self._queue)
+                status["queue"] = [item.to_dict() for item in self._queue]
+                status["queue_paused"] = self._queue_paused
+                # Countdown state
+                if self._dequeue_timer and self._countdown_started_at:
+                    status["queue_countdown"] = True
+                    status["queue_next_action"] = self._queue[0].display_name if self._queue else ""
+                    status["queue_countdown_started"] = self._countdown_started_at.isoformat()
+                    status["queue_countdown_seconds"] = 10
+                else:
+                    status["queue_countdown"] = False
+            return status
+
+        status = {
+            "state": result.state.value,
+            "is_running": result.state == MaintenanceState.RUNNING,
+            "action_name": result.action_name,
+            "action_display": result.action_display,
+            "started_at": result.started_at.isoformat() if result.started_at else None,
+            "completed_at": result.completed_at.isoformat() if result.completed_at else None,
+            "duration_seconds": round(result.duration_seconds, 1),
+            "file_count": result.file_count,
+            "error_message": result.error_message,
+            "files_processed": result.files_processed,
+            "current_file": result.current_file,
+            "current_file_index": result.current_file_index,
+            "parallel": result.max_workers if result.parallel else 0,
+            "active_files": list(result.active_files) if result.parallel else [],
+        }
+
+        # Elapsed time
+        elapsed = 0
+        if result.started_at:
+            if result.completed_at:
+                elapsed = result.duration_seconds
+            else:
+                elapsed = (datetime.now() - result.started_at).total_seconds()
+        status["elapsed_display"] = _format_duration(elapsed)
+
+        # Progress percent, bytes display, and ETA (running only)
+        if result.file_count > 0 and result.state == MaintenanceState.RUNNING:
+            if result.parallel and result.bytes_total > 0:
+                # Parallel mode with copies: pure byte-based progress
+                overall = result.bytes_copied / result.bytes_total
+            elif result.parallel:
+                # Parallel mode without copies: pure file-based progress
+                overall = result.files_processed / result.file_count
+            else:
+                # Sequential mode: blended progress (completed files + fractional current file)
+                file_fraction = 0
+                if result.bytes_total > 0:
+                    file_fraction = result.bytes_copied / result.bytes_total
+                overall = (result.files_processed + file_fraction) / result.file_count
+            status["progress_percent"] = min(int(overall * 100), 100)
+
+            # Bytes display (only while copying)
+            if result.bytes_total > 0:
+                status["bytes_display"] = f"{_format_bytes(result.bytes_copied)} / {_format_bytes(result.bytes_total)}"
+            else:
+                status["bytes_display"] = ""
+
+            # ETA from copy byte rate when actively copying
+            if result.bytes_total > 0 and result.bytes_copied > 0 and result.copy_start_time:
+                copy_elapsed = time.time() - result.copy_start_time
+                if copy_elapsed > 0:
+                    rate = result.bytes_copied / copy_elapsed
+                    remaining_bytes = result.bytes_total - result.bytes_copied
+                    status["eta_display"] = _format_duration(remaining_bytes / rate)
+                else:
+                    status["eta_display"] = ""
+            elif result.files_processed > 0 and elapsed > 0:
+                # Fallback: file-level average (for non-copy operations like rename/delete)
+                avg = elapsed / result.files_processed
+                remaining = result.file_count - result.files_processed
+                status["eta_display"] = _format_duration(avg * remaining)
+            else:
+                status["eta_display"] = ""
+        else:
+            status["progress_percent"] = 100 if result.state != MaintenanceState.RUNNING else 0
+            status["bytes_display"] = ""
+            status["eta_display"] = ""
+
+        # Add action result details for completed state
+        if result.action_result:
+            status["result_message"] = result.action_result.message
+            status["result_success"] = result.action_result.success
+            status["affected_count"] = result.action_result.affected_count
+            status["errors"] = result.action_result.errors
+            # Basenames of affected files for completion summary
+            status["affected_files"] = [
+                os.path.basename(p) for p in (result.action_result.affected_paths or [])[:8]
+            ]
+
+        # Always include queue info
+        with self._lock:
+            status["queue_count"] = len(self._queue)
+            status["queue"] = [item.to_dict() for item in self._queue]
+            status["queue_paused"] = self._queue_paused
+            if self._dequeue_timer and self._countdown_started_at:
+                status["queue_countdown"] = True
+                status["queue_next_action"] = self._queue[0].display_name if self._queue else ""
+                status["queue_countdown_started"] = self._countdown_started_at.isoformat()
+                status["queue_countdown_seconds"] = 10
+            else:
+                status["queue_countdown"] = False
+
+        return status
+
+
+# Singleton instance
+_maintenance_runner: Optional[MaintenanceRunner] = None
+_maintenance_runner_lock = threading.Lock()
+
+
+def get_maintenance_runner() -> MaintenanceRunner:
+    """Get or create the maintenance runner singleton"""
+    global _maintenance_runner
+    if _maintenance_runner is None:
+        with _maintenance_runner_lock:
+            if _maintenance_runner is None:
+                _maintenance_runner = MaintenanceRunner()
+    return _maintenance_runner

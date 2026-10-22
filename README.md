@@ -1,153 +1,399 @@
-# PlexCache - Refactored Version
+# MediaCache: Automate Plex and Jellyfin Media Caching
 
-A refactored version of the PlexCache script with improved architecture, maintainability, and testability. Please be aware that this refactor is mainly vibe coded so please use at your own risk.
+MediaCache is a fork of [PlexCache-D](https://github.com/StudioNirin/PlexCache-D) by StudioNirin
+(itself built on [PlexCache](https://github.com/bexem/PlexCache) by bexem) that adds experimental
+[Jellyfin support](#jellyfin-experimental). The rest of this README is PlexCache-D's documentation:
+the Docker images, Unraid template and discussion links below still point at upstream.
+
 ## Overview
+Automate Plex media management: Efficiently transfer media from the On Deck/Watchlist to the cache, and seamlessly move watched media back to their respective locations.
+An updated version of the "PlexCache-Refactored" script with various bugfixes and improvements. Hopefully fixed and improved anyway, time will tell!
 
-This refactored version maintains all the original functionality while providing:
+PlexCache efficiently transfers media from the On Deck/Watchlist to the cache and moves watched media back to their respective locations. This Python script reduces energy consumption by minimizing the need to spin up the array/hard drive(s) when watching recurrent media like TV series. It achieves this by moving the media from the OnDeck and watchlist for the main user and/or other users. For TV shows/anime, it also fetches the next specified number of episodes.
 
-- **Modular Architecture**: Code is organized into logical modules with clear separation of concerns
-- **Better Error Handling**: Proper exception handling without using `exit()` calls
-- **Type Hints**: Full type annotations for better code documentation and IDE support
-- **Testability**: Components can be easily unit tested
-- **Configuration Management**: Centralized configuration handling
-- **Logging**: Improved logging with proper handlers and rotation
+## Features
+The original PlexCache app only worked for local users for most features, due to API limitations. V1 of Plexcache-r had some similar limitations, but a lot of those have now been fixed.
 
-## Architecture
+- Fetch a specified number of episodes from the "onDeck" for the main user and other users (Local/Remote).
+- Skip fetching onDeck media for specified users (Local/Remote).
+- Fetch a specified number of episodes from the "watchlist" for the main user and other users (Local/Remote).
+- Skip fetching watchlist media for specified users (Local/Remote).
+- (New v2) - .plexcached backup system, so files are not moved off the array and are instead archived to prevent unecessary move operations.
+- Search only the specified libraries.
+- Check for free space before moving any file.
+- (New v2) - Cache retention policies, with automatic removals based on age/priority settings.
+- (New v3) - **Web UI Dashboard** - Browser-based interface for monitoring and configuration.
+- (New v3) - **Scheduled Runs** - Automatic execution with interval or cron scheduling.
+- (New v3) - **Enhanced Webhooks** - Discord and Slack rich message formatting with granular notification levels (Summary, Activity, Errors, Warnings).
+- (New v3) - **Stop Button** - Abort running operations gracefully from the Web UI.
+- (New v3) - **Smart Error Handling** - Migration stops early on critical errors (disk full, permissions).
+- (New v3) - **Async Maintenance** - Background thread execution for maintenance actions (restore, sync, protect, delete, fix) with real-time progress.
+- (New v3) - **Parallel File Operations** - Concurrent file moves/copies with configurable worker count.
+- (New v3) - **Cache Health Audit** - Detect untracked files, orphaned backups, stale entries with one-click fixes.
+- (New v3) - **ZFS Support** - Automatic detection of ZFS pool-only shares with correct path resolution.
+- (New v3) - **Min Free Space** - Safety floor setting to prevent caching when cache drive space is low.
+- (New v3) - **Docker Support** - Official container with Unraid template, auto-setup, and path translation.
+- (New v3) - **Byte-Level Progress** - Smooth progress bar updates every 10MB during file copies, with ETA from copy rate.
+- (New v3.1) - **Plex OAuth Authentication** - Optional login with Plex identity verification (server owner), popup-based OAuth flow, session cookies, rate limiting, CSRF protection, and security headers.
+- (New v3.1) - **Password Fallback** - Optional local password authentication alongside Plex OAuth.
+- (New v3.1) - **Duplicate File Detection** - Surface duplicate warnings on Dashboard and Maintenance pages.
+- (New v3.1) - **Persistent Auth Sessions** - Login sessions survive container restarts.
+- (New v3.1) - **Vendored Frontend Libraries** - Lucide icons and HTMX served locally, no external CDN dependencies.
+- (New v3.1) - **Security Hardening** - CSP, X-Frame-Options, X-Content-Type-Options, and Referrer-Policy headers.
+- (New v3.2) - **Extension-Free Caching** - Cache ALL sibling files (artwork, NFOs, metadata) alongside videos, not just subtitles. Eliminates array spinups caused by Plex reading poster.jpg, .nfo, or other small files.
+- (New v3.2) - **Reference-Counted Directory Files** - Shared files like `poster.jpg` stay cached until the last video in the directory is evicted.
+- (New v3.2) - **Sidecar File Indicators** - Dashboard shows sidecar file counts alongside subtitle counts in the cache browser.
+- Move watched media present on the cache drive back to the array.
+- Move all sibling files (subtitles, artwork, metadata) along with the media moved to or from the cache.
+- Filter media older than a specified number of days.
+- Run in debug mode for testing.
+- Use of a log file for easy debugging.
+- Use caching system to avoid wastful memory usage and cpu cycles.
+- Use of multitasking to optimize file transfer time.
+- Exit the script if any active session or skip the currently playing media.
+- Send Webhook/Unraid notifications with configurable trigger levels.
+- (New v2) - Unraid Mover exclusion file. This file also allows for manual custom entries. 
 
-The refactored code is organized into the following modules:
 
-### Core Modules
 
-- **`config.py`**: Configuration management with dataclasses for type safety
-- **`logging_config.py`**: Logging setup, rotation, and notification handlers
-- **`system_utils.py`**: OS detection, path conversions, and file utilities
-- **`plex_api.py`**: Plex server interactions and cache management
-- **`file_operations.py`**: File moving, filtering, and subtitle operations
-- **`plexcache_app.py`**: Main application orchestrator
+  
+### Project Structure
 
-### Key Improvements
+```
+PlexCache-D/
+├── plexcache.py              # Unified entry point (CLI, Web UI, setup wizard)
+├── core/                     # Core application modules
+│   ├── app.py                # Main orchestrator (PlexCacheApp class)
+│   ├── setup.py              # Interactive setup wizard
+│   ├── config.py             # Configuration management (dataclasses, JSON settings)
+│   ├── logging_config.py     # Logging, rotation, Unraid/webhook notification handlers
+│   ├── system_utils.py       # OS detection, path conversions, file utilities
+│   ├── plex_api.py           # Plex server interactions (OnDeck, Watchlist, RSS feeds)
+│   └── file_operations.py    # File moving, filtering, subtitles, timestamp tracking
+├── web/                      # Web UI (FastAPI + HTMX)
+│   ├── main.py               # FastAPI application (lifespan, middleware, error handlers)
+│   ├── config.py             # Web configuration + shared Jinja2 templates instance
+│   ├── dependencies.py       # Shared instances
+│   ├── routers/              # Route handlers (dashboard, cache, settings, logs, maintenance, operations, setup)
+│   ├── services/             # Business logic layer
+│   │   ├── maintenance_runner.py  # Background maintenance thread runner
+│   │   ├── operation_runner.py    # Background operation runner + activity feed
+│   │   ├── cache_service.py       # Cache analysis and storage stats
+│   │   └── ...                    # Scheduler, settings, import services
+│   ├── templates/            # Jinja2 templates (Plex theme)
+│   └── static/               # CSS, JS assets
+├── docker/                   # Docker support
+│   ├── Dockerfile            # Multi-stage container build
+│   └── docker-entrypoint.sh  # Container startup script
+├── templates/                # Unraid Community Apps store
+│   └── plexcache-d.xml       # Container template (auto-discovered by CA)
+├── tools/                    # Diagnostic utilities
+│   └── audit_cache.py        # Cache diagnostic tool
+├── data/                     # Runtime tracking files (auto-created, JSON)
+├── logs/                     # plexcache.log (rotating, 10MB, 5 backups)
+├── plexcache_settings.json   # User configuration
+└── plexcache_cached_files.txt  # Tracked cache files (Unraid mover exclude list)
+```
 
-1. **Separation of Concerns**: Each module has a single responsibility
-2. **Dependency Injection**: Components are injected rather than created internally
-3. **Error Handling**: Proper exception handling with meaningful error messages
-4. **Type Safety**: Full type annotations throughout the codebase
-5. **Testability**: Each component can be tested in isolation
-6. **Configuration**: Centralized configuration with validation
+## Web UI (V3.0+)
 
-## Installation
+PlexCache-D now includes a browser-based dashboard for monitoring and configuration.
 
-1. Install dependencies:
+**Start the Web UI:**
 ```bash
-pip install -r requirements.txt
+python3 plexcache.py --web               # Start on localhost:5000
+python3 plexcache.py --web --host 0.0.0.0  # Listen on all interfaces
+python3 plexcache.py --web --port 8080     # Custom port
 ```
 
-2. Run the setup script to configure PlexCache:
+**Features:**
+- **Setup Wizard** - Guided first-run configuration with Plex OAuth and security setup
+- **Dashboard** - Real-time cache stats, Plex connection status, recent activity feed
+- **Cached Files** - Sortable file browser with filters, eviction controls
+- **Storage** - Drive analytics, breakdowns by source, largest/oldest files
+- **Maintenance** - Cache health audit, untracked file detection, one-click fixes
+- **Settings** - Full configuration UI with Plex OAuth, library selection, user toggles, test connection
+- **Schedule** - Automatic runs with interval or cron expressions
+- **Logs** - Real-time log viewer with search, filters, and live streaming
+- **Stop Button** - Abort running operations gracefully (stops after current file completes)
+- **Operations** - Run Now with real-time progress banner, ETA, and stop button
+- **Activity Feed** - Recent file operations grouped by run, with TV episodes collapsed by show and persistent history
+- **Maintenance History** - Persistent log of past maintenance actions
+- **Authentication** - Optional Plex OAuth login with password fallback and session management
+
+**Tech Stack:** FastAPI, HTMX, Jinja2, Plex-inspired dark theme
+
+> **Note:** When running via Docker, the default port is **5757**. When running via CLI, the default port is **5000**.
+
+## Docker Installation (Recommended for Unraid)
+
+PlexCache-D is available as a Docker container, ideal for Unraid users.
+
+**Container Registry:** `ghcr.io/studionirin/plexcache-d`
+
+### Quick Start
+
 ```bash
-python plexcache_setup.py
+docker run -d \
+  --name plexcache-d \
+  -p 5757:5757 \
+  -v /mnt/user/appdata/plexcache:/config \
+  -v /mnt/cache:/mnt/cache \
+  -v /mnt/user0:/mnt/user0 \
+  -v /mnt/user:/mnt/user \
+  -e PUID=99 \
+  -e PGID=100 \
+  -e TZ=America/Los_Angeles \
+  ghcr.io/studionirin/plexcache-d:latest
 ```
 
-3. Run the main application:
+### Unraid Installation
+
+1. Go to **Docker** → **Add Container**
+2. Set **Repository**: `ghcr.io/studionirin/plexcache-d:latest`
+3. Add required volume mappings:
+   - `/config` → `/mnt/user/appdata/plexcache`
+   - `/mnt/cache` → `/mnt/cache` (read-write)
+   - `/mnt/user0` → `/mnt/user0` (read-write)
+   - `/mnt/user` → `/mnt/user` (read-write)
+4. Set **WebUI**: `http://[IP]:[PORT:5757]`
+5. Set a port mapping: `5757:5757`
+6. Click **Apply**
+
+> **Important:** All media paths (`/mnt/cache`, `/mnt/user0`, `/mnt/user`) must be **read-write** for PlexCache-D to move files between cache and array.
+
+### First Run
+
+Open `http://[YOUR_IP]:5757` - the Setup Wizard will guide you through:
+- Plex connection (OAuth or manual token)
+- Library selection with cacheable options
+- User selection for OnDeck/Watchlist monitoring
+- Caching behavior configuration
+- Security settings (optional Plex OAuth authentication)
+
+**Important:** Volume paths for `/mnt/cache`, `/mnt/user0`, and `/mnt/user` must match exactly between container and host for Plex path resolution.
+
+See `docker/UNRAID_SETUP.md` for detailed Unraid setup instructions including CA Mover Tuning integration.
+
+## Installation and Setup
+
+There are three ways to run PlexCache-D, depending on your preference:
+
+| | Docker | Manual + Web UI | Manual + CLI |
+|---|---|---|---|
+| **Best for** | Unraid users who prefer containers | Unraid/Linux users who prefer native installs | Lightweight, script-only usage |
+| **Web dashboard** | Yes (always on) | Yes (always on) | No |
+| **Scheduling** | Built-in (via Web UI) | Built-in (via Web UI) | External (cron / User Scripts) |
+| **Auto-start** | Docker restart policy | systemd or User Scripts plugin | cron `@reboot` or User Scripts |
+| **Default port** | 5757 | 5000 | N/A |
+| **Setup** | Web UI wizard on first visit | Web UI wizard on first visit | `--setup` CLI wizard |
+
+### Option 1: Docker (Recommended)
+
+See the [Docker Installation](#docker-installation-recommended-for-unraid) section above.
+
+### Option 2: Manual Install + Web UI
+
+This runs PlexCache-D as a persistent web server with dashboard, scheduler, and all features.
+
+**Prerequisites:**
+- Python 3.9+
+- Git (to clone the repo)
+
+**Install:**
 ```bash
-python plexcache_app.py
+cd /mnt/user/appdata
+git clone https://github.com/StudioNirin/PlexCache-D.git
+cd PlexCache-D
+pip3 install -r requirements.txt
 ```
 
-## Usage
+**Start the Web UI:**
+```bash
+python3 plexcache.py --web --host 0.0.0.0           # Listen on all interfaces, port 5000
+python3 plexcache.py --web --host 0.0.0.0 --port 8080  # Custom port
+```
 
-### Command Line Options
+Then open `http://[YOUR_IP]:5000` in your browser. On first run, the Setup Wizard will guide you through configuration.
 
-- `--debug`: Run in debug mode (no files will be moved)
-- `--skip-cache`: Skip using cached data and fetch fresh from Plex
+#### Auto-Start on Boot (Unraid -User Scripts Plugin)
 
-### Examples
+The easiest way to auto-start on Unraid without Docker:
+
+1. Install **User Scripts** from Community Apps (if not already installed)
+2. Go to **Settings** → **User Scripts** → **Add New Script**
+3. Name it `PlexCache-D Web UI`
+4. Click the script name, then **Edit Script** and paste:
 
 ```bash
-# Normal run
-python plexcache_app.py
-
-# Debug mode
-python plexcache_app.py --debug
-
-# Skip cache
-python plexcache_app.py --skip-cache
-
-# Both options
-python plexcache_app.py --debug --skip-cache
+#!/bin/bash
+cd /mnt/user/appdata/PlexCache-D
+nohup python3 plexcache.py --web --host 0.0.0.0 --port 5000 > /dev/null 2>&1 &
 ```
 
-## Configuration
+5. Set the schedule to **At Startup of Array**
+6. Click **Apply**
 
-The configuration is stored in `plexcache_settings.json` and includes:
+> **Tip:** To stop the server, find the process with `ps aux | grep plexcache` and `kill` it, or use the User Scripts **Stop** button if available.
 
-- **Plex Settings**: Server URL, token, library sections
-- **Media Settings**: Number of episodes, days to monitor, user preferences
-- **Path Settings**: Source and cache directories
-- **Performance Settings**: Concurrent operations, retry limits
-- **Notification Settings**: Webhook URLs, notification levels
+#### Auto-Start on Boot (Generic Linux -systemd)
 
-## Testing
+For non-Unraid Linux systems, create a systemd service:
 
-The modular architecture makes it easy to test individual components:
-
-```python
-# Example test for FilePathModifier
-from file_operations import FilePathModifier
-
-modifier = FilePathModifier(
-    plex_source="/media/",
-    real_source="/mnt/user/",
-    plex_library_folders=["movies"],
-    nas_library_folders=["movies"]
-)
-
-result = modifier.modify_file_paths(["/media/movies/test.mkv"])
-assert result == ["/mnt/user/movies/test.mkv"]
+```bash
+sudo nano /etc/systemd/system/plexcache-d.service
 ```
 
-## Migration from Original
+```ini
+[Unit]
+Description=PlexCache-D Web UI
+After=network.target
 
-The refactored version maintains full compatibility with the original:
+[Service]
+Type=simple
+WorkingDirectory=/opt/PlexCache-D
+ExecStart=/usr/bin/python3 plexcache.py --web --host 0.0.0.0 --port 5000
+Restart=on-failure
+RestartSec=10
 
-1. **Same Configuration**: Uses the same `plexcache_settings.json` format
-2. **Same Functionality**: All original features are preserved
-3. **Same Output**: Logging and notifications work identically
-4. **Same Performance**: No performance degradation
+[Install]
+WantedBy=multi-user.target
+```
 
-## Benefits of Refactoring
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable plexcache-d
+sudo systemctl start plexcache-d
+```
 
-### For Developers
+Check status with `sudo systemctl status plexcache-d` and logs with `journalctl -u plexcache-d -f`.
 
-- **Easier Maintenance**: Clear module boundaries and responsibilities
-- **Better Debugging**: Proper error handling and logging
-- **Type Safety**: IDE support and compile-time error detection
-- **Testing**: Unit tests can be written for each component
+### Option 3: Manual Install + CLI Only
 
-### For Users
+This is the original V1/V2 mode -no web server, no dashboard. PlexCache-D runs once, performs caching/eviction, and exits. You schedule it externally.
 
-- **Reliability**: Better error handling and recovery
-- **Maintainability**: Easier to fix bugs and add features
-- **Documentation**: Better code documentation and type hints
-- **Future-Proof**: Easier to extend and modify
+**Install** (same as Option 2):
+```bash
+cd /mnt/user/appdata
+git clone https://github.com/StudioNirin/PlexCache-D.git
+cd PlexCache-D
+pip3 install -r requirements.txt
+```
 
-## Contributing
+**First-time setup:**
+```bash
+python3 plexcache.py --setup
+```
 
-The refactored architecture makes it much easier to contribute:
+**Run manually:**
+```bash
+python3 plexcache.py                     # Normal run
+python3 plexcache.py --dry-run --verbose # Test run with full debug output
+```
 
-1. **Clear Module Boundaries**: Know exactly where to make changes
-2. **Type Safety**: IDE will catch many errors before runtime
-3. **Testing**: Write tests for your changes
-4. **Documentation**: Code is self-documenting with type hints
+#### Schedule with Cron
 
-## License
+```bash
+crontab -e
+```
 
-Same as the original PlexCache project.
+```
+# Run PlexCache-D every 6 hours
+0 */6 * * * cd /mnt/user/appdata/PlexCache-D && python3 plexcache.py >> /mnt/user/appdata/PlexCache-D/logs/cron.log 2>&1
+```
 
-## Credits
+#### Schedule with Unraid User Scripts
 
-Original PlexCache by bexem: https://github.com/bexem/PlexCache
+1. Install **User Scripts** from Community Apps
+2. **Add New Script** → name it `PlexCache-D`
+3. **Edit Script:**
 
-Special thanks to the original contributors:
-- /u/teshiburu2020
-- /u/planesrfun  
-- /u/trevski13
-- /u/extrobe
-- /u/dsaunier-sunlight 
+```bash
+#!/bin/bash
+cd /mnt/user/appdata/PlexCache-D
+python3 plexcache.py
+```
+
+4. Set schedule (e.g., **Custom** → `0 */6 * * *` for every 6 hours)
+5. Click **Apply**
+
+---
+
+For additional help, check the [Wiki](https://github.com/StudioNirin/PlexCache-D/wiki) for detailed guides. If something doesn't make sense or doesn't work, please open a new issue. But don't be upset if the answer is in the Wiki and we mock you for not reading it thoroughly first.
+
+## Jellyfin (Experimental)
+
+Caching runs can use Jellyfin instead of Plex. Pick **Jellyfin** as the media server in setup
+wizard step 2 or under **Settings → Plex Server**. For the CLI, add these to `plexcache_settings.json`
+(`PLEX_URL`/`PLEX_TOKEN` are then not needed):
+
+```json
+"media_server": "jellyfin",
+"jellyfin_url": "http://192.168.1.10:8096",
+"jellyfin_api_key": "<Dashboard > API Keys>",
+"jellyfin_user": ""
+```
+
+- **OnDeck** = Continue Watching + Next Up (plus the next `number_episodes`).
+- **Watchlist** = Favorites (favorite a series to cache its next unwatched `watchlist_episodes`).
+- `jellyfin_user` is the main user (blank = first administrator). With `users_toggle` on, all
+  Jellyfin users are included; skip users via `users` entries with `skip_ondeck`/`skip_watchlist`.
+- Requires Jellyfin 10.9+. Path mappings use Jellyfin's paths in place of Plex paths.
+- Plex-only: pinned media, recently added, remote RSS watchlists, Plex OAuth login, and the
+  Libraries/Users settings tabs (the wizard's library picker works with Jellyfin).
+
+## Notes
+
+This script might be compatible with other systems, especially Linux-based ones, although I have primarily tested it on Unraid with plex as docker container. While I cannot support every case, it's worth checking the GitHub issues to see if your specific case has already been discussed. Particularly worth checking the original Bexem repo issues page.
+I will still try to help out, but please note that I make no promises in providing assistance for every scenario.
+**It is highly advised to use the setup script.**
+
+## Known Limitations
+
+### Remote/Network Storage
+
+**The `.plexcached` backup system does NOT work with remote or network-attached storage** (e.g., Synology NAS mounted via SMB/NFS).
+
+Why this is a problem:
+- The Unraid mover only moves files on the local array, not remote mounts
+- `.plexcached` backups on remote storage won't protect against anything
+- Remote NAS is typically "always-on" anyway, so there's no array spinup savings
+
+**Recommendation:** In the setup wizard or settings, set libraries on remote storage as **non-cacheable** (`enabled: false` in path_mappings). This prevents PlexCache-D from attempting to manage files it cannot properly protect.
+
+### Dynamix File Integrity False Positives
+
+If you use the **Dynamix File Integrity** plugin on Unraid, you may see "SHA256 hash key mismatch" errors for files managed by PlexCache-D. **These are false positives, not actual corruption.**
+
+Why this happens:
+- Dynamix records hashes using the original filename (e.g., `movie.mkv`)
+- PlexCache-D renames array files to `.plexcached` (e.g., `movie.mkv.plexcached`)
+- Dynamix can't find the original filename and reports it as corrupted/missing
+
+**Your files are intact.** The rename operation does not modify file contents. You can verify by comparing MD5/SHA256 hashes of the cache copy and `.plexcached` backup - they will match.
+
+**Recommendations:**
+- Exclude `*.plexcached` files from Dynamix scanning
+- Or rebuild the Dynamix hash database after PlexCache-D has been running
+- Or exclude PlexCache-D managed directories from integrity scanning
+
+## Disclaimer
+
+This script comes without any warranties, guarantees, or magic powers. By using this script, you accept that you're responsible for any consequences that may result. The author will not be held liable for data loss, corruption, or any other problems you may encounter. So, it's on you to make sure you have backups and test this script thoroughly before you unleash its awesome power.
+
+## Acknowledgments
+
+It seems we all owe a debt of thanks to someone called brimur[^3] for providing the script that served as the foundation and inspiration for this project. That was long before my time on it though, the first iteration I saw was by bexem[^4], who also has my thanks. But the biggest contributor to this continuation of the project was by bbergle[^5], who put in all the work on refactoring and cleaning up all the code into bite-sized chunks that were understandable to a novice like myself. All I did then was go through it all and try and make the wierd janky Plex API actually kinda work, for what I needed it to do anyway!
+
+And my first personal thankyou to [Brandon-Haney](https://github.com/Brandon-Haney) who has contributed a whole bunch of updates. I haven't yet merged them as of writing this, but he's gone through basically every file so I figured he deserved a pre-emptive thanks!
+
+
+[^1]: Remote users do not have individual watchlists accessible by the API. It's unfortunately not a thing. So instead I am using the available RSS feed as a workaround. The downside of this is... 
+[^2]: ...that it is an all-or-nothing proposal for remote users. Local users can still be toggled on a per-user basis.
+[^3]: [brimur/preCachePlexOnDeckEpiosodes.py](https://gist.github.com/brimur/95277e75ca399d5d52b61e6aa192d1cd)
+[^4]: https://github.com/bexem/PlexCache
+[^5]: https://github.com/BBergle/PlexCache
+
+
+
+

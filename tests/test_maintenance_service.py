@@ -1,0 +1,912 @@
+"""
+Tests for web/services/maintenance_service.py
+
+Covers:
+- _get_paths() conversion of /mnt/user/ to /mnt/user0/ for array paths
+- sync_to_array() logic (backup exists vs no backup)
+- protect_with_backup() skipping copy when backup already exists
+- _check_array_duplicate() correctness
+- _cache_to_array_path() translation
+- Path translation between host and container paths
+"""
+
+import json
+import os
+import sys
+from pathlib import Path
+from unittest.mock import patch, MagicMock, PropertyMock
+
+import pytest
+
+# conftest.py handles fcntl mock and sys.path setup
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+MOCK_SETTINGS = {
+    "path_mappings": [
+        {
+            "name": "Movies",
+            "cache_path": "/mnt/cache/media/Movies",
+            "real_path": "/mnt/user/media/Movies",
+            "host_cache_path": "/mnt/cache_downloads/media/Movies",
+            "cacheable": True,
+            "enabled": True,
+        },
+        {
+            "name": "TV",
+            "cache_path": "/mnt/cache/media/TV",
+            "real_path": "/mnt/user/media/TV",
+            "host_cache_path": "/mnt/cache_downloads/media/TV",
+            "cacheable": True,
+            "enabled": True,
+        },
+    ]
+}
+
+
+def _make_service(tmp_path, settings=None):
+    """Create a MaintenanceService wired to tmp_path directories.
+
+    Patches web.config constants so the service points at test directories,
+    then returns the service instance.
+    """
+    if settings is None:
+        settings = MOCK_SETTINGS
+
+    settings_file = tmp_path / "plexcache_settings.json"
+    settings_file.write_text(json.dumps(settings), encoding="utf-8")
+
+    exclude_file = tmp_path / "plexcache_cached_files.txt"
+    timestamps_file = tmp_path / "data" / "timestamps.json"
+    timestamps_file.parent.mkdir(parents=True, exist_ok=True)
+
+    with patch("web.services.maintenance_service.SETTINGS_FILE", settings_file), \
+         patch("web.services.maintenance_service.CONFIG_DIR", tmp_path), \
+         patch("web.services.maintenance_service.DATA_DIR", tmp_path / "data"):
+        from web.services.maintenance_service import MaintenanceService
+        svc = MaintenanceService()
+
+    # Override the paths that __init__ resolved from the (now un-patched) constants
+    svc.settings_file = settings_file
+    svc.exclude_file = exclude_file
+    svc.timestamps_file = timestamps_file
+
+    return svc
+
+
+# ============================================================================
+# _get_paths() tests
+# ============================================================================
+
+class TestGetPaths:
+    """Verify _get_paths converts /mnt/user/ -> /mnt/user0/ for array dirs."""
+
+    def test_converts_user_to_user0(self, tmp_path):
+        svc = _make_service(tmp_path)
+        cache_dirs, array_dirs = svc._get_paths()
+
+        assert cache_dirs == [
+            "/mnt/cache/media/Movies",
+            "/mnt/cache/media/TV",
+        ]
+        assert array_dirs == [
+            "/mnt/user0/media/Movies",
+            "/mnt/user0/media/TV",
+        ]
+
+    def test_disabled_mapping_excluded(self, tmp_path):
+        settings = {
+            "path_mappings": [
+                {
+                    "name": "Movies",
+                    "cache_path": "/mnt/cache/media/Movies",
+                    "real_path": "/mnt/user/media/Movies",
+                    "cacheable": True,
+                    "enabled": False,
+                },
+                {
+                    "name": "TV",
+                    "cache_path": "/mnt/cache/media/TV",
+                    "real_path": "/mnt/user/media/TV",
+                    "cacheable": True,
+                    "enabled": True,
+                },
+            ]
+        }
+        svc = _make_service(tmp_path, settings)
+        cache_dirs, array_dirs = svc._get_paths()
+
+        assert len(cache_dirs) == 1
+        assert cache_dirs[0] == "/mnt/cache/media/TV"
+        assert array_dirs[0] == "/mnt/user0/media/TV"
+
+    def test_non_cacheable_mapping_excluded(self, tmp_path):
+        settings = {
+            "path_mappings": [
+                {
+                    "name": "Music",
+                    "cache_path": "/mnt/cache/media/Music",
+                    "real_path": "/mnt/user/media/Music",
+                    "cacheable": False,
+                    "enabled": True,
+                },
+            ]
+        }
+        svc = _make_service(tmp_path, settings)
+        cache_dirs, array_dirs = svc._get_paths()
+
+        assert cache_dirs == []
+        assert array_dirs == []
+
+    def test_legacy_single_path_mode(self, tmp_path):
+        settings = {
+            "cache_dir": "/mnt/cache/downloads",
+            "real_source": "/mnt/user/downloads",
+            "nas_library_folders": ["Movies", "TV"],
+        }
+        svc = _make_service(tmp_path, settings)
+        cache_dirs, array_dirs = svc._get_paths()
+
+        assert len(cache_dirs) == 2
+        assert os.path.join("/mnt/cache/downloads", "Movies") in cache_dirs
+        assert os.path.join("/mnt/user0/downloads", "TV") in array_dirs
+
+    def test_caches_results(self, tmp_path):
+        svc = _make_service(tmp_path)
+        cache1, array1 = svc._get_paths()
+        cache2, array2 = svc._get_paths()
+        # Internal lists should be the same objects (cached)
+        assert cache1 is cache2
+        assert array1 is array2
+
+    def test_strips_trailing_slashes(self, tmp_path):
+        settings = {
+            "path_mappings": [
+                {
+                    "name": "Movies",
+                    "cache_path": "/mnt/cache/media/Movies/",
+                    "real_path": "/mnt/user/media/Movies/",
+                    "cacheable": True,
+                    "enabled": True,
+                },
+            ]
+        }
+        svc = _make_service(tmp_path, settings)
+        cache_dirs, array_dirs = svc._get_paths()
+
+        assert not cache_dirs[0].endswith("/")
+        assert not array_dirs[0].endswith("/")
+
+
+# ============================================================================
+# Settings reload tests (StudioNirin/PlexCache-D#176)
+# ============================================================================
+
+class TestSettingsReloadOnChange:
+    """The singleton must not serve a stale settings/path snapshot.
+
+    A stale snapshot caused the audit to scan an old/empty cache path and report
+    "0 on cache", flagging every tracked file as stale until a restart.
+    """
+
+    @staticmethod
+    def _bump_mtime(path):
+        """Force a newer mtime (avoids same-second resolution flakiness)."""
+        future = path.stat().st_mtime + 10
+        os.utime(path, (future, future))
+
+    def test_get_paths_refreshes_when_settings_change(self, tmp_path):
+        svc = _make_service(tmp_path)
+        cache_dirs, _ = svc._get_paths()
+        assert cache_dirs == ["/mnt/cache/media/Movies", "/mnt/cache/media/TV"]
+
+        # Simulate the user editing path mappings after the process started.
+        new_settings = {
+            "path_mappings": [
+                {
+                    "name": "Movies",
+                    "cache_path": "/mnt/cache/newmedia/Movies",
+                    "real_path": "/mnt/user/newmedia/Movies",
+                    "cacheable": True,
+                    "enabled": True,
+                },
+            ]
+        }
+        svc.settings_file.write_text(json.dumps(new_settings), encoding="utf-8")
+        self._bump_mtime(svc.settings_file)
+
+        cache_dirs2, array_dirs2 = svc._get_paths()
+        assert cache_dirs2 == ["/mnt/cache/newmedia/Movies"]
+        assert array_dirs2 == ["/mnt/user0/newmedia/Movies"]
+
+    def test_get_paths_stays_cached_when_unchanged(self, tmp_path):
+        svc = _make_service(tmp_path)
+        cache1, array1 = svc._get_paths()
+        cache2, array2 = svc._get_paths()
+        # No file change → same cached objects (no needless recompute).
+        assert cache1 is cache2
+        assert array1 is array2
+
+    def test_cache_scan_recovers_after_mapping_fix(self, tmp_path):
+        """Reproduces #176: a corrected cache_path is picked up without restart."""
+        # Start with a mapping pointing at an empty cache dir → 0 files found.
+        empty_cache = tmp_path / "empty_cache"
+        empty_cache.mkdir()
+        settings_v1 = {
+            "path_mappings": [{
+                "name": "Movies",
+                "cache_path": str(empty_cache),
+                "real_path": "/mnt/user/media/Movies",
+                "cacheable": True,
+                "enabled": True,
+            }]
+        }
+        svc = _make_service(tmp_path, settings_v1)
+        assert svc.get_cache_files() == set()
+
+        # User fixes the mapping to the real cache dir that holds a file.
+        real_cache = tmp_path / "real_cache"
+        real_cache.mkdir()
+        (real_cache / "movie.mkv").write_text("x", encoding="utf-8")
+        settings_v2 = {
+            "path_mappings": [{
+                "name": "Movies",
+                "cache_path": str(real_cache),
+                "real_path": "/mnt/user/media/Movies",
+                "cacheable": True,
+                "enabled": True,
+            }]
+        }
+        svc.settings_file.write_text(json.dumps(settings_v2), encoding="utf-8")
+        self._bump_mtime(svc.settings_file)
+
+        # Without the fix this still returns set() (stale path).
+        files = svc.get_cache_files()
+        assert len(files) == 1
+        assert os.path.basename(next(iter(files))) == "movie.mkv"
+
+
+# ============================================================================
+# _cache_to_array_path() tests
+# ============================================================================
+
+class TestCacheToArrayPath:
+
+    def test_translates_cache_to_array(self, tmp_path):
+        svc = _make_service(tmp_path)
+        result = svc._cache_to_array_path("/mnt/cache/media/Movies/Film.mkv")
+        assert result == "/mnt/user0/media/Movies/Film.mkv"
+
+    def test_returns_none_for_unknown_path(self, tmp_path):
+        svc = _make_service(tmp_path)
+        result = svc._cache_to_array_path("/totally/unknown/path/file.mkv")
+        assert result is None
+
+    def test_nested_subdirectory(self, tmp_path):
+        svc = _make_service(tmp_path)
+        result = svc._cache_to_array_path(
+            "/mnt/cache/media/TV/Breaking Bad/Season 1/S01E01.mkv"
+        )
+        assert result == "/mnt/user0/media/TV/Breaking Bad/Season 1/S01E01.mkv"
+
+
+# ============================================================================
+# _check_array_duplicate() tests
+# ============================================================================
+
+class TestCheckArrayDuplicate:
+
+    def test_duplicate_exists(self, tmp_path):
+        svc = _make_service(tmp_path)
+
+        array_file = "/mnt/user0/media/Movies/Film.mkv"
+        with patch("os.path.exists", return_value=True):
+            has_dup, path = svc._check_array_duplicate(
+                "/mnt/cache/media/Movies/Film.mkv"
+            )
+        assert has_dup is True
+        assert path == array_file
+
+    def test_no_duplicate(self, tmp_path):
+        svc = _make_service(tmp_path)
+        with patch("os.path.exists", return_value=False):
+            has_dup, path = svc._check_array_duplicate(
+                "/mnt/cache/media/Movies/Film.mkv"
+            )
+        assert has_dup is False
+
+    def test_unknown_mapping_returns_none(self, tmp_path):
+        svc = _make_service(tmp_path)
+        has_dup, path = svc._check_array_duplicate("/unknown/path/file.mkv")
+        assert has_dup is False
+        assert path is None
+
+
+# ============================================================================
+# _check_plexcached_backup() tests
+# ============================================================================
+
+class TestCheckPlexcachedBackup:
+
+    def test_backup_exists(self, tmp_path):
+        svc = _make_service(tmp_path)
+        with patch("os.path.exists", return_value=True):
+            has_backup, path = svc._check_plexcached_backup(
+                "/mnt/cache/media/Movies/Film.mkv"
+            )
+        assert has_backup is True
+        assert path == "/mnt/user0/media/Movies/Film.mkv.plexcached"
+
+    def test_no_backup(self, tmp_path):
+        svc = _make_service(tmp_path)
+        with patch("os.path.exists", return_value=False):
+            has_backup, path = svc._check_plexcached_backup(
+                "/mnt/cache/media/Movies/Film.mkv"
+            )
+        assert has_backup is False
+
+
+# ============================================================================
+# sync_to_array() tests
+# ============================================================================
+
+class TestSyncToArray:
+    """Verify sync_to_array behaviour for the three scenarios:
+    1. Identical .plexcached backup exists -> restore it, delete cache copy
+    2. Identical array copy exists -> just delete cache copy
+    3. No identical copy -> copy to array, verify, then delete cache
+       (newer-cache cases: tests/test_sync_to_array_newer_cache.py)
+    """
+
+    def test_dry_run_counts_all(self, tmp_path):
+        svc = _make_service(tmp_path)
+        paths = [
+            "/mnt/cache/media/Movies/A.mkv",
+            "/mnt/cache/media/Movies/B.mkv",
+        ]
+        result = svc.sync_to_array(paths, dry_run=True)
+        assert result.success is True
+        assert result.affected_count == 2
+        assert "Would move" in result.message
+
+    def test_empty_paths_returns_failure(self, tmp_path):
+        svc = _make_service(tmp_path)
+        result = svc.sync_to_array([], dry_run=False)
+        assert result.success is False
+
+    def test_unknown_mapping_returns_error(self, tmp_path):
+        svc = _make_service(tmp_path)
+        result = svc.sync_to_array(["/unknown/file.mkv"], dry_run=False)
+        assert result.success is False
+        assert len(result.errors) == 1
+        assert "Unknown path mapping" in result.errors[0]
+
+    @staticmethod
+    def _real_dirs(svc, tmp_path):
+        """Point the service at real cache/array directories under tmp_path."""
+        cache_root = tmp_path / "cache" / "Movies"
+        array_root = tmp_path / "user0" / "Movies"
+        cache_root.mkdir(parents=True)
+        array_root.mkdir(parents=True)
+        svc._get_paths = lambda: ([str(cache_root)], [str(array_root)])
+        return cache_root, array_root
+
+    def test_restores_plexcached_and_deletes_cache(self, tmp_path):
+        """When an identical .plexcached backup exists, rename it back and delete cache copy."""
+        svc = _make_service(tmp_path)
+        cache_root, array_root = self._real_dirs(svc, tmp_path)
+        (cache_root / "Film.mkv").write_bytes(b"film" * 100)
+        (array_root / "Film.mkv.plexcached").write_bytes(b"film" * 100)
+
+        result = svc.sync_to_array([str(cache_root / "Film.mkv")], dry_run=False)
+
+        assert result.success is True
+        assert result.affected_count == 1
+        assert (array_root / "Film.mkv").read_bytes() == b"film" * 100
+        assert not (array_root / "Film.mkv.plexcached").exists()
+        assert not (cache_root / "Film.mkv").exists()
+
+    def test_duplicate_on_array_just_deletes_cache(self, tmp_path):
+        """When an identical array copy exists (no .plexcached), just delete cache."""
+        svc = _make_service(tmp_path)
+        cache_root, array_root = self._real_dirs(svc, tmp_path)
+        (cache_root / "Film.mkv").write_bytes(b"film" * 100)
+        (array_root / "Film.mkv").write_bytes(b"film" * 100)
+
+        with patch.object(svc, "_copy_with_progress") as mock_copy:
+            result = svc.sync_to_array([str(cache_root / "Film.mkv")], dry_run=False)
+
+        assert result.success is True
+        assert result.affected_count == 1
+        mock_copy.assert_not_called()
+        assert not (cache_root / "Film.mkv").exists()
+
+    def test_no_backup_copies_to_array_and_verifies(self, tmp_path):
+        """No backup/duplicate: copy to array, verify size, then delete cache."""
+        svc = _make_service(tmp_path)
+        cache_root, array_root = self._real_dirs(svc, tmp_path)
+        (cache_root / "Film (2020)").mkdir()
+        (cache_root / "Film (2020)" / "Film.mkv").write_bytes(b"film" * 100)
+
+        result = svc.sync_to_array([str(cache_root / "Film (2020)" / "Film.mkv")], dry_run=False)
+
+        assert result.success is True
+        assert result.affected_count == 1
+        assert (array_root / "Film (2020)" / "Film.mkv").read_bytes() == b"film" * 100
+        assert not (array_root / "Film (2020)" / "Film.mkv.pc-part").exists()
+        assert not (cache_root / "Film (2020)" / "Film.mkv").exists()
+
+    def test_size_mismatch_does_not_delete_cache(self, tmp_path):
+        """If the copy comes out the wrong size, cache must NOT be deleted."""
+        svc = _make_service(tmp_path)
+        cache_root, array_root = self._real_dirs(svc, tmp_path)
+        (cache_root / "Film.mkv").write_bytes(b"film" * 100)
+
+        def short_copy(src, dst, cb=None):
+            with open(dst, "wb") as f:
+                f.write(b"film")
+
+        with patch.object(svc, "_copy_with_progress", side_effect=short_copy):
+            result = svc.sync_to_array([str(cache_root / "Film.mkv")], dry_run=False)
+
+        assert result.affected_count == 0
+        assert any("Size mismatch" in e for e in result.errors)
+        assert (cache_root / "Film.mkv").exists()
+        assert not (array_root / "Film.mkv").exists()
+        assert not (array_root / "Film.mkv.pc-part").exists()
+
+    def test_failed_copy_keeps_old_array_version_and_cache(self, tmp_path):
+        """A copy that fails part-way over an older array copy leaves both versions intact."""
+        svc = _make_service(tmp_path)
+        cache_root, array_root = self._real_dirs(svc, tmp_path)
+        (cache_root / "Film.mkv").write_bytes(b"new version" * 100)
+        (array_root / "Film.mkv.plexcached").write_bytes(b"old" * 100)
+
+        def failing_copy(src, dst, cb=None):
+            with open(dst, "wb") as f:
+                f.write(b"new")
+            raise OSError("disk full")
+
+        with patch.object(svc, "_copy_with_progress", side_effect=failing_copy):
+            result = svc.sync_to_array([str(cache_root / "Film.mkv")], dry_run=False)
+
+        assert result.affected_count == 0
+        assert (cache_root / "Film.mkv").read_bytes() == b"new version" * 100
+        assert (array_root / "Film.mkv.plexcached").read_bytes() == b"old" * 100
+        assert not (array_root / "Film.mkv").exists()
+        assert not (array_root / "Film.mkv.pc-part").exists()
+
+
+# ============================================================================
+# protect_with_backup() tests
+# ============================================================================
+
+class TestProtectWithBackup:
+
+    def test_dry_run_counts(self, tmp_path):
+        svc = _make_service(tmp_path)
+        result = svc.protect_with_backup(
+            ["/mnt/cache/media/Movies/Film.mkv"], dry_run=True
+        )
+        assert result.success is True
+        assert result.affected_count == 1
+
+    def test_empty_paths(self, tmp_path):
+        svc = _make_service(tmp_path)
+        result = svc.protect_with_backup([], dry_run=False)
+        assert result.success is False
+
+    @patch("os.path.exists")
+    def test_skips_copy_when_backup_already_exists(self, mock_exists, tmp_path):
+        """When .plexcached backup already exists, skip the copy entirely."""
+        svc = _make_service(tmp_path)
+        # Create exclude file so appending works
+        svc.exclude_file.touch()
+
+        cache_path = "/mnt/cache/media/Movies/Film.mkv"
+        plexcached_path = "/mnt/user0/media/Movies/Film.mkv.plexcached"
+
+        mock_exists.side_effect = lambda p: p == plexcached_path or p == cache_path
+
+        with patch("shutil.copy2") as mock_copy, \
+             patch.object(svc, "_add_to_timestamps"):
+            result = svc.protect_with_backup([cache_path], dry_run=False)
+
+        # shutil.copy2 should NOT be called because backup already exists
+        mock_copy.assert_not_called()
+        assert result.success is True
+        assert result.affected_count == 1
+
+    @patch("os.path.exists")
+    @patch("os.path.getsize")
+    @patch("os.makedirs")
+    def test_copies_when_no_backup(
+        self, mock_makedirs, mock_getsize, mock_exists, tmp_path
+    ):
+        """When no .plexcached exists, copy to array and verify."""
+        svc = _make_service(tmp_path)
+        svc.exclude_file.touch()
+        mock_copy = MagicMock()
+
+        cache_path = "/mnt/cache/media/Movies/Film.mkv"
+        plexcached_path = "/mnt/user0/media/Movies/Film.mkv.plexcached"
+
+        def exists_side_effect(path):
+            if path == plexcached_path:
+                return mock_copy.called  # after copy, exists
+            if path == cache_path:
+                return True
+            return False
+
+        mock_exists.side_effect = exists_side_effect
+        mock_getsize.return_value = 4096
+
+        with patch.object(svc, "_copy_with_progress", mock_copy), \
+             patch.object(svc, "_add_to_timestamps"):
+            result = svc.protect_with_backup([cache_path], dry_run=False)
+
+        mock_copy.assert_called_once()
+        assert result.success is True
+
+    @patch("os.path.exists")
+    @patch("os.path.getsize")
+    @patch("os.makedirs")
+    def test_size_mismatch_removes_failed_backup(
+        self, mock_makedirs, mock_getsize, mock_exists, tmp_path
+    ):
+        """Size mismatch after copy should remove the bad backup."""
+        svc = _make_service(tmp_path)
+        svc.exclude_file.touch()
+        mock_copy = MagicMock()
+
+        cache_path = "/mnt/cache/media/Movies/Film.mkv"
+        plexcached_path = "/mnt/user0/media/Movies/Film.mkv.plexcached"
+
+        def exists_side_effect(path):
+            if path == plexcached_path:
+                return mock_copy.called
+            if path == cache_path:
+                return True
+            return False
+
+        mock_exists.side_effect = exists_side_effect
+        mock_getsize.side_effect = lambda p: 4096 if p == cache_path else 2048
+
+        with patch("os.remove") as mock_remove, \
+             patch.object(svc, "_copy_with_progress", mock_copy), \
+             patch.object(svc, "_add_to_timestamps"):
+            result = svc.protect_with_backup([cache_path], dry_run=False)
+
+        # Should remove the bad backup
+        mock_remove.assert_called_once_with(plexcached_path)
+        assert result.affected_count == 0
+        assert any("Copy verification failed" in e for e in result.errors)
+
+    def test_unknown_mapping_returns_error(self, tmp_path):
+        svc = _make_service(tmp_path)
+        result = svc.protect_with_backup(
+            ["/unknown/path/file.mkv"], dry_run=False
+        )
+        assert result.affected_count == 0
+        assert any("Unknown path mapping" in e for e in result.errors)
+
+
+# ============================================================================
+# Path translation tests
+# ============================================================================
+
+class TestPathTranslation:
+
+    def test_host_to_container(self, tmp_path):
+        svc = _make_service(tmp_path)
+        result = svc._translate_host_to_container_path(
+            "/mnt/cache_downloads/media/Movies/Film.mkv"
+        )
+        assert result == "/mnt/cache/media/Movies/Film.mkv"
+
+    def test_container_to_host(self, tmp_path):
+        svc = _make_service(tmp_path)
+        result = svc._translate_container_to_host_path(
+            "/mnt/cache/media/Movies/Film.mkv"
+        )
+        assert result == "/mnt/cache_downloads/media/Movies/Film.mkv"
+
+    def test_no_translation_needed(self, tmp_path):
+        """When host_cache_path == cache_path, path is returned unchanged."""
+        settings = {
+            "path_mappings": [
+                {
+                    "name": "Movies",
+                    "cache_path": "/mnt/cache/media/Movies",
+                    "real_path": "/mnt/user/media/Movies",
+                    "host_cache_path": "/mnt/cache/media/Movies",
+                    "cacheable": True,
+                    "enabled": True,
+                },
+            ]
+        }
+        svc = _make_service(tmp_path, settings)
+        result = svc._translate_container_to_host_path(
+            "/mnt/cache/media/Movies/Film.mkv"
+        )
+        # Same path returned because host == container
+        assert result == "/mnt/cache/media/Movies/Film.mkv"
+
+    def test_unrecognized_path_returned_unchanged(self, tmp_path):
+        svc = _make_service(tmp_path)
+        result = svc._translate_host_to_container_path("/totally/unknown/path")
+        assert result == "/totally/unknown/path"
+
+
+# ============================================================================
+# format_bytes() tests (was _format_size, now consolidated in system_utils)
+# ============================================================================
+
+class TestFormatSize:
+
+    def test_zero_bytes(self):
+        from core.system_utils import format_bytes
+        assert format_bytes(0) == "0 B"
+
+    def test_bytes(self):
+        from core.system_utils import format_bytes
+        assert format_bytes(512) == "512 B"
+
+    def test_kilobytes(self):
+        from core.system_utils import format_bytes
+        result = format_bytes(2048)
+        assert "KB" in result
+
+    def test_gigabytes(self):
+        from core.system_utils import format_bytes
+        result = format_bytes(5 * 1024 ** 3)
+        assert "GB" in result
+
+    def test_terabytes(self):
+        from core.system_utils import format_bytes
+        result = format_bytes(2 * 1024 ** 4)
+        assert "TB" in result
+
+
+# ============================================================================
+# _should_skip_directory() tests
+# ============================================================================
+
+class TestShouldSkipDirectory:
+
+    def test_hidden_directories_skipped(self, tmp_path):
+        svc = _make_service(tmp_path)
+        assert svc._should_skip_directory(".Trash") is True
+        assert svc._should_skip_directory(".Recycle.Bin") is True
+
+    def test_normal_directory_not_skipped(self, tmp_path):
+        svc = _make_service(tmp_path)
+        assert svc._should_skip_directory("Movies") is False
+
+    def test_excluded_folder_from_settings(self, tmp_path):
+        settings = {
+            **MOCK_SETTINGS,
+            "excluded_folders": ["@eaDir", "tmp"],
+        }
+        svc = _make_service(tmp_path, settings)
+        assert svc._should_skip_directory("@eaDir") is True
+        assert svc._should_skip_directory("tmp") is True
+        assert svc._should_skip_directory("Movies") is False
+
+
+# ============================================================================
+# add_to_exclude() tests
+# ============================================================================
+
+class TestAddToExclude:
+
+    def test_dry_run(self, tmp_path):
+        svc = _make_service(tmp_path)
+        result = svc.add_to_exclude(
+            ["/mnt/cache/media/Movies/Film.mkv"], dry_run=True
+        )
+        assert result.success is True
+        assert result.affected_count == 1
+        assert "Would add" in result.message
+
+    def test_writes_host_path_to_exclude(self, tmp_path):
+        svc = _make_service(tmp_path)
+        svc.exclude_file.touch()
+        result = svc.add_to_exclude(
+            ["/mnt/cache/media/Movies/Film.mkv"], dry_run=False
+        )
+        assert result.success is True
+        content = svc.exclude_file.read_text(encoding="utf-8")
+        # Should be translated to host path
+        assert "/mnt/cache_downloads/media/Movies/Film.mkv" in content
+
+    def test_empty_paths(self, tmp_path):
+        svc = _make_service(tmp_path)
+        result = svc.add_to_exclude([], dry_run=False)
+        assert result.success is False
+
+
+# ============================================================================
+# AuditResults health calculation tests
+# ============================================================================
+
+class TestAuditResultsHealth:
+
+    def test_healthy_status(self):
+        from web.services.maintenance_service import AuditResults
+        results = AuditResults(
+            cache_file_count=10, exclude_entry_count=10, timestamp_entry_count=10
+        )
+        results.calculate_health_status()
+        assert results.health_status == "healthy"
+
+    def test_untracked_files_do_not_affect_health(self):
+        """Untracked files are informational and should not trigger critical status"""
+        from web.services.maintenance_service import AuditResults, UntrackedFile
+        results = AuditResults(
+            cache_file_count=10, exclude_entry_count=5, timestamp_entry_count=10
+        )
+        results.untracked_files.append(
+            UntrackedFile(
+                cache_path="/path/file.mkv", filename="file.mkv",
+                size=1000, size_display="1 KB",
+                has_plexcached_backup=False, backup_path=None,
+                has_array_duplicate=False, array_path=None,
+                recommended_action="sync_to_array",
+            )
+        )
+        results.calculate_health_status()
+        assert results.health_status == "healthy"
+
+    def test_critical_with_orphaned_backups(self):
+        from web.services.maintenance_service import AuditResults, OrphanedBackup
+        results = AuditResults(
+            cache_file_count=10, exclude_entry_count=10, timestamp_entry_count=10
+        )
+        results.orphaned_plexcached.append(
+            OrphanedBackup(
+                plexcached_path="/mnt/user0/media/file.mkv.plexcached",
+                original_filename="file.mkv",
+                size=1000, size_display="1 KB",
+                restore_path="/mnt/user0/media/file.mkv",
+                backup_type="orphaned",
+            )
+        )
+        results.calculate_health_status()
+        assert results.health_status == "critical"
+
+    def test_warnings_with_stale_entries(self):
+        from web.services.maintenance_service import AuditResults
+        results = AuditResults(
+            cache_file_count=10, exclude_entry_count=12, timestamp_entry_count=10
+        )
+        results.stale_exclude_entries = ["/stale/path"]
+        results.calculate_health_status()
+        assert results.health_status == "warnings"
+
+
+# ============================================================================
+# run_full_audit() — audit fan-out fix (issue #136)
+# ============================================================================
+
+class TestRunFullAuditFanOut:
+    """End-to-end tests for the set-based run_full_audit implementation.
+
+    Issue #136 replaced per-file ``os.path.exists`` probes with two sets
+    (``array_files_set`` / ``plexcached_set``) built during a single
+    ``os.walk`` of the array dirs. These tests use real files on tmp_path
+    to verify behavior is preserved and, critically, to assert that
+    ``os.path.exists`` is NOT called per cache file during the audit.
+    """
+
+    def _make_e2e_service(self, tmp_path):
+        cache_root = tmp_path / "cache" / "Movies"
+        array_root = tmp_path / "array" / "Movies"
+        cache_root.mkdir(parents=True)
+        array_root.mkdir(parents=True)
+        settings = {
+            "path_mappings": [
+                {
+                    "name": "Movies",
+                    "cache_path": str(cache_root),
+                    "real_path": str(array_root),
+                    "cacheable": True,
+                    "enabled": True,
+                },
+            ]
+        }
+        svc = _make_service(tmp_path, settings)
+        return svc, cache_root, array_root
+
+    def test_audit_finds_untracked_duplicate_and_orphaned(self, tmp_path):
+        svc, cache_root, array_root = self._make_e2e_service(tmp_path)
+
+        # Cache files
+        untracked = cache_root / "Unprotected.mkv"
+        duplicated = cache_root / "Duplicated.mkv"
+        protected = cache_root / "Protected.mkv"
+        for p in (untracked, duplicated, protected):
+            p.write_bytes(b"x" * 1024)
+
+        # Array side:
+        # - Duplicated.mkv exists on array (triggers duplicate + fix_with_backup)
+        # - Orphan.mkv.plexcached exists with no cache counterpart → orphaned backup
+        # - Protected.mkv.plexcached exists as a backup for a protected cache file
+        (array_root / "Duplicated.mkv").write_bytes(b"x" * 1024)
+        (array_root / "Orphan.mkv.plexcached").write_bytes(b"x" * 1024)
+        (array_root / "Protected.mkv.plexcached").write_bytes(b"x" * 1024)
+
+        # Exclude list protects only Protected.mkv
+        svc.exclude_file.write_text(str(protected) + "\n", encoding="utf-8")
+
+        results = svc.run_full_audit()
+
+        untracked_paths = {f.cache_path for f in results.untracked_files}
+        assert str(untracked) in untracked_paths
+        assert str(duplicated) in untracked_paths
+        assert str(protected) not in untracked_paths
+
+        # Duplicated.mkv should be flagged as duplicate AND marked fix_with_backup
+        dup_entry = next(f for f in results.untracked_files
+                         if f.cache_path == str(duplicated))
+        assert dup_entry.has_array_duplicate is True
+        assert dup_entry.recommended_action == "fix_with_backup"
+
+        # Unprotected.mkv has no backup/duplicate → sync_to_array
+        un_entry = next(f for f in results.untracked_files
+                        if f.cache_path == str(untracked))
+        assert un_entry.has_array_duplicate is False
+        assert un_entry.has_plexcached_backup is False
+        assert un_entry.recommended_action == "sync_to_array"
+
+        # Duplicates list populated once per duplicate (not twice — collapsed pass)
+        dup_paths = [d.cache_path for d in results.duplicates]
+        assert dup_paths == [str(duplicated)]
+
+        # Orphaned backup picked up by the walk
+        orphan_names = {b.original_filename for b in results.orphaned_plexcached}
+        assert "Orphan.mkv" in orphan_names
+
+    def test_audit_does_not_probe_cache_files_individually(self, tmp_path):
+        """The fan-out fix: run_full_audit must answer backup/duplicate
+        questions from the walk-built sets, not by calling os.path.exists
+        once per cache file. This test fails if the old per-file probe
+        pattern is reintroduced.
+        """
+        svc, cache_root, array_root = self._make_e2e_service(tmp_path)
+
+        # 50 cache files, none with array counterparts
+        for i in range(50):
+            (cache_root / f"file_{i:03d}.mkv").write_bytes(b"x")
+
+        svc.exclude_file.write_text("", encoding="utf-8")
+
+        from unittest.mock import patch
+        real_exists = os.path.exists
+        call_paths = []
+
+        def tracking_exists(path):
+            call_paths.append(path)
+            return real_exists(path)
+
+        with patch("web.services.maintenance_service.os.path.exists",
+                   side_effect=tracking_exists):
+            results = svc.run_full_audit()
+
+        # All 50 should be flagged as untracked
+        assert len(results.untracked_files) == 50
+
+        # Any os.path.exists call against an individual cache FILE path would
+        # indicate the old per-file probe pattern. Probing the cache directory
+        # itself (done once by get_cache_files) is fine.
+        cache_file_probes = [
+            p for p in call_paths
+            if str(cache_root) in str(p) and str(p).endswith(".mkv")
+        ]
+        assert cache_file_probes == [], (
+            f"run_full_audit should not os.path.exists() individual cache "
+            f"files; found {len(cache_file_probes)} probes"
+        )

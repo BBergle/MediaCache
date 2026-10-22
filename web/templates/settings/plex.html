@@ -1,0 +1,247 @@
+{% extends "settings/index.html" %}
+
+{% block settings_content %}
+<form hx-put="/settings/plex" hx-target="#settings-alert-container" hx-swap="innerHTML">
+<div class="card">
+    <div class="card-header">
+        <i data-lucide="link"></i>
+        <h2>Server Connection</h2>
+    </div>
+    <div class="card-body">
+        <div class="form-group" data-setting-id="media_server">
+            <label for="media_server">Media Server</label>
+            <select id="media_server" name="media_server" style="width: auto;" onchange="toggleMediaServer()">
+                <option value="plex" {% if settings.media_server != 'jellyfin' %}selected{% endif %}>Plex</option>
+                <option value="jellyfin" {% if settings.media_server == 'jellyfin' %}selected{% endif %}>Jellyfin (experimental)</option>
+            </select>
+            <div class="form-hint">
+                Jellyfin drives caching runs only: Continue Watching + Next Up as OnDeck, Favorites as Watchlist.
+                Pinned media, Recently Added and RSS watchlists stay Plex-only.
+            </div>
+        </div>
+
+        <div class="grid grid-2" data-server="jellyfin">
+            <div class="form-group" data-setting-id="jellyfin_url">
+                <label for="jellyfin_url">Jellyfin URL</label>
+                <input type="text" id="jellyfin_url" name="jellyfin_url"
+                       value="{{ settings.jellyfin_url }}"
+                       placeholder="http://192.168.1.x:8096" data-required>
+            </div>
+
+            <div class="form-group" data-setting-id="jellyfin_api_key">
+                <label for="jellyfin_api_key">API Key</label>
+                <input type="password" id="jellyfin_api_key" name="jellyfin_api_key"
+                       value="{{ settings.jellyfin_api_key }}"
+                       placeholder="Dashboard &rsaquo; API Keys" data-required>
+            </div>
+
+            <div class="form-group mb-0" data-setting-id="jellyfin_user">
+                <label for="jellyfin_user">Main User</label>
+                <input type="text" id="jellyfin_user" name="jellyfin_user"
+                       value="{{ settings.jellyfin_user }}"
+                       placeholder="First administrator">
+                <div class="form-hint">Leave blank to use the first administrator account</div>
+            </div>
+        </div>
+
+        <div class="grid grid-2" data-server="plex">
+            <div class="form-group" data-setting-id="plex_url">
+                <label for="plex_url">Plex URL</label>
+                <input type="text" id="plex_url" name="plex_url"
+                       value="{{ settings.plex_url | default('http://localhost:32400') }}"
+                       placeholder="http://localhost:32400" data-required>
+            </div>
+
+            <div class="form-group mb-0" data-setting-id="plex_token">
+                <label for="plex_token">Plex Token</label>
+                <div class="flex gap-1">
+                    <input type="password" id="plex_token" name="plex_token"
+                           value="{{ settings.plex_token | default('') }}"
+                           placeholder="Your Plex token" style="flex: 1;" data-required>
+                    <button type="button" class="btn btn-secondary oauth-btn" data-setting-id="plex_oauth_btn" onclick="startPlexOAuth()" title="Sign in with Plex to get token automatically">
+                        <i data-lucide="key"></i>
+                        <span>Get Token</span>
+                    </button>
+                </div>
+                <div class="form-hint">
+                    Enter manually or click "Get Token" to sign in with your Plex account
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body" style="padding: 1rem 1.25rem;">
+        <div class="form-group mb-0" style="display: flex; gap: 1rem; align-items: center;">
+            <button type="submit" class="btn btn-primary">
+                <i data-lucide="save"></i>
+                Save Connection
+            </button>
+            <button type="button" class="btn btn-secondary"
+                    data-setting-id="plex_test"
+                    hx-post="/settings/plex/test"
+                    hx-target="#plex-test-result"
+                    hx-swap="innerHTML">
+                <i data-lucide="plug"></i>
+                Test Connection
+            </button>
+            <div id="plex-test-result"></div>
+        </div>
+    </div>
+</div>
+</form>
+
+<!-- Plex OAuth Modal -->
+<div id="plex-oauth-modal" class="modal" style="display: none;">
+    <div class="modal-backdrop" onclick="closePlexOAuthModal()"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Sign in with Plex</h3>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="closePlexOAuthModal()">
+                <i data-lucide="x"></i>
+            </button>
+        </div>
+        <div class="modal-body" id="plex-oauth-body">
+            <div class="text-center">
+                <div class="spinner mb-2"></div>
+                <p>Opening Plex login...</p>
+                <p class="text-muted">A new window will open for you to sign in.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Show only the selected server's fields; hidden fields must not block submit
+    function toggleMediaServer() {
+        const server = document.getElementById('media_server').value;
+        document.querySelectorAll('[data-server]').forEach(section => {
+            const active = section.dataset.server === server;
+            section.style.display = active ? '' : 'none';
+            section.querySelectorAll('[data-required]').forEach(input => input.required = active);
+        });
+    }
+    toggleMediaServer();
+
+    // Plex OAuth flow (server-side)
+    let oauthWindow = null;
+    let oauthPollInterval = null;
+    let oauthClientId = null;
+
+    async function startPlexOAuth() {
+        const modal = document.getElementById('plex-oauth-modal');
+        const body = document.getElementById('plex-oauth-body');
+        modal.style.display = 'flex';
+
+        body.innerHTML = `
+            <div class="text-center">
+                <div class="spinner mb-2"></div>
+                <p>Requesting authorization from Plex...</p>
+            </div>
+        `;
+
+        try {
+            // Request OAuth start from server
+            const startResponse = await fetch('/settings/plex/oauth/start', {
+                method: 'POST',
+                headers: { 'Accept': 'application/json' }
+            });
+
+            const startData = await startResponse.json();
+
+            if (!startData.success) {
+                throw new Error(startData.error || 'Failed to start OAuth');
+            }
+
+            oauthClientId = startData.client_id;
+
+            // Open Plex auth page
+            oauthWindow = window.open(startData.auth_url, 'PlexAuth', 'width=800,height=600');
+
+            body.innerHTML = `
+                <div class="text-center">
+                    <div class="spinner mb-2"></div>
+                    <p>Waiting for you to sign in...</p>
+                    <p class="text-muted">Complete the sign-in in the popup window.</p>
+                    <button type="button" class="btn btn-secondary mt-2" onclick="closePlexOAuthModal()">Cancel</button>
+                </div>
+            `;
+
+            // Poll server for token
+            oauthPollInterval = setInterval(async () => {
+                try {
+                    const pollResponse = await fetch(`/settings/plex/oauth/poll?client_id=${oauthClientId}`, {
+                        headers: { 'Accept': 'application/json' }
+                    });
+
+                    const pollData = await pollResponse.json();
+
+                    if (!pollData.success) {
+                        // Error occurred (e.g., expired session)
+                        clearInterval(oauthPollInterval);
+                        if (oauthWindow) oauthWindow.close();
+
+                        body.innerHTML = `
+                            <div class="text-center">
+                                <i data-lucide="alert-circle" style="width: 48px; height: 48px; color: var(--plex-error);"></i>
+                                <p class="mt-2" style="color: var(--plex-error);">Authentication failed</p>
+                                <p class="text-muted">${pollData.error}</p>
+                                <button type="button" class="btn btn-secondary mt-2" onclick="closePlexOAuthModal()">Close</button>
+                            </div>
+                        `;
+                        lucide.createIcons();
+                        return;
+                    }
+
+                    if (pollData.complete && pollData.token) {
+                        // Success! Got the token
+                        clearInterval(oauthPollInterval);
+                        if (oauthWindow) oauthWindow.close();
+
+                        document.getElementById('plex_token').value = pollData.token;
+
+                        body.innerHTML = `
+                            <div class="text-center">
+                                <i data-lucide="check-circle" style="width: 48px; height: 48px; color: var(--plex-success);"></i>
+                                <p class="mt-2" style="color: var(--plex-success);">Successfully signed in!</p>
+                                <p class="text-muted">Token has been filled in. Click Save to apply.</p>
+                                <button type="button" class="btn btn-primary mt-2" onclick="closePlexOAuthModal()">Done</button>
+                            </div>
+                        `;
+                        lucide.createIcons();
+                    }
+                } catch (e) {
+                    console.error('Error polling for token:', e);
+                }
+            }, 2000);
+
+        } catch (error) {
+            body.innerHTML = `
+                <div class="text-center">
+                    <i data-lucide="alert-circle" style="width: 48px; height: 48px; color: var(--plex-error);"></i>
+                    <p class="mt-2" style="color: var(--plex-error);">Failed to start authentication</p>
+                    <p class="text-muted">${error.message}</p>
+                    <button type="button" class="btn btn-secondary mt-2" onclick="closePlexOAuthModal()">Close</button>
+                </div>
+            `;
+            lucide.createIcons();
+        }
+    }
+
+    function closePlexOAuthModal() {
+        const modal = document.getElementById('plex-oauth-modal');
+        modal.style.display = 'none';
+
+        if (oauthPollInterval) {
+            clearInterval(oauthPollInterval);
+            oauthPollInterval = null;
+        }
+        if (oauthWindow && !oauthWindow.closed) {
+            oauthWindow.close();
+            oauthWindow = null;
+        }
+        oauthClientId = null;
+    }
+</script>
+{% endblock %}

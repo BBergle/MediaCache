@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- Page Header -->
+<header class="page-header">
+    <div class="page-title">
+        <div class="page-title-icon">
+            <i data-lucide="settings"></i>
+        </div>
+        <div>
+            <h1>Settings</h1>
+            <p>Configure MediaCache behavior</p>
+        </div>
+    </div>
+</header>
+
+<!-- Settings Search -->
+<div class="settings-search" id="settings-search" data-active-tab="{{ active_tab | default('') }}">
+    <div class="settings-search-input-wrap">
+        <i data-lucide="search" class="settings-search-lead"></i>
+        <input id="settings-search-input"
+               type="text"
+               placeholder="Search settings — try &ldquo;token&rdquo;, &ldquo;discord&rdquo;, or &ldquo;schedule&rdquo;"
+               autocomplete="off"
+               spellcheck="false"
+               aria-label="Search settings"
+               aria-controls="settings-search-results"
+               aria-expanded="false">
+        <button class="settings-search-clear" id="settings-search-clear" type="button" aria-label="Clear search">
+            <i data-lucide="x"></i>
+        </button>
+        <span class="settings-search-kbd"><span class="kbd-mod">Ctrl</span>K</span>
+    </div>
+
+    <div class="settings-search-results" id="settings-search-results" role="listbox" aria-label="Settings search results"></div>
+</div>
+
+<script id="settings-search-index" type="application/json">{{ settings_search_index_json | safe }}</script>
+
+<!-- Settings Tabs -->
+<div class="tabs">
+    <a href="/settings/plex" class="tab {% if active_tab == 'plex' %}active{% endif %}">
+        <i data-lucide="server"></i> Plex Server
+    </a>
+    <a href="/settings/libraries" class="tab {% if active_tab == 'libraries' %}active{% endif %}">
+        <i data-lucide="library"></i> Libraries
+    </a>
+    <a href="/settings/users" class="tab {% if active_tab == 'users' %}active{% endif %}">
+        <i data-lucide="users"></i> Users
+    </a>
+    <a href="/settings/cache" class="tab {% if active_tab == 'cache' %}active{% endif %}">
+        <i data-lucide="hard-drive"></i> Cache
+    </a>
+    <a href="/settings/schedule" class="tab {% if active_tab == 'schedule' %}active{% endif %}">
+        <i data-lucide="clock"></i> Schedule
+    </a>
+    <a href="/settings/notifications" class="tab {% if active_tab == 'notifications' %}active{% endif %}">
+        <i data-lucide="bell"></i> Notifications
+    </a>
+    <a href="/settings/logging" class="tab {% if active_tab == 'logging' %}active{% endif %}">
+        <i data-lucide="file-text"></i> Logging
+    </a>
+    <a href="/settings/integrations" class="tab {% if active_tab == 'integrations' %}active{% endif %}">
+        <i data-lucide="plug"></i> Integrations
+    </a>
+    <a href="/settings/security" class="tab {% if active_tab == 'security' %}active{% endif %}">
+        <i data-lucide="shield"></i> Security
+    </a>
+    <a href="/settings/import-export" class="tab {% if active_tab == 'import-export' %}active{% endif %}">
+        <i data-lucide="arrow-left-right"></i> Import/Export
+    </a>
+</div>
+
+<!-- Alert container for HTMX form responses -->
+<div id="settings-alert-container" class="mb-2"></div>
+
+{% block settings_content %}
+<div class="card">
+    <div class="card-body" style="text-align: center; padding: 3rem;">
+        <i data-lucide="settings" style="width: 48px; height: 48px; color: var(--plex-text-muted); margin-bottom: 1rem;"></i>
+        <p class="text-muted">Select a settings category from the tabs above.</p>
+    </div>
+</div>
+{% endblock %}
+
+<script src="{{ static_url('js/settings_search.js') }}" defer></script>
+{% endblock %}

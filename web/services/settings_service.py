@@ -1,0 +1,1775 @@
+"""Settings service - load and save PlexCache settings"""
+
+import json
+import logging
+import os
+import threading
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Any, Optional, List
+from dataclasses import dataclass, field, asdict
+
+from web.config import DATA_DIR, SETTINGS_FILE, IS_DOCKER
+# Defaults come from core's dataclass rather than repeated literals: the engine
+# reads CacheConfig, so anything hardcoded here can disagree with what runs.
+from core.config import CacheConfig
+from web.dependencies import get_system_detector
+
+logger = logging.getLogger(__name__)
+
+# File cache for Plex data (web UI) - use DATA_DIR for Docker compatibility
+WEB_PLEX_CACHE_FILE = DATA_DIR / "web_plex_cache.json"
+
+
+@dataclass
+class PathMapping:
+    """Represents a path mapping configuration"""
+    name: str
+    plex_path: str
+    real_path: str
+    cache_path: Optional[str] = None
+    cacheable: bool = True
+    enabled: bool = True
+    section_id: Optional[int] = None
+
+
+@dataclass
+class PlexSettings:
+    """Plex server settings"""
+    plex_url: str = ""
+    plex_token: str = ""
+    valid_sections: List[int] = field(default_factory=list)
+    days_to_monitor: int = 183
+    number_episodes: int = 5
+
+
+@dataclass
+class CacheSettings:
+    """Cache behavior settings"""
+    watchlist_toggle: bool = True
+    watchlist_episodes: int = 3
+    watchlist_retention_days: int = 0
+    watched_move: bool = True
+    cache_retention_hours: int = 12
+    cache_drive_size: str = ""  # Manual override for drive size (for ZFS)
+    cache_limit: str = CacheConfig.cache_limit
+    min_free_space: str = ""
+    plexcache_quota: str = ""
+    cache_eviction_mode: str = "none"
+    cache_eviction_threshold_percent: int = CacheConfig.cache_eviction_threshold_percent
+    eviction_min_priority: int = 60
+    remote_watchlist_toggle: bool = False
+    remote_watchlist_rss_url: str = ""
+
+
+@dataclass
+class NotificationSettings:
+    """Notification settings"""
+    notification_type: str = "system"
+    unraid_level: str = "summary"
+    webhook_url: str = ""
+    webhook_level: str = "summary"
+
+
+class SettingsService:
+    """Service for loading and saving PlexCache settings"""
+
+    def __init__(self):
+        self.settings_file = SETTINGS_FILE
+        self._cached_settings: Optional[Dict] = None
+        self._last_loaded: Optional[datetime] = None
+        # Cache for Plex data (libraries, users) - expires after 1 hour
+        self._plex_libraries_cache: Optional[List[Dict]] = None
+        self._plex_users_cache: Optional[List[Dict]] = None
+        self._plex_cache_time: Optional[datetime] = None
+        self._plex_cache_ttl = 3600  # 1 hour
+        self._cache_lock = threading.Lock()
+        self._last_plex_error: Optional[str] = None  # Last Plex connection error
+        # Load from file cache on startup
+        self._load_plex_cache_from_file()
+
+    def _load_raw(self) -> Dict[str, Any]:
+        """Load raw settings from file"""
+        if not self.settings_file.exists():
+            return {}
+
+        try:
+            with open(self.settings_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return {}
+
+    def _save_raw(self, settings: Dict[str, Any]) -> bool:
+        """Save raw settings to file atomically (write-temp-then-replace).
+
+        An in-place truncating write (open 'w') lets concurrent readers — e.g.
+        get_time_format() during a dashboard render — observe an empty/partial
+        file and silently fall back to defaults. The atomic replace prevents
+        that: readers always see either the old or the new complete file.
+        """
+        from core.file_operations import save_json_atomically
+        try:
+            if not save_json_atomically(str(self.settings_file), settings, label="settings"):
+                return False
+            # Restrict permissions — settings contain secrets (Plex token, password hashes)
+            try:
+                os.chmod(self.settings_file, 0o600)
+            except OSError:
+                pass  # Non-fatal (Windows, Docker with different uid)
+            self._cached_settings = None  # Invalidate cache
+            return True
+        except (IOError, OSError):
+            return False
+
+    def _sanitize_path(self, path: Optional[str]) -> Optional[str]:
+        """Strip whitespace from path to prevent issues like '/mnt/user0 ' creating bogus directories"""
+        if path is None:
+            return None
+        return path.strip()
+
+    def _sanitize_path_mapping(self, mapping: Dict[str, Any]) -> Dict[str, Any]:
+        """Sanitize all path fields in a path mapping"""
+        sanitized = mapping.copy()
+        path_fields = ["plex_path", "real_path", "cache_path", "host_cache_path"]
+        for field in path_fields:
+            if field in sanitized and sanitized[field]:
+                sanitized[field] = self._sanitize_path(sanitized[field])
+        return sanitized
+
+    def _load_plex_cache_from_file(self):
+        """Load Plex data cache from file on startup"""
+        try:
+            if WEB_PLEX_CACHE_FILE.exists():
+                with open(WEB_PLEX_CACHE_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    # Check if cache is still valid
+                    cache_time_str = data.get("cache_time")
+                    if cache_time_str:
+                        cache_time = datetime.fromisoformat(cache_time_str)
+                        elapsed = (datetime.now() - cache_time).total_seconds()
+                        if elapsed < self._plex_cache_ttl:
+                            self._plex_libraries_cache = data.get("libraries", [])
+                            self._plex_users_cache = data.get("users", [])
+                            self._plex_cache_time = cache_time
+        except (json.JSONDecodeError, IOError, ValueError):
+            pass
+
+    def _save_plex_cache_to_file(self):
+        """Save Plex data cache to file"""
+        try:
+            # Ensure data directory exists
+            WEB_PLEX_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "cache_time": self._plex_cache_time.isoformat() if self._plex_cache_time else None,
+                "libraries": self._plex_libraries_cache or [],
+                "users": self._plex_users_cache or []
+            }
+            with open(WEB_PLEX_CACHE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+        except IOError:
+            pass
+
+    def get_all(self) -> Dict[str, Any]:
+        """Get all settings as a dictionary"""
+        return self._load_raw()
+
+    def get_plex_settings(self) -> Dict[str, Any]:
+        """Get Plex-related settings"""
+        raw = self._load_raw()
+        return {
+            "plex_url": raw.get("PLEX_URL", ""),
+            "plex_token": raw.get("PLEX_TOKEN", ""),
+            "media_server": raw.get("media_server", "plex"),
+            "jellyfin_url": raw.get("jellyfin_url", ""),
+            "jellyfin_api_key": raw.get("jellyfin_api_key", ""),
+            "jellyfin_user": raw.get("jellyfin_user", ""),
+            "valid_sections": raw.get("valid_sections", []),
+            "days_to_monitor": raw.get("days_to_monitor", 183),
+            "number_episodes": raw.get("number_episodes", 5),
+            "users_toggle": raw.get("users_toggle", True),
+            "skip_ondeck": raw.get("skip_ondeck", []),
+            "skip_watchlist": raw.get("skip_watchlist", [])
+        }
+
+    def save_plex_settings(self, settings: Dict[str, Any]) -> bool:
+        """Save Plex settings"""
+        raw = self._load_raw()
+
+        # Check if URL or token changed - if so, invalidate cache
+        old_url = raw.get("PLEX_URL", "")
+        old_token = raw.get("PLEX_TOKEN", "")
+        new_url = settings.get("plex_url", old_url)
+        new_token = settings.get("plex_token", old_token)
+
+        raw["PLEX_URL"] = new_url
+        raw["PLEX_TOKEN"] = new_token
+        for key in ("media_server", "jellyfin_url", "jellyfin_api_key", "jellyfin_user"):
+            if key in settings:
+                raw[key] = settings[key]
+        if "valid_sections" in settings:
+            raw["valid_sections"] = settings["valid_sections"]
+        if "days_to_monitor" in settings:
+            raw["days_to_monitor"] = int(float(settings["days_to_monitor"]))
+        if "number_episodes" in settings:
+            raw["number_episodes"] = int(float(settings["number_episodes"]))
+        if "users_toggle" in settings:
+            raw["users_toggle"] = settings["users_toggle"]
+        if "skip_ondeck" in settings:
+            raw["skip_ondeck"] = settings["skip_ondeck"]
+        if "skip_watchlist" in settings:
+            raw["skip_watchlist"] = settings["skip_watchlist"]
+
+        result = self._save_raw(raw)
+
+        # Invalidate cache if credentials changed to force fresh fetch
+        if result and (old_url != new_url or old_token != new_token):
+            self.invalidate_plex_cache()
+
+        return result
+
+    def get_path_mappings(self) -> List[Dict[str, Any]]:
+        """Get path mappings"""
+        raw = self._load_raw()
+        return raw.get("path_mappings", [])
+
+    def save_path_mappings(self, mappings: List[Dict[str, Any]]) -> bool:
+        """Save path mappings (sanitizes paths to strip whitespace)"""
+        raw = self._load_raw()
+        raw["path_mappings"] = [self._sanitize_path_mapping(m) for m in mappings]
+        return self._save_raw(raw)
+
+    def add_path_mapping(self, mapping: Dict[str, Any]) -> bool:
+        """Add a new path mapping (sanitizes paths to strip whitespace)"""
+        raw = self._load_raw()
+        mappings = raw.get("path_mappings", [])
+        mappings.append(self._sanitize_path_mapping(mapping))
+        raw["path_mappings"] = mappings
+        return self._save_raw(raw)
+
+    def update_path_mapping(self, index: int, mapping: Dict[str, Any]) -> bool:
+        """Update an existing path mapping by index (sanitizes paths to strip whitespace).
+
+        Preserves section_id from the existing mapping if not in the update dict.
+        """
+        raw = self._load_raw()
+        mappings = raw.get("path_mappings", [])
+        if 0 <= index < len(mappings):
+            # Preserve section_id from existing mapping if not provided
+            existing = mappings[index]
+            if "section_id" not in mapping and "section_id" in existing:
+                mapping["section_id"] = existing["section_id"]
+            mappings[index] = self._sanitize_path_mapping(mapping)
+            raw["path_mappings"] = mappings
+            return self._save_raw(raw)
+        return False
+
+    def delete_path_mapping(self, index: int) -> bool:
+        """Delete a path mapping by index"""
+        raw = self._load_raw()
+        mappings = raw.get("path_mappings", [])
+        if 0 <= index < len(mappings):
+            mappings.pop(index)
+            raw["path_mappings"] = mappings
+            return self._save_raw(raw)
+        return False
+
+    def _rebuild_valid_sections(self, raw: Dict[str, Any]) -> None:
+        """Rebuild valid_sections from enabled path_mappings with section_id.
+
+        Scans all enabled path_mappings that have a section_id set,
+        collects unique IDs, and writes them sorted to raw["valid_sections"].
+        """
+        mappings = raw.get("path_mappings", [])
+        section_ids = set()
+        for m in mappings:
+            sid = m.get("section_id")
+            if sid is not None and m.get("enabled", True):
+                section_ids.add(int(sid))
+        raw["valid_sections"] = sorted(section_ids)
+
+    @staticmethod
+    def warn_cache_path(cache_path: Optional[str]) -> Optional[str]:
+        """Return a warning string if a cache_path looks risky, else None.
+
+        Non-blocking — this helper only produces human-readable warnings.
+        Callers log them or surface them in the UI. Some configurations
+        (e.g. a dedicated cache drive with media at the drive root, or a
+        container where /mnt/cache isn't mounted and /mnt/user is the only
+        available path) legitimately use these values, so we never reject.
+
+        The two patterns that *usually* indicate misconfiguration from
+        issue #136:
+        - cache_path set to the bare cache drive root. Makes audits walk
+          the entire SSD including appdata, docker, and other shares.
+        - cache_path pointing at the Unraid FUSE merged view
+          ('/mnt/user/...', but not /mnt/user0/). Audits go through shfs
+          and the cache-vs-array logic can't distinguish the two layers.
+
+        Docker-specific check (issue #139):
+        - cache_path not backed by a real bind mount. Writes go to
+          the overlay filesystem (docker.img) instead of the host drive.
+        """
+        if not cache_path:
+            return None
+
+        normalized = cache_path.rstrip("/\\")
+        if not normalized:
+            return None
+
+        # Docker mount validation (issue #139) — highest priority check
+        if IS_DOCKER:
+            detector = get_system_detector()
+            is_mounted, _ = detector.is_path_bind_mounted(normalized)
+            if not is_mounted:
+                return (
+                    f"This path is not backed by a Docker bind mount — "
+                    f"files written here will go into the container's "
+                    f"overlay filesystem (docker.img), not your host drive. "
+                    f"Check your container's volume configuration and use "
+                    f"the path as seen inside the container (e.g., "
+                    f"/mnt/cache/...), not the host path."
+                )
+
+        if normalized == "/mnt/cache":
+            return (
+                "cache_path is set to the bare cache drive root. On most "
+                "Unraid setups this makes audits walk your entire cache "
+                "drive (appdata, docker, every share). If that's not what "
+                "you want, point it at a specific media subfolder like "
+                "/mnt/cache/Media/Movies/."
+            )
+
+        if normalized.startswith("/mnt/user/") and not normalized.startswith("/mnt/user0/"):
+            suggestion = normalized.replace("/mnt/user/", "/mnt/cache/", 1)
+            return (
+                f"cache_path points at the Unraid FUSE merged view "
+                f"('{cache_path}'). This is slower than a cache-direct "
+                f"path and can confuse cache-vs-array detection during "
+                f"audits. If /mnt/cache/ is available in your container, "
+                f"consider using '{suggestion}/' instead."
+            )
+
+        return None
+
+    def detect_path_mapping_health_issues(self) -> List[Dict[str, str]]:
+        """Scan path_mappings for known-bad configurations and return warnings.
+
+        Issue #136 taught us two failure modes that crater audit performance
+        on Unraid:
+
+        1. A legacy-migrated "Default (migrated)" mapping whose cache_path
+           is the bare cache drive root ("/mnt/cache/" or "/mnt/cache").
+           This makes MaintenanceService.run_full_audit() walk the entire
+           SSD — appdata, docker, every other share.
+
+        2. A mapping whose cache_path points at the Unraid FUSE merged view
+           ("/mnt/user/...") instead of the cache drive directly
+           ("/mnt/cache/..."). FUSE reads are 3-5x slower than cache-direct
+           and the audit's cache-vs-array logic can't distinguish the two.
+
+        Issue #139 added a third failure mode specific to Docker:
+
+        3. A mapping whose cache_path or real_path is not backed by a real
+           bind mount. Writes go to the overlay filesystem (docker.img)
+           instead of the host drive.
+
+        Returns a list of dicts with keys: mapping_name, issue_type, message.
+        Empty list means no issues detected. This is a read-only check —
+        fixes must be performed by the user via Settings -> Libraries.
+        """
+        raw = self._load_raw()
+        mappings = raw.get("path_mappings", [])
+        issues: List[Dict[str, str]] = []
+
+        # Docker mount validation (issue #139)
+        if IS_DOCKER:
+            detector = get_system_detector()
+            # Container switched the default from /mnt/user/ to /mnt/user0/.
+            # If the user updated their Docker template but still has legacy
+            # /mnt/user/... paths in their mappings, point them at the exact
+            # replacement instead of the generic "check your mounts" message.
+            user0_mounted, _ = detector.is_path_bind_mounted("/mnt/user0")
+
+            for m in mappings:
+                if not m.get("enabled", True):
+                    continue
+                name = m.get("name", "(unnamed)")
+                for field_name, label in [("cache_path", "cache_path"), ("real_path", "real_path")]:
+                    path_val = (m.get(field_name) or "").rstrip("/\\")
+                    if not path_val:
+                        continue
+                    # host_cache_path is intentionally a host path — do NOT validate it
+                    is_mounted, _ = detector.is_path_bind_mounted(path_val)
+                    if is_mounted:
+                        continue
+
+                    # Specific case: legacy /mnt/user/... path while /mnt/user0
+                    # IS mounted. Recommend the array-direct replacement.
+                    if (
+                        user0_mounted
+                        and label == "real_path"
+                        and path_val.startswith("/mnt/user/")
+                        and not path_val.startswith("/mnt/user0/")
+                    ):
+                        suggestion = "/mnt/user0/" + path_val[len("/mnt/user/"):]
+                        issues.append({
+                            "mapping_name": name,
+                            "issue_type": "legacy_user_real_path",
+                            "message": (
+                                f"Mapping '{name}' has real_path '{m.get(field_name)}' "
+                                f"but /mnt/user/ is no longer mounted in this container. "
+                                f"Update the Array Path to '{suggestion}/' in "
+                                f"Settings → Paths. /mnt/user0/ is the array-direct "
+                                f"path and the new default — it avoids the FUSE layer "
+                                f"entirely."
+                            ),
+                        })
+                        continue
+
+                    issues.append({
+                        "mapping_name": name,
+                        "issue_type": "overlay_path",
+                        "message": (
+                            f"Mapping '{name}' has {label} set to "
+                            f"'{m.get(field_name)}' which is not backed by "
+                            f"a Docker bind mount. Writes to this path will "
+                            f"go into the container's overlay filesystem "
+                            f"(docker.img), not your host drive. Check your "
+                            f"container's volume configuration."
+                        ),
+                    })
+
+        for m in mappings:
+            if not m.get("enabled", True):
+                continue
+
+            name = m.get("name", "(unnamed)")
+            cache_path = (m.get("cache_path") or "").rstrip("/\\")
+
+            if not cache_path:
+                continue
+
+            # Issue 1: bare cache drive root
+            if cache_path in ("/mnt/cache", "/mnt/cache/"):
+                issues.append({
+                    "mapping_name": name,
+                    "issue_type": "cache_root",
+                    "message": (
+                        f"Mapping '{name}' has cache_path set to the cache drive "
+                        f"root ('{m.get('cache_path')}'). On most Unraid setups "
+                        f"this makes audits walk your entire cache drive "
+                        f"(appdata, docker, every share). If you meant to target "
+                        f"a specific media subfolder, edit it in Settings → "
+                        f"Libraries. If you really do store media at the drive "
+                        f"root, this warning can be ignored."
+                    ),
+                })
+                continue
+
+            # Issue 2: FUSE path instead of cache-direct
+            if cache_path.startswith("/mnt/user/") and not cache_path.startswith("/mnt/user0/"):
+                issues.append({
+                    "mapping_name": name,
+                    "issue_type": "fuse_cache_path",
+                    "message": (
+                        f"Mapping '{name}' has cache_path set to a FUSE merged "
+                        f"path ('{m.get('cache_path')}'). This is slower than "
+                        f"cache-direct and can confuse audit logic. If /mnt/cache "
+                        f"is mounted in your container, consider switching to "
+                        f"'/mnt/cache/...' in Settings → Libraries → {name}."
+                    ),
+                })
+
+        return issues
+
+    def migrate_link_path_mappings_to_libraries(self) -> bool:
+        """One-time migration: match existing path_mappings to Plex libraries by plex_path.
+
+        Sets section_id on mappings whose plex_path matches a Plex library location.
+        Skips if any mapping already has a section_id (already migrated).
+
+        Returns True if migration was performed.
+        """
+        raw = self._load_raw()
+        mappings = raw.get("path_mappings", [])
+
+        if not mappings:
+            return False
+
+        # Skip if any mapping already has section_id
+        if any(m.get("section_id") is not None for m in mappings):
+            return False
+
+        # Get Plex libraries to match against
+        libraries = self.get_plex_libraries()
+        if not libraries:
+            return False
+
+        # Build lookup: normalized plex_path → section_id
+        path_to_section = {}
+        for lib in libraries:
+            for loc in lib.get("locations", []):
+                normalized = loc.rstrip("/") + "/"
+                path_to_section[normalized] = lib["id"]
+
+        migrated = False
+        for m in mappings:
+            plex_path = m.get("plex_path", "").rstrip("/") + "/" if m.get("plex_path") else ""
+            if plex_path in path_to_section:
+                m["section_id"] = path_to_section[plex_path]
+                migrated = True
+
+        if migrated:
+            raw["path_mappings"] = mappings
+            self._rebuild_valid_sections(raw)
+            self._save_raw(raw)
+            logger.info("Migrated path mappings: linked to Plex library section IDs")
+
+        return migrated
+
+    def auto_fill_mapping(self, library: Dict, plex_location: str, settings: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate a pre-filled path mapping from a Plex library location.
+
+        Args:
+            library: Plex library dict with id, title, type, locations
+            plex_location: The specific Plex path for this location
+            settings: Current raw settings (for cache_dir)
+
+        Returns:
+            Dict suitable for adding to path_mappings
+        """
+        # cache_dir is used as the cache-drive root for derivation. We never
+        # allow it to be a /mnt/user/ (FUSE) path — that's the bug condition
+        # in issue #136 where a misconfigured legacy setting produced
+        # cache_path='/mnt/user/Media/Movies/' instead of '/mnt/cache/...'.
+        raw_cache_dir = settings.get("cache_dir", "/mnt/cache").rstrip("/")
+        if raw_cache_dir.startswith("/mnt/user/") or raw_cache_dir in ("/mnt/user", "/mnt/user0"):
+            cache_dir = "/mnt/cache"
+        else:
+            cache_dir = raw_cache_dir or "/mnt/cache"
+
+        plex_path = plex_location if plex_location.endswith("/") else plex_location + "/"
+
+        # Derive display name — use folder name suffix when library has multiple locations
+        name = library["title"]
+        locations = library.get("locations", [])
+        if len(locations) > 1:
+            folder_name = plex_path.rstrip("/").rsplit("/", 1)[-1]
+            if folder_name and folder_name.lower() != name.lower():
+                name = f"{name} ({folder_name})"
+
+        # Suggest real_path based on common Docker path patterns
+        real_path = plex_path
+        path_recognized = False
+        for docker_prefix, host_prefix in [("/data/", "/mnt/user/"), ("/media/", "/mnt/user/")]:
+            if plex_path.startswith(docker_prefix):
+                real_path = plex_path.replace(docker_prefix, host_prefix, 1)
+                path_recognized = True
+                break
+
+        # Derive cache_path using prefix swap to preserve full structure
+        # e.g., /data/GUEST/Movies/ -> /mnt/cache/GUEST/Movies/
+        cache_path = plex_path
+        for docker_prefix in ["/data/", "/media/"]:
+            if plex_path.startswith(docker_prefix):
+                cache_path = plex_path.replace(docker_prefix, cache_dir + "/", 1)
+                break
+
+        return {
+            "name": name,
+            "plex_path": plex_path,
+            "real_path": real_path,
+            "cache_path": cache_path,
+            "host_cache_path": cache_path,
+            "cacheable": True,
+            "enabled": True,
+            "section_id": library["id"],
+            "auto_fill_recognized": path_recognized,
+        }
+
+    def get_cache_settings(self) -> Dict[str, Any]:
+        """Get cache behavior settings"""
+        raw = self._load_raw()
+        return {
+            # Content discovery (moved from Plex tab)
+            "number_episodes": raw.get("number_episodes", 5),
+            "days_to_monitor": raw.get("days_to_monitor", 183),
+            # Recently Added view (display-only; see issue #174). Defaults must
+            # match web/routers/recently_added.py DEFAULT_DAYS / DEFAULT_MAX_ITEMS —
+            # the Cache tab renders these, so omitting them here made the form show
+            # a default and write it back over the stored value on the next save.
+            "recently_added_days": raw.get("recently_added_days", 7),
+            "recently_added_max_items": raw.get("recently_added_max_items", 250),
+            "watchlist_toggle": raw.get("watchlist_toggle", True),
+            "watchlist_episodes": raw.get("watchlist_episodes", 3),
+            "prefetch_minimum_minutes": raw.get("prefetch_minimum_minutes", 0),
+            "watchlist_retention_days": raw.get("watchlist_retention_days", 0),
+            "ondeck_retention_days": raw.get("ondeck_retention_days", 0),
+            "watched_move": raw.get("watched_move", True),
+            "create_plexcached_backups": raw.get("create_plexcached_backups", True),
+            "cleanup_empty_folders": raw.get("cleanup_empty_folders", True),
+            "use_symlinks": raw.get("use_symlinks", False),
+            "hardlinked_files": raw.get("hardlinked_files", "skip"),
+            "check_hardlinks_on_restore": raw.get("check_hardlinks_on_restore", False),
+            "cache_associated_files": raw.get("cache_associated_files", "subtitles"),
+            "cache_retention_hours": raw.get("cache_retention_hours", 12),
+            "cache_drive_size": raw.get("cache_drive_size", ""),
+            "cache_limit": raw.get("cache_limit", CacheConfig.cache_limit),
+            "min_free_space": raw.get("min_free_space", ""),
+            "plexcache_quota": raw.get("plexcache_quota", ""),
+            "cache_eviction_mode": raw.get("cache_eviction_mode", "none"),
+            "cache_eviction_threshold_percent": raw.get("cache_eviction_threshold_percent", CacheConfig.cache_eviction_threshold_percent),
+            "eviction_min_priority": raw.get("eviction_min_priority", 60),
+            "pinned_preferred_resolution": raw.get("pinned_preferred_resolution", "highest"),
+            "remote_watchlist_toggle": raw.get("remote_watchlist_toggle", False),
+            "remote_watchlist_rss_url": raw.get("remote_watchlist_rss_url", ""),
+            # Upgrade tracking
+            "auto_transfer_upgrades": raw.get("auto_transfer_upgrades", True),
+            "backup_upgraded_files": raw.get("backup_upgraded_files", True),
+            # Scanning
+            "excluded_folders": raw.get("excluded_folders", []),
+            # Advanced settings
+            "max_concurrent_moves_array": raw.get("max_concurrent_moves_array", 2),
+            "max_concurrent_moves_cache": raw.get("max_concurrent_moves_cache", 5),
+            "exit_if_active_session": raw.get("exit_if_active_session", False)
+        }
+
+    def save_cache_settings(self, settings: Dict[str, Any]) -> bool:
+        """Save cache settings"""
+        raw = self._load_raw()
+
+        # Safe int converter that handles float strings like "365.0"
+        safe_int = lambda x: int(float(x))
+
+        # Map form field names to settings keys
+        field_mapping = {
+            # Content discovery (moved from Plex tab)
+            "number_episodes": ("number_episodes", safe_int),
+            "days_to_monitor": ("days_to_monitor", safe_int),
+            # Recently Added view (display-only; see issue #174)
+            "recently_added_days": ("recently_added_days", safe_int),
+            "recently_added_max_items": ("recently_added_max_items", safe_int),
+            "watchlist_toggle": ("watchlist_toggle", lambda x: x == "on" or x is True),
+            "watchlist_episodes": ("watchlist_episodes", safe_int),
+            "prefetch_minimum_minutes": ("prefetch_minimum_minutes", safe_int),
+            "watchlist_retention_days": ("watchlist_retention_days", float),
+            "ondeck_retention_days": ("ondeck_retention_days", float),
+            "watched_move": ("watched_move", lambda x: x == "on" or x is True),
+            "create_plexcached_backups": ("create_plexcached_backups", lambda x: x == "on" or x is True),
+            "cleanup_empty_folders": ("cleanup_empty_folders", lambda x: x == "on" or x is True),
+            "use_symlinks": ("use_symlinks", lambda x: x == "on" or x is True),
+            "hardlinked_files": ("hardlinked_files", str),
+            "check_hardlinks_on_restore": ("check_hardlinks_on_restore", lambda x: x == "on" or x is True),
+            "cache_associated_files": ("cache_associated_files", str),
+            "cache_retention_hours": ("cache_retention_hours", safe_int),
+            "cache_drive_size": ("cache_drive_size", str),
+            "cache_limit": ("cache_limit", str),
+            "min_free_space": ("min_free_space", str),
+            "plexcache_quota": ("plexcache_quota", str),
+            "cache_eviction_mode": ("cache_eviction_mode", str),
+            "cache_eviction_threshold_percent": ("cache_eviction_threshold_percent", safe_int),
+            "eviction_min_priority": ("eviction_min_priority", safe_int),
+            "pinned_preferred_resolution": ("pinned_preferred_resolution", str),
+            "remote_watchlist_toggle": ("remote_watchlist_toggle", lambda x: x == "on" or x is True),
+            "remote_watchlist_rss_url": ("remote_watchlist_rss_url", str),
+            # Upgrade tracking
+            "auto_transfer_upgrades": ("auto_transfer_upgrades", lambda x: x == "on" or x is True),
+            "backup_upgraded_files": ("backup_upgraded_files", lambda x: x == "on" or x is True),
+            # Advanced settings
+            "max_concurrent_moves_array": ("max_concurrent_moves_array", safe_int),
+            "max_concurrent_moves_cache": ("max_concurrent_moves_cache", safe_int),
+            "exit_if_active_session": ("exit_if_active_session", lambda x: x == "on" or x is True)
+        }
+
+        # Boolean fields that come from checkboxes (absent = unchecked = False)
+        boolean_fields = {
+            "watchlist_toggle", "watched_move", "create_plexcached_backups",
+            "cleanup_empty_folders", "use_symlinks", "auto_transfer_upgrades",
+            "backup_upgraded_files", "remote_watchlist_toggle", "exit_if_active_session",
+            "check_hardlinks_on_restore"
+        }
+
+        for form_field, (setting_key, converter) in field_mapping.items():
+            if form_field in settings:
+                try:
+                    raw[setting_key] = converter(settings[form_field])
+                except (ValueError, TypeError):
+                    pass  # Keep existing value on conversion error
+            elif form_field in boolean_fields:
+                raw[setting_key] = False
+
+        # Handle list fields separately (not through field_mapping)
+        if "excluded_folders" in settings:
+            folders = settings["excluded_folders"]
+            if isinstance(folders, list):
+                # Filter out empty strings
+                raw["excluded_folders"] = [f.strip() for f in folders if f and f.strip()]
+            else:
+                raw["excluded_folders"] = []
+
+        return self._save_raw(raw)
+
+    def get_notification_settings(self) -> Dict[str, Any]:
+        """Get notification settings"""
+        raw = self._load_raw()
+        return {
+            "notification_type": raw.get("notification_type", "system"),
+            "unraid_level": raw.get("unraid_level", "summary"),
+            "webhook_url": raw.get("webhook_url", ""),
+            "webhook_level": raw.get("webhook_level", "summary"),
+            # New list-based levels
+            "unraid_levels": raw.get("unraid_levels", []),
+            "webhook_levels": raw.get("webhook_levels", [])
+        }
+
+    def save_notification_settings(self, settings: Dict[str, Any]) -> bool:
+        """Save notification settings"""
+        raw = self._load_raw()
+        raw["notification_type"] = settings.get("notification_type", raw.get("notification_type", "system"))
+        raw["webhook_url"] = settings.get("webhook_url", raw.get("webhook_url", ""))
+        # New list-based levels
+        raw["unraid_levels"] = settings.get("unraid_levels", raw.get("unraid_levels", []))
+        raw["webhook_levels"] = settings.get("webhook_levels", raw.get("webhook_levels", []))
+        # Legacy fields for backward compatibility
+        raw["unraid_level"] = settings.get("unraid_level", raw.get("unraid_level", "summary"))
+        raw["webhook_level"] = settings.get("webhook_level", raw.get("webhook_level", "summary"))
+        return self._save_raw(raw)
+
+    def get_arr_instances(self) -> List[Dict[str, Any]]:
+        """Get Sonarr/Radarr integration instances.
+
+        Auto-migrates old flat keys (sonarr_url, radarr_url, etc.) on first access.
+        """
+        raw = self._load_raw()
+
+        # Auto-migrate old flat keys → arr_instances list
+        if "arr_instances" not in raw:
+            instances = []
+            sonarr_url = raw.get("sonarr_url", "").strip()
+            sonarr_key = raw.get("sonarr_api_key", "").strip()
+            if sonarr_url or sonarr_key:
+                instances.append({
+                    "name": "Sonarr",
+                    "type": "sonarr",
+                    "url": sonarr_url,
+                    "api_key": sonarr_key,
+                    "enabled": bool(raw.get("sonarr_enabled", False)),
+                })
+            radarr_url = raw.get("radarr_url", "").strip()
+            radarr_key = raw.get("radarr_api_key", "").strip()
+            if radarr_url or radarr_key:
+                instances.append({
+                    "name": "Radarr",
+                    "type": "radarr",
+                    "url": radarr_url,
+                    "api_key": radarr_key,
+                    "enabled": bool(raw.get("radarr_enabled", False)),
+                })
+            if instances:
+                raw["arr_instances"] = instances
+                # Remove old flat keys
+                for key in ("sonarr_enabled", "sonarr_url", "sonarr_api_key",
+                            "radarr_enabled", "radarr_url", "radarr_api_key"):
+                    raw.pop(key, None)
+                self._save_raw(raw)
+            return instances
+
+        return raw.get("arr_instances", [])
+
+    def add_arr_instance(self, instance: Dict[str, Any]) -> bool:
+        """Add a new Sonarr/Radarr instance"""
+        raw = self._load_raw()
+        instances = raw.get("arr_instances", [])
+        instances.append({
+            "name": instance.get("name", "").strip(),
+            "type": instance.get("type", "sonarr"),
+            "url": instance.get("url", "").strip(),
+            "api_key": instance.get("api_key", "").strip(),
+            "enabled": instance.get("enabled", True),
+        })
+        raw["arr_instances"] = instances
+        return self._save_raw(raw)
+
+    def update_arr_instance(self, index: int, instance: Dict[str, Any]) -> bool:
+        """Update an existing Sonarr/Radarr instance by index"""
+        raw = self._load_raw()
+        instances = raw.get("arr_instances", [])
+        if 0 <= index < len(instances):
+            instances[index] = {
+                "name": instance.get("name", "").strip(),
+                "type": instance.get("type", "sonarr"),
+                "url": instance.get("url", "").strip(),
+                "api_key": instance.get("api_key", "").strip(),
+                "enabled": instance.get("enabled", True),
+            }
+            raw["arr_instances"] = instances
+            return self._save_raw(raw)
+        return False
+
+    def delete_arr_instance(self, index: int) -> bool:
+        """Delete a Sonarr/Radarr instance by index"""
+        raw = self._load_raw()
+        instances = raw.get("arr_instances", [])
+        if 0 <= index < len(instances):
+            instances.pop(index)
+            raw["arr_instances"] = instances
+            return self._save_raw(raw)
+        return False
+
+    def get_logging_settings(self) -> Dict[str, Any]:
+        """Get logging settings"""
+        raw = self._load_raw()
+        return {
+            "max_log_files": raw.get("max_log_files", 24),
+            "keep_error_logs_days": raw.get("keep_error_logs_days", 7),
+            "time_format": raw.get("time_format", "24h"),
+            "activity_retention_hours": raw.get("activity_retention_hours", 24)
+        }
+
+    def save_logging_settings(self, settings: Dict[str, Any]) -> bool:
+        """Save logging settings"""
+        raw = self._load_raw()
+
+        # Validate and save max_log_files (int(float()) handles "5.0" strings)
+        if "max_log_files" in settings:
+            try:
+                max_log_files = int(float(settings["max_log_files"]))
+                if max_log_files >= 1:
+                    raw["max_log_files"] = max_log_files
+            except (ValueError, TypeError):
+                pass
+
+        # Validate and save keep_error_logs_days
+        if "keep_error_logs_days" in settings:
+            try:
+                keep_error_logs_days = int(float(settings["keep_error_logs_days"]))
+                if keep_error_logs_days >= 0:
+                    raw["keep_error_logs_days"] = keep_error_logs_days
+            except (ValueError, TypeError):
+                pass
+
+        # Validate and save time_format
+        if "time_format" in settings:
+            time_format = settings["time_format"]
+            if time_format in ("12h", "24h"):
+                raw["time_format"] = time_format
+
+        # Validate and save activity_retention_hours
+        if "activity_retention_hours" in settings:
+            try:
+                activity_retention_hours = int(float(settings["activity_retention_hours"]))
+                if activity_retention_hours >= 1:
+                    raw["activity_retention_hours"] = activity_retention_hours
+            except (ValueError, TypeError):
+                pass
+
+        return self._save_raw(raw)
+
+    def get_security_settings(self) -> Dict[str, Any]:
+        """Get security/auth settings"""
+        raw = self._load_raw()
+        return {
+            "auth_enabled": raw.get("auth_enabled", False),
+            "auth_admin_plex_id": raw.get("auth_admin_plex_id", ""),
+            "auth_admin_username": raw.get("auth_admin_username", ""),
+            "auth_password_enabled": raw.get("auth_password_enabled", False),
+            "auth_password_username": raw.get("auth_password_username", ""),
+            "auth_session_hours": raw.get("auth_session_hours", 24),
+        }
+
+    def save_security_settings(self, settings: Dict[str, Any]) -> bool:
+        """Save security/auth settings"""
+        raw = self._load_raw()
+
+        if "auth_enabled" in settings:
+            raw["auth_enabled"] = bool(settings["auth_enabled"])
+
+        if "auth_session_hours" in settings:
+            try:
+                hours = int(float(settings["auth_session_hours"]))
+                if 1 <= hours <= 720:
+                    raw["auth_session_hours"] = hours
+            except (ValueError, TypeError):
+                pass
+
+        if "auth_password_enabled" in settings:
+            raw["auth_password_enabled"] = bool(settings["auth_password_enabled"])
+
+        if "auth_password_username" in settings:
+            raw["auth_password_username"] = str(settings["auth_password_username"]).strip()
+
+        if "auth_password_hash" in settings:
+            raw["auth_password_hash"] = settings["auth_password_hash"]
+
+        if "auth_password_salt" in settings:
+            raw["auth_password_salt"] = settings["auth_password_salt"]
+
+        if "auth_admin_plex_id" in settings:
+            raw["auth_admin_plex_id"] = settings["auth_admin_plex_id"]
+
+        if "auth_admin_username" in settings:
+            raw["auth_admin_username"] = settings["auth_admin_username"]
+
+        return self._save_raw(raw)
+
+    def check_plex_connection(self) -> bool:
+        """Check if Plex server is reachable"""
+        settings = self.get_plex_settings()
+        plex_url = settings.get("plex_url", "")
+        plex_token = settings.get("plex_token", "")
+
+        if not plex_url or not plex_token:
+            return False
+
+        try:
+            import requests
+            # Simple health check
+            url = plex_url.rstrip('/') + '/'
+            response = requests.get(
+                url,
+                headers={"X-Plex-Token": plex_token},
+                timeout=5
+            )
+            return response.status_code == 200
+        except (requests.RequestException, OSError):
+            return False
+
+    def _is_plex_cache_valid(self) -> bool:
+        """Check if Plex cache is still valid"""
+        if self._plex_cache_time is None:
+            return False
+        elapsed = (datetime.now() - self._plex_cache_time).total_seconds()
+        return elapsed < self._plex_cache_ttl
+
+    def invalidate_plex_cache(self):
+        """Invalidate the Plex data cache"""
+        self._plex_libraries_cache = None
+        self._plex_users_cache = None
+        self._plex_cache_time = None
+
+    def get_plex_libraries(self, plex_url: Optional[str] = None, plex_token: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Fetch library sections from Plex server (cached)
+
+        Args:
+            plex_url: Optional Plex URL (uses saved settings if not provided)
+            plex_token: Optional Plex token (uses saved settings if not provided)
+        """
+        with self._cache_lock:
+            # Return cached data if valid (only when using saved credentials)
+            if plex_url is None and plex_token is None:
+                if self._is_plex_cache_valid() and self._plex_libraries_cache is not None:
+                    return self._plex_libraries_cache
+
+        # Use provided credentials or fall back to saved settings
+        if plex_url is None or plex_token is None:
+            settings = self.get_plex_settings()
+            plex_url = plex_url or settings.get("plex_url", "")
+            plex_token = plex_token or settings.get("plex_token", "")
+
+        if not plex_url or not plex_token:
+            return []
+
+        try:
+            from plexapi.server import PlexServer
+            plex = PlexServer(plex_url, plex_token, timeout=10)
+
+            libraries = []
+            for section in plex.library.sections():
+                # Get library locations (paths) for path mapping generation
+                locations = []
+                try:
+                    locations = list(section.locations) if hasattr(section, 'locations') else []
+                except (AttributeError, TypeError):
+                    pass
+
+                libraries.append({
+                    "id": int(section.key),
+                    "title": section.title,
+                    "type": section.type,  # 'movie', 'show', 'artist', 'photo'
+                    "type_label": {
+                        "movie": "Movies",
+                        "show": "TV Shows",
+                        "artist": "Music",
+                        "photo": "Photos"
+                    }.get(section.type, section.type.title()),
+                    "locations": locations  # Plex paths for this library
+                })
+
+            with self._cache_lock:
+                self._plex_libraries_cache = sorted(libraries, key=lambda x: x["id"])
+                self._plex_cache_time = datetime.now()
+                self._save_plex_cache_to_file()
+            return self._plex_libraries_cache
+        except Exception:
+            # Return empty but also return file cache if available
+            with self._cache_lock:
+                if self._plex_libraries_cache:
+                    return self._plex_libraries_cache
+            return []
+
+    def get_plex_users(self, plex_url: Optional[str] = None, plex_token: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Fetch users from Plex server (cached, including main account)
+
+        Args:
+            plex_url: Optional Plex URL (uses saved settings if not provided)
+            plex_token: Optional Plex token (uses saved settings if not provided)
+        """
+        # Check for prefetched users from setup wizard (background fetch)
+        if hasattr(self, '_prefetched_users') and self._prefetched_users:
+            prefetched = self._prefetched_users
+            self._prefetched_users = None  # Clear after use
+
+            # Convert prefetched format to expected format and cache
+            users = []
+            # Add main account first - use provided credentials or saved settings
+            if plex_url is None or plex_token is None:
+                settings = self.get_plex_settings()
+                plex_url = plex_url or settings.get("plex_url", "")
+                plex_token = plex_token or settings.get("plex_token", "")
+            if plex_url and plex_token:
+                try:
+                    from plexapi.server import PlexServer
+                    plex = PlexServer(plex_url, plex_token, timeout=10)
+                    account = plex.myPlexAccount()
+                    users.append({
+                        "username": account.username,
+                        "title": account.title or account.username,
+                        "is_admin": True,
+                        "is_home": True
+                    })
+                except AttributeError:
+                    pass
+
+            # Add prefetched users (all users from account.users() have server access)
+            for u in prefetched:
+                users.append({
+                    "username": u.get('title', ''),
+                    "title": u.get('title', ''),
+                    "is_admin": False,
+                    "is_home": u.get('is_home', False)
+                })
+
+            with self._cache_lock:
+                self._plex_users_cache = users
+                self._plex_cache_time = datetime.now()
+            return users
+
+        with self._cache_lock:
+            # Return cached data if valid AND not empty (only when using saved credentials)
+            if plex_url is None and plex_token is None:
+                if self._is_plex_cache_valid() and self._plex_users_cache:
+                    return self._plex_users_cache
+
+        # Use provided credentials or fall back to saved settings
+        if plex_url is None or plex_token is None:
+            settings = self.get_plex_settings()
+            plex_url = plex_url or settings.get("plex_url", "")
+            plex_token = plex_token or settings.get("plex_token", "")
+
+        if not plex_url or not plex_token:
+            self._last_plex_error = "Missing Plex URL or token"
+            return []
+
+        try:
+            import logging
+            from plexapi.server import PlexServer
+
+            from core.plex_api import _retry_plextv_call
+            plex = PlexServer(plex_url, plex_token, timeout=10)
+
+            users = []
+            account_error = None
+            shared_users_error = None
+
+            # myPlexAccount() and users() are plex.tv round trips, so a transient
+            # timeout would otherwise drop the admin from this list for a whole
+            # refresh cycle. The blocks retry independently: a failure fetching
+            # the account has been seen while the very next call succeeded, so
+            # sharing one result would cost the shared users too.
+            #
+            # One retry rather than the usual three. This runs on the
+            # /settings/plex/users request path, not just the hourly refresh, so
+            # attempts are paid in page latency when plex.tv is down — and the
+            # cost of giving up is a stale user list, not a skipped array
+            # restore. One retry still covers the single blip seen in the logs.
+            PLEXTV_UI_ATTEMPTS = 2
+
+            # Add main account first
+            try:
+                account = _retry_plextv_call(
+                    lambda: plex.myPlexAccount(), label="settings main account",
+                    max_attempts=PLEXTV_UI_ATTEMPTS)
+                users.append({
+                    "username": account.username,
+                    "title": account.title or account.username,
+                    "is_admin": True,
+                    "is_home": True
+                })
+                logging.info(f"Fetched main account: {account.username}")
+            except Exception as e:
+                account_error = str(e)
+                logging.warning(f"Could not get main account: {e}")
+
+            # Add shared users (all users from account.users() have server access)
+            try:
+                account = _retry_plextv_call(
+                    lambda: plex.myPlexAccount(), label="settings shared users",
+                    max_attempts=PLEXTV_UI_ATTEMPTS)
+                shared_count = 0
+                for user in _retry_plextv_call(
+                        lambda: account.users(), label="settings user list",
+                        max_attempts=PLEXTV_UI_ATTEMPTS):
+                    is_home = getattr(user, "home", False)
+                    users.append({
+                        "username": user.title,
+                        "title": user.title,
+                        "is_admin": False,
+                        "is_home": bool(is_home)
+                    })
+                    shared_count += 1
+                logging.info(f"Fetched {shared_count} shared users")
+            except Exception as e:
+                shared_users_error = str(e)
+                logging.warning(f"Could not get shared users: {e}")
+
+            # Set error if we got no users
+            if not users:
+                if account_error:
+                    self._last_plex_error = f"Could not get account info: {account_error[:100]}"
+                elif shared_users_error:
+                    self._last_plex_error = f"Could not get shared users: {shared_users_error[:100]}"
+                else:
+                    self._last_plex_error = "No users found (connection OK but no account data returned)"
+            else:
+                self._last_plex_error = None  # Clear error on success
+
+            with self._cache_lock:
+                self._plex_users_cache = users
+                self._plex_cache_time = datetime.now()
+                self._save_plex_cache_to_file()
+            return self._plex_users_cache
+        except Exception as e:
+            import logging
+            error_msg = str(e)
+            # Provide more helpful error messages
+            if "Connection refused" in error_msg or "Errno 111" in error_msg:
+                self._last_plex_error = f"Cannot connect to Plex server. Is it running and accessible from Docker?"
+            elif "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
+                self._last_plex_error = f"Connection timed out. Try using the local IP (e.g., http://192.168.x.x:32400) instead of .plex.direct URL"
+            elif "Name or service not known" in error_msg or "getaddrinfo failed" in error_msg:
+                self._last_plex_error = f"Cannot resolve hostname. Try using http://YOUR_LOCAL_IP:32400"
+            elif "401" in error_msg or "Unauthorized" in error_msg:
+                self._last_plex_error = "Invalid Plex token. Try re-authenticating."
+            else:
+                self._last_plex_error = f"Plex connection error: {error_msg[:100]}"
+
+            logging.warning(f"Failed to fetch Plex users: {e}")
+
+            # Return file cache if available
+            with self._cache_lock:
+                if self._plex_users_cache:
+                    return self._plex_users_cache
+            return []
+
+    def get_last_plex_error(self) -> Optional[str]:
+        """Get the last Plex connection error message"""
+        return getattr(self, '_last_plex_error', None)
+
+    def get_user_settings(self) -> Dict[str, Any]:
+        """Get user-related settings including the full users list."""
+        raw = self._load_raw()
+        return {
+            "users_toggle": raw.get("users_toggle", True),
+            "users": raw.get("users", []),
+            "skip_ondeck": raw.get("skip_ondeck", []),
+            "skip_watchlist": raw.get("skip_watchlist", []),
+            "remote_watchlist_toggle": raw.get("remote_watchlist_toggle", False),
+            "remote_watchlist_rss_url": raw.get("remote_watchlist_rss_url", ""),
+            "auth_link_enabled": raw.get("auth_link_enabled", False),
+            "plex_db_path": raw.get("plex_db_path", ""),
+            "days_to_monitor": raw.get("days_to_monitor", 183),
+            "watchlist_retention_days": raw.get("watchlist_retention_days", 0)
+        }
+
+    def sync_users_from_plex(self) -> Dict[str, Any]:
+        """Sync users from Plex API, preserving skip preferences.
+
+        Returns:
+            Dict with: success, users, added_count, removed_count, error
+        """
+        settings = self.get_plex_settings()
+        plex_url = settings.get("plex_url", "")
+        plex_token = settings.get("plex_token", "")
+
+        if not plex_url or not plex_token:
+            return {"success": False, "error": "Missing Plex URL or token. Configure in Plex settings first."}
+
+        try:
+            from plexapi.server import PlexServer
+
+            plex = PlexServer(plex_url, plex_token, timeout=15)
+            account = plex.myPlexAccount()
+            machine_id = plex.machineIdentifier
+
+            raw = self._load_raw()
+            existing_users = {u.get("title"): u for u in raw.get("users", [])}
+            existing_skip_ondeck = set(raw.get("skip_ondeck", []))
+            existing_skip_watchlist = set(raw.get("skip_watchlist", []))
+
+            new_users = []
+            added_count = 0
+
+            # Add main account (admin)
+            admin_name = account.title or account.username
+            admin_existing = existing_users.get(admin_name, {})
+            admin_entry = {
+                "title": admin_name,
+                "id": getattr(account, "id", None),
+                "uuid": getattr(account, "uuid", None),
+                "token": plex_token,
+                "is_local": True,
+                "is_admin": True,
+                "skip_ondeck": admin_existing.get("skip_ondeck", False),
+                "skip_watchlist": admin_existing.get("skip_watchlist", False)
+            }
+            # Preserve per-user monitoring overrides across sync
+            if "days_to_monitor" in admin_existing:
+                admin_entry["days_to_monitor"] = admin_existing["days_to_monitor"]
+            if "watchlist_retention_days" in admin_existing:
+                admin_entry["watchlist_retention_days"] = admin_existing["watchlist_retention_days"]
+            new_users.append(admin_entry)
+            if admin_name not in existing_users:
+                added_count += 1
+
+            # Add shared users (all users from account.users() have server access)
+            for user in account.users():
+                name = user.title
+                try:
+                    token = user.get_token(machine_id)
+                except Exception:
+                    token = None
+
+                # Preserve existing cached token when API returns None (Plex security change)
+                if token is None:
+                    existing = existing_users.get(name, {})
+                    token = existing.get("token")
+
+                # Extract user ID and UUID
+                user_id = getattr(user, "id", None)
+                user_uuid = None
+                thumb = getattr(user, "thumb", "")
+                if thumb and "/users/" in thumb:
+                    try:
+                        user_uuid = thumb.split("/users/")[1].split("/")[0]
+                    except (IndexError, AttributeError):
+                        pass
+
+                is_home = getattr(user, "home", False)
+                is_local = bool(is_home)
+
+                # Preserve existing preferences - check both by name and by username in skip lists
+                existing = existing_users.get(name, {})
+                skip_ondeck = existing.get("skip_ondeck", name in existing_skip_ondeck)
+                # All users can have watchlist disabled (local via API, remote via RSS filtering)
+                skip_watchlist = existing.get("skip_watchlist", name in existing_skip_watchlist)
+
+                if name not in existing_users:
+                    added_count += 1
+
+                user_entry = {
+                    "title": name,
+                    "id": user_id,
+                    "uuid": user_uuid,
+                    "token": token,
+                    "is_local": is_local,
+                    "is_admin": False,
+                    "skip_ondeck": skip_ondeck,
+                    "skip_watchlist": skip_watchlist
+                }
+                # Preserve per-user monitoring overrides across sync
+                if "days_to_monitor" in existing:
+                    user_entry["days_to_monitor"] = existing["days_to_monitor"]
+                if "watchlist_retention_days" in existing:
+                    user_entry["watchlist_retention_days"] = existing["watchlist_retention_days"]
+                new_users.append(user_entry)
+
+            # Detect removed users
+            current_names = {u["title"] for u in new_users}
+            removed_count = len(set(existing_users.keys()) - current_names)
+
+            # Save updated users and rebuild skip lists
+            raw["users"] = new_users
+            raw["skip_ondeck"] = [u["title"] for u in new_users if u.get("skip_ondeck")]
+            # All users can have watchlist disabled (local via API, remote via RSS filtering)
+            raw["skip_watchlist"] = [u["title"] for u in new_users if u.get("skip_watchlist")]
+            self._save_raw(raw)
+
+            # Clear error on success
+            self._last_plex_error = None
+
+            return {
+                "success": True,
+                "users": new_users,
+                "added_count": added_count,
+                "removed_count": removed_count
+            }
+
+        except Exception as e:
+            error_msg = str(e)
+            if "Connection refused" in error_msg or "Errno 111" in error_msg:
+                error = "Cannot connect to Plex server. Is it running?"
+            elif "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
+                error = "Connection timed out. Check your Plex URL."
+            elif "401" in error_msg or "Unauthorized" in error_msg:
+                error = "Invalid Plex token. Try re-authenticating."
+            else:
+                error = f"Plex error: {error_msg[:100]}"
+
+            self._last_plex_error = error
+            return {"success": False, "error": error}
+
+    def save_user_settings(self, users: List[Dict[str, Any]], users_toggle: bool,
+                           remote_watchlist_toggle: bool = False,
+                           remote_watchlist_rss_url: str = "",
+                           auth_link_enabled: bool = False,
+                           plex_db_path: str = "") -> bool:
+        """Save user preferences and rebuild skip lists.
+
+        Args:
+            users: List of user dicts with skip_ondeck/skip_watchlist flags
+            users_toggle: Whether multi-user support is enabled
+            remote_watchlist_toggle: Whether remote watchlist RSS is enabled
+            remote_watchlist_rss_url: RSS URL for remote watchlists
+            auth_link_enabled: Whether self-service auth link is enabled
+            plex_db_path: Path to Plex SQLite database for DB fallback
+        """
+        raw = self._load_raw()
+
+        # Update users array
+        raw["users"] = users
+        raw["users_toggle"] = users_toggle
+        raw["remote_watchlist_toggle"] = remote_watchlist_toggle
+        raw["remote_watchlist_rss_url"] = remote_watchlist_rss_url
+        raw["auth_link_enabled"] = auth_link_enabled
+        raw["plex_db_path"] = plex_db_path
+
+        # Rebuild skip lists from user preferences (use title/username for skip lists)
+        raw["skip_ondeck"] = [u["title"] for u in users if u.get("skip_ondeck")]
+        # All users can have watchlist disabled (local via API, remote via RSS filtering)
+        raw["skip_watchlist"] = [u["title"] for u in users if u.get("skip_watchlist")]
+
+        return self._save_raw(raw)
+
+    def save_user_token_by_username(self, username: str, token: str) -> tuple:
+        """Save a token for a user matched by Plex username (case-insensitive).
+
+        Used by the self-service auth link flow when a shared user authenticates.
+
+        Returns:
+            (success: bool, matched_username: str or None)
+        """
+        raw = self._load_raw()
+        users = raw.get("users", [])
+
+        for user in users:
+            if user.get("title", "").lower() == username.lower():
+                user["token"] = token
+                raw["users"] = users
+                if self._save_raw(raw):
+                    return True, user["title"]
+                return False, None
+
+        return False, None
+
+    def get_last_run_time(self) -> Optional[str]:
+        """Get the last time PlexCache ran.
+
+        Reads from data/last_run.txt which is written when operations complete.
+        Falls back to recent_activity.json for backwards compatibility.
+        """
+        last_run_dt = None
+
+        # Primary: Check last_run.txt (written by operation_runner on completion)
+        last_run_file = DATA_DIR / "last_run.txt"
+        if last_run_file.exists():
+            try:
+                with open(last_run_file, 'r') as f:
+                    timestamp_str = f.read().strip()
+                    if timestamp_str:
+                        last_run_dt = datetime.fromisoformat(timestamp_str)
+            except (IOError, ValueError):
+                pass
+
+        # Fallback: Check recent_activity.json for older installs
+        if last_run_dt is None:
+            activity_file = DATA_DIR / "recent_activity.json"
+            if activity_file.exists():
+                try:
+                    with open(activity_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        if data and len(data) > 0:
+                            latest = max(data, key=lambda x: x.get('timestamp', ''))
+                            if 'timestamp' in latest:
+                                last_run_dt = datetime.fromisoformat(latest['timestamp'])
+                except (json.JSONDecodeError, IOError, ValueError):
+                    pass
+
+        if last_run_dt is None:
+            return None
+
+        # Format relative time
+        now = datetime.now()
+        diff = now - last_run_dt
+
+        if diff.days > 0:
+            return f"{diff.days}d ago"
+        elif diff.seconds >= 3600:
+            hours = diff.seconds // 3600
+            return f"{hours}h ago"
+        elif diff.seconds >= 60:
+            minutes = diff.seconds // 60
+            return f"{minutes}m ago"
+        else:
+            return "Just now"
+
+    def prefetch_plex_data(self):
+        """
+        Prefetch Plex libraries and users in background thread.
+        Called on startup to warm the cache.
+        """
+        def _fetch():
+            logger.info("Prefetching Plex data in background...")
+            try:
+                # Force refresh by invalidating cache first if it's stale
+                if not self._is_plex_cache_valid():
+                    self.get_plex_libraries()
+                    self.get_plex_users()
+                    logger.info("Plex data prefetch complete")
+                else:
+                    logger.info("Plex data cache is still valid, skipping prefetch")
+            except Exception as e:
+                logger.warning(f"Plex data prefetch failed: {e}")
+
+        thread = threading.Thread(target=_fetch, daemon=True)
+        thread.start()
+
+    def refresh_plex_cache(self):
+        """
+        Force refresh Plex cache (called by scheduler hourly).
+        Runs synchronously for scheduler use.
+        """
+        logger.info("Refreshing Plex data cache...")
+        try:
+            # Invalidate current cache to force refresh
+            self.invalidate_plex_cache()
+            self.get_plex_libraries()
+            self.get_plex_users()
+            logger.info("Plex data cache refreshed successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to refresh Plex cache: {e}")
+            return False
+
+    def export_settings(self, include_sensitive: bool = True) -> Dict[str, Any]:
+        """Export all settings as a dictionary.
+
+        Args:
+            include_sensitive: If False, redacts tokens, URLs, usernames, and identifiers
+
+        Returns:
+            Settings dictionary ready for JSON serialization
+        """
+        import copy
+        import re
+        settings = copy.deepcopy(self._load_raw())
+
+        # Include the pinned_media tracker so pins survive export→import
+        # round-trips. The tracker is stored as a separate JSON file on disk,
+        # not inside plexcache_settings.json, so we read it here and embed
+        # the raw rating_key → entry dict under the "pinned_media" key.
+        # Pin data is not sensitive (rating_keys + titles + timestamps) —
+        # nothing to redact even when include_sensitive is False.
+        try:
+            pinned_data = self._read_pinned_tracker_file()
+            if pinned_data:
+                settings["pinned_media"] = pinned_data
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            # Non-fatal: settings export still works, pins just won't round-trip
+            import logging
+            logging.warning(f"export_settings: could not read pinned tracker: {e}")
+
+        if not include_sensitive:
+            # Remove main Plex token
+            if "PLEX_TOKEN" in settings:
+                settings["PLEX_TOKEN"] = ""
+
+            # Redact Plex URL (preserve structure, hide IP/machine ID)
+            if "PLEX_URL" in settings and settings["PLEX_URL"]:
+                url = settings["PLEX_URL"]
+                # Preserve protocol and port, redact the host
+                match = re.match(r'(https?://)(.+?)(:(\d+))?(/.*)?$', url)
+                if match:
+                    port = f":{match.group(4)}" if match.group(4) else ""
+                    settings["PLEX_URL"] = f"{match.group(1)}[REDACTED]{port}"
+                else:
+                    settings["PLEX_URL"] = "[REDACTED]"
+
+            # Redact client ID
+            if "plexcache_client_id" in settings:
+                settings["plexcache_client_id"] = "[REDACTED]"
+
+            # Redact RSS URL (contains auth-embedded feed GUID)
+            if "remote_watchlist_rss_url" in settings and settings["remote_watchlist_rss_url"]:
+                url = settings["remote_watchlist_rss_url"]
+                match = re.match(r'(https?://[^/]+/)(.+)', url)
+                if match:
+                    settings["remote_watchlist_rss_url"] = f"{match.group(1)}[REDACTED]"
+                else:
+                    settings["remote_watchlist_rss_url"] = "[REDACTED]"
+
+            # Remove webhook URL (may contain API keys)
+            if "webhook_url" in settings:
+                settings["webhook_url"] = ""
+
+            # Redact arr instance API keys
+            for inst in settings.get("arr_instances", []):
+                inst["api_key"] = ""
+
+            # Redact auth credentials and identity
+            if "auth_password_hash" in settings:
+                settings["auth_password_hash"] = "[REDACTED]"
+            if "auth_password_salt" in settings:
+                settings["auth_password_salt"] = "[REDACTED]"
+            if "auth_password_username" in settings:
+                settings["auth_password_username"] = "[REDACTED]"
+            if "auth_admin_plex_id" in settings:
+                settings["auth_admin_plex_id"] = "[REDACTED]"
+            if "auth_admin_username" in settings:
+                settings["auth_admin_username"] = "[REDACTED]"
+
+            # Anonymize users in both _cached_users and users arrays
+            for i, user in enumerate(settings.get("_cached_users", []), 1):
+                if "username" in user:
+                    user["username"] = f"User_{i}"
+                if "title" in user:
+                    user["title"] = f"User {i}"
+
+            for i, user in enumerate(settings.get("users", []), 1):
+                if "title" in user:
+                    user["title"] = f"User {i}"
+                if "token" in user:
+                    user["token"] = ""
+                if "id" in user:
+                    user["id"] = 0
+                if "uuid" in user:
+                    user["uuid"] = "[REDACTED]"
+
+        return settings
+
+    def validate_import_settings(self, settings_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate imported settings structure.
+
+        Args:
+            settings_data: Settings dictionary to validate
+
+        Returns:
+            Dict with: valid (bool), errors (list), warnings (list)
+        """
+        errors = []
+        warnings = []
+
+        # Check if it's a dict
+        if not isinstance(settings_data, dict):
+            errors.append("Settings must be a JSON object (dictionary)")
+            return {"valid": False, "errors": errors, "warnings": warnings}
+
+        # Check for empty settings
+        if not settings_data:
+            errors.append("Settings file is empty")
+            return {"valid": False, "errors": errors, "warnings": warnings}
+
+        # Check for required Plex settings (warn if missing)
+        if not settings_data.get("PLEX_URL"):
+            warnings.append("Missing PLEX_URL - will need to configure Plex connection")
+        if not settings_data.get("PLEX_TOKEN"):
+            warnings.append("Missing PLEX_TOKEN - will need to re-authenticate with Plex")
+
+        # Check path mappings structure
+        path_mappings = settings_data.get("path_mappings", [])
+        if path_mappings:
+            if not isinstance(path_mappings, list):
+                errors.append("path_mappings must be a list")
+            else:
+                for i, mapping in enumerate(path_mappings):
+                    if not isinstance(mapping, dict):
+                        errors.append(f"Path mapping {i + 1} must be an object")
+                    elif not mapping.get("plex_path") or not mapping.get("real_path"):
+                        warnings.append(f"Path mapping '{mapping.get('name', i + 1)}' missing plex_path or real_path")
+
+        # Check users structure
+        users = settings_data.get("users", [])
+        if users:
+            if not isinstance(users, list):
+                errors.append("users must be a list")
+            else:
+                users_without_tokens = sum(1 for u in users if not u.get("token"))
+                if users_without_tokens > 0:
+                    warnings.append(f"{users_without_tokens} user(s) missing tokens - will need to sync users")
+
+        # Check cache limit format
+        cache_limit = settings_data.get("cache_limit", "")
+        if cache_limit and not any(cache_limit.upper().endswith(suffix) for suffix in ["GB", "TB", "MB"]):
+            warnings.append(f"cache_limit '{cache_limit}' may not be a valid format (expected e.g., '250GB')")
+
+        # Check for unknown top-level keys (informational)
+        known_keys = {
+            "PLEX_URL", "PLEX_TOKEN", "valid_sections", "path_mappings", "users",
+            "users_toggle", "skip_ondeck", "skip_watchlist", "watchlist_toggle",
+            "watchlist_episodes", "watchlist_retention_days", "watched_move", "prefetch_minimum_minutes",
+            "create_plexcached_backups", "hardlinked_files", "check_hardlinks_on_restore", "use_symlinks", "cache_retention_hours",
+            "cache_limit", "min_free_space", "plexcache_quota", "cache_eviction_mode", "cache_eviction_threshold_percent",
+            "eviction_min_priority", "remote_watchlist_toggle", "remote_watchlist_rss_url",
+            "notification_type", "unraid_level", "unraid_levels", "webhook_url",
+            "webhook_level", "webhook_levels", "max_log_files", "keep_error_logs_days",
+            "days_to_monitor", "number_episodes", "activity_retention_hours",
+            "excluded_folders", "pinned_preferred_resolution", "pinned_media",
+            # Advanced settings
+            "max_concurrent_moves_array", "max_concurrent_moves_cache", "exit_if_active_session",
+            # Integrations (Sonarr/Radarr) - multi-instance list
+            "arr_instances",
+            # Legacy flat keys (auto-migrated to arr_instances)
+            "sonarr_enabled", "sonarr_url", "sonarr_api_key",
+            "radarr_enabled", "radarr_url", "radarr_api_key",
+            # Legacy keys that may exist
+            "plex_source", "real_source", "nas_library_folders", "plex_library_folders"
+        }
+        unknown_keys = set(settings_data.keys()) - known_keys
+        if unknown_keys:
+            warnings.append(f"Unknown settings will be preserved: {', '.join(sorted(unknown_keys)[:5])}")
+
+        return {
+            "valid": len(errors) == 0,
+            "errors": errors,
+            "warnings": warnings
+        }
+
+    def import_settings(self, settings_data: Dict[str, Any], merge: bool = False) -> Dict[str, Any]:
+        """Import settings from dictionary.
+
+        Args:
+            settings_data: Settings dictionary to import
+            merge: If True, merge with existing (imported values win).
+                   If False, replace entirely.
+
+        Returns:
+            Dict with: success (bool), message (str)
+        """
+        try:
+            # Extract the pinned tracker payload before saving the main file —
+            # pins live in a separate tracker JSON, not inside plexcache_settings.
+            settings_data = dict(settings_data)  # don't mutate caller's dict
+            pinned_payload = settings_data.pop("pinned_media", None)
+
+            if merge:
+                # Load existing and merge
+                current = self._load_raw()
+                # Deep merge for nested structures
+                for key, value in settings_data.items():
+                    if key == "path_mappings" and isinstance(value, list):
+                        # For path mappings, replace entirely if provided
+                        current[key] = value
+                    elif key == "users" and isinstance(value, list):
+                        # For users, replace entirely if provided
+                        current[key] = value
+                    else:
+                        current[key] = value
+                settings_to_save = current
+            else:
+                # Replace entirely
+                settings_to_save = settings_data
+
+            success = self._save_raw(settings_to_save)
+
+            if success:
+                # Restore pinned tracker on disk + invalidate the service
+                # singleton so a fresh tracker is constructed on next access.
+                # Merge mode unions with existing pins; replace mode overwrites.
+                if pinned_payload is not None:
+                    try:
+                        self._restore_pinned_tracker_file(pinned_payload, merge=merge)
+                    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
+                        import logging
+                        logging.warning(f"import_settings: pinned tracker restore failed: {e}")
+                # Invalidate caches since settings changed
+                self.invalidate_plex_cache()
+                return {"success": True, "message": "Settings imported successfully"}
+            else:
+                return {"success": False, "message": "Failed to save settings file"}
+
+        except Exception as e:
+            return {"success": False, "message": f"Import error: {str(e)}"}
+
+    # ------------------------------------------------------------------
+    # Pinned tracker helpers (used by export_settings / import_settings)
+    # ------------------------------------------------------------------
+
+    def _pinned_tracker_path(self):
+        """Return the path to the pinned_media.json tracker file."""
+        from web.dependencies import DATA_DIR
+        return DATA_DIR / "pinned_media.json"
+
+    def _read_pinned_tracker_file(self) -> Dict[str, Any]:
+        """Return the raw pinned_media.json contents as a dict, or {} if absent."""
+        import json
+        path = self._pinned_tracker_path()
+        if not path.exists():
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
+
+    def _restore_pinned_tracker_file(self, payload: Dict[str, Any], merge: bool) -> None:
+        """Write the imported pin payload to the tracker file.
+
+        In merge mode, unions the imported pins with whatever is already on
+        disk (imported values win on key collision). In replace mode, the
+        imported payload overwrites the file entirely. After writing, the
+        PinnedService singleton is reset so the next access constructs a
+        fresh tracker that loads from the new file.
+        """
+        from core.file_operations import save_json_atomically
+        if not isinstance(payload, dict):
+            raise ValueError("pinned_media payload must be a JSON object")
+
+        if merge:
+            existing = self._read_pinned_tracker_file()
+            merged = dict(existing)
+            merged.update(payload)
+            to_write = merged
+        else:
+            to_write = payload
+
+        path = self._pinned_tracker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        save_json_atomically(str(path), to_write, "pinned_media")
+
+        # Reset the PinnedService singleton so subsequent reads see fresh data.
+        try:
+            import web.services.pinned_service as ps_mod
+            ps_mod._pinned_service = None
+        except (ImportError, AttributeError):
+            pass
+
+
+# Singleton instance
+_settings_service: Optional[SettingsService] = None
+_settings_service_lock = threading.Lock()
+
+
+def get_settings_service() -> SettingsService:
+    """Get or create the settings service singleton"""
+    global _settings_service
+    if _settings_service is None:
+        with _settings_service_lock:
+            if _settings_service is None:
+                _settings_service = SettingsService()
+    return _settings_service

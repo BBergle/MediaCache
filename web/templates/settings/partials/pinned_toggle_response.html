@@ -1,0 +1,39 @@
+{% from "macros/pin_button.html" import pin_button %}
+{#
+  Response to POST /api/pinned/toggle.
+
+  Returns either the re-rendered action button (success, 200) or an inline
+  error box (budget overrun, 400). HTMX swaps this into the originating form
+  using hx-target="this" + hx-swap="outerHTML", so the surrounding row,
+  chip, or slot is preserved.
+
+  On success, the route also sets an HX-Trigger: pinned-updated response
+  header so the Currently Pinned chip list auto-refreshes.
+#}
+{% if error %}
+<div class="pinned-toggle-error alert alert-warning" role="alert"
+     data-rating-key="{{ rating_key }}"
+     style="margin: 0.25rem 0; padding: 0.5rem 0.75rem; border-radius: var(--plex-radius-sm); font-size: 0.85rem;">
+    <strong>Cannot pin:</strong> {{ error }}
+</div>
+{% else %}
+{#
+  Rendered through the shared macro rather than a hand-copy of its markup. The
+  copy had drifted: it accepted no label/confirm, so after unpinning a show from
+  a Recently Added episode row the swapped-in control came back as a bare,
+  confirm-less "Pin" still bound to pin_type=show — one stray click re-pinned the
+  whole series.
+
+  A show- or season-scoped control keeps its confirm here for the same reason it
+  has one on the originating row: the click affects every episode the scope
+  covers, not just the row it sits in.
+#}
+{% if pin_type in ('show', 'season') %}
+{{ pin_button(rating_key, pin_type, title, is_pinned,
+              label=('Unpin ' ~ pin_type) if is_pinned else '',
+              confirm=('Unpinning this ' ~ pin_type ~ ' releases every episode it covers. Continue?')
+                      if is_pinned else '') }}
+{% else %}
+{{ pin_button(rating_key, pin_type, title, is_pinned) }}
+{% endif %}
+{% endif %}

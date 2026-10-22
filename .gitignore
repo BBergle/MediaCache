@@ -1,0 +1,34 @@
+# OS files
+.DS_Store
+
+# Python
+*.pyc
+__pycache__/
+.coverage
+
+# Runtime data
+/data/
+
+# Logs (root logs directory only, not web/templates/logs/)
+/logs/
+
+# User data files
+plexcache_settings.json
+plexcache_cached_files.txt
+plexcache_timestamps.json
+plexcache_watchlist_tracker.json
+plexcache_user_tokens.json
+plexcache.lock
+
+# Old cache files (deprecated in v2.0)
+plexcache_watchlist_cache.json
+plexcache_watched_cache.json
+
+# Local documentation
+FUTURE_ENHANCEMENTS.md
+COMPLETED_ENHANCEMENTS.md
+TODO.md
+PINNED_MEDIA_PLAN.md
+
+# Design mockups (local-only, see COMPLETED_ENHANCEMENTS.md entries)
+mockup_*.html

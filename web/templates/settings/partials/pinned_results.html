@@ -1,0 +1,48 @@
+{#
+  Pin picker search results. Rendered into #pinned-search-results via
+  HTMX innerHTML swap on keyup of the search input.
+#}
+<div class="pinned-search-results">
+    {% if not results %}
+        <p style="color: var(--plex-text-muted); font-size: 0.85rem; margin: 0.5rem 0; padding: 0.5rem 0.25rem;">
+            {% if query %}
+                <i data-lucide="search-x" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 0.25rem;"></i>
+                No results for "{{ query }}"
+            {% else %}
+                <i data-lucide="search" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 0.25rem;"></i>
+                Type to search Plex for movies and shows to pin.
+            {% endif %}
+        </p>
+    {% else %}
+        <ul class="pinned-result-list" style="list-style: none; padding: 0; margin: 0;">
+            {% for item in results %}
+                {% include "settings/partials/pinned_result_row.html" %}
+            {% endfor %}
+        </ul>
+    {% endif %}
+</div>
+<script>
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+
+    var togglePinnedChildren = function(btn, ratingKey, level) {
+        var parent = btn.closest(level === 'show' ? '.pinned-result-row' : '.pinned-child-row');
+        var existing = parent.nextElementSibling;
+        var label = btn.querySelector('.expand-label');
+        if (existing && existing.classList.contains('pinned-children-block') &&
+            existing.getAttribute('data-parent') === ratingKey) {
+            existing.remove();
+            btn.querySelector('[data-lucide]').style.transform = '';
+            btn.classList.remove('active');
+            label.textContent = level === 'show' ? 'Expand' : 'Episodes';
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+            return;
+        }
+        btn.querySelector('[data-lucide]').style.transform = 'rotate(180deg)';
+        btn.classList.add('active');
+        label.textContent = 'Collapse';
+        htmx.ajax('GET', '/api/pinned/expand?rating_key=' + ratingKey + '&level=' + level, {
+            target: parent,
+            swap: 'afterend'
+        });
+    };
+</script>

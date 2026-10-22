@@ -1,0 +1,116 @@
+{#
+  Compact dashboard card for Recently Added. Lazy-loaded into the dashboard;
+  links through to the full /recently-added page.
+
+  Rows arrive pre-grouped from the router (service.group_rows_for_display) —
+  the same grouping the full page uses — so a multi-episode show shows up as
+  one expandable line here too, instead of filling the card.
+#}
+{% if not available %}
+<div class="text-muted" style="padding: 1.25rem; font-size: 0.85rem;">
+    {{ error or "Recently added is unavailable." }}
+</div>
+{% else %}
+
+{# ── one detail sub-line: a file (or episode) name + size ── #}
+{% macro ra_w_detail(name, size) %}
+<div class="ra-w-detail-line">
+    <span class="ra-w-detail-name">&#8627; {{ name }}</span>
+    {% if size %}<span class="ra-size-chip">{{ size }}</span>{% endif %}
+</div>
+{% endmacro %}
+
+{# The counts below exclude any library Plex refused to list, so say so rather
+   than letting the card read as complete. #}
+{% if unreadable_libraries %}
+<div class="text-muted" style="padding: 0.75rem 1.25rem 0; font-size: 0.78rem; display: flex; align-items: flex-start; gap: 0.4rem;">
+    <i data-lucide="alert-triangle" style="width: 13px; height: 13px; flex-shrink: 0; margin-top: 2px; color: var(--plex-warning);"></i>
+    <span>Couldn't read {{ unreadable_libraries|join(', ') }} — counts are incomplete.</span>
+</div>
+{% endif %}
+
+<div style="display: flex; gap: 1.25rem; flex-wrap: wrap; padding: 1rem 1.25rem; align-items: center;">
+    <div>
+        <div class="stat-value" style="font-size: 1.5rem;">{{ summary.total }}</div>
+        <div class="stat-label">new in {{ days }}d</div>
+    </div>
+    <div>
+        <div class="stat-value success" style="font-size: 1.5rem;">{{ summary.on_cache }}</div>
+        <div class="stat-label">on cache</div>
+    </div>
+    <div>
+        <div class="stat-value" style="font-size: 1.5rem;">{{ summary.on_array }}</div>
+        <div class="stat-label">on array</div>
+    </div>
+</div>
+{% if groups %}
+<div style="padding: 0 1.25rem 0.75rem;">
+    {# Column header — aligns with the per-row columns below. #}
+    <div class="ra-w-head">
+        <span class="ra-w-lead"></span>
+        <span class="ra-w-title">Title</span>
+        <span class="ra-w-size">Size</span>
+        <span class="ra-w-age">Added</span>
+    </div>
+    {% for item in groups %}
+    {# Click-to-expand: reveals the underlying filename(s) + size. Self-contained
+       so it works on the dashboard (the full-page RecentlyAdded JS isn't loaded). #}
+    {% if item.kind == 'show' %}
+    <div class="ra-w-row" onclick="raWidgetToggle(this)" title="Show episodes">
+        <div class="ra-w-line">
+            <span class="ra-w-chevron"><i data-lucide="chevron-right" style="width: 13px; height: 13px;"></i></span>
+            <i data-lucide="tv" style="width: 14px; height: 14px; color: var(--plex-text-muted); flex-shrink: 0;"></i>
+            <span class="ra-w-title">
+                {{ item.show }}
+                <span class="ra-w-sub">{% if item.season_display %}{{ item.season_display }} · {% endif %}{{ item.episode_count }} eps</span>
+            </span>
+            <span class="ra-w-size">{% if item.total_size_display %}<span class="ra-size-chip">{{ item.total_size_display }}</span>{% endif %}</span>
+            <span class="ra-w-age">{{ item.added_display or "—" }}</span>
+        </div>
+        <div class="ra-w-detail" style="display: none;">
+            {% for ep in item.episodes %}
+            {{ ra_w_detail(ep.filename or ep.title, ep.size_display) }}
+            {% for af in ep.associated_files %}
+            {{ ra_w_detail(af.filename, af.size) }}
+            {% endfor %}
+            {% endfor %}
+        </div>
+    </div>
+    {% else %}
+    {% set row = item.row %}
+    <div class="ra-w-row" onclick="raWidgetToggle(this)" title="Show file details">
+        <div class="ra-w-line">
+            <span class="ra-w-chevron"><i data-lucide="chevron-right" style="width: 13px; height: 13px;"></i></span>
+            <i data-lucide="{{ 'tv' if row.media_type == 'episode' else 'film' }}" style="width: 14px; height: 14px; color: var(--plex-text-muted); flex-shrink: 0;"></i>
+            <span class="ra-w-title">
+                {% if row.media_type == 'episode' and row.episode_info %}{% set se = format_season_episode(row.episode_info.season, row.episode_info.episode) %}{{ row.episode_info.show or row.title }}{% if se %} · {{ se }}{% endif %}{% else %}{{ row.title }}{% endif %}
+            </span>
+            <span class="ra-w-size">{% if row.size_display %}<span class="ra-size-chip">{{ row.size_display }}</span>{% endif %}</span>
+            <span class="ra-w-age">{{ row.added_display or "—" }}</span>
+        </div>
+        <div class="ra-w-detail" style="display: none;">
+            {{ ra_w_detail(row.filename or row.title, row.size_display) }}
+            {% for af in row.associated_files %}
+            {{ ra_w_detail(af.filename, af.size) }}
+            {% endfor %}
+            {% for ov in row.other_versions %}
+            {{ ra_w_detail(ov.filename, ov.size) }}
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    {% endfor %}
+</div>
+{% endif %}
+<script>
+window.raWidgetToggle = window.raWidgetToggle || function (rowEl) {
+    var detail = rowEl.querySelector('.ra-w-detail');
+    var chev = rowEl.querySelector('.ra-w-chevron');
+    if (!detail) return;
+    var open = detail.style.display === 'none';
+    detail.style.display = open ? 'block' : 'none';
+    if (chev) chev.style.transform = open ? 'rotate(90deg)' : '';
+};
+lucide.createIcons();
+</script>
+{% endif %}

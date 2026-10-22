@@ -1,0 +1,347 @@
+{% from "macros/pin_button.html" import pin_button %}
+{% from "macros/source_badge.html" import ondeck_badge, watchlist_badge %}
+{#
+  Recently Added — stat cards + filter bar + table.
+
+  Swapped into #ra-content. The "Added Within" (days) <select> re-fetches this
+  whole partial from the server; the Library/Search/location controls filter the
+  loaded rows client-side (RecentlyAdded JS in index.html).
+
+  Rows arrive pre-grouped from the router (service.group_rows_for_display):
+  movies + standalone episodes render as individual rows; multi-episode TV runs
+  render as an expandable show-group header + episode child rows.
+
+  Each leaf row's title cell is click-to-expand: it reveals detail sub-rows
+  (the primary media filename + size, then any subtitle/sidecar files), reusing
+  the shared .associated-sub-row / .af-visible markup.
+#}
+
+{# ── detail sub-row: a single file (name + size) under a leaf row ──
+   Full-width colspan cell so long release names wrap instead of forcing the
+   Title column wide (which would blow out the whole table). #}
+{% macro ra_detail_file(name, size, group_id='') %}
+<tr class="associated-sub-row ra-detail-row"{% if group_id %} data-group="{{ group_id }}"{% endif %}>
+    <td colspan="7" class="ra-detail-cell"{% if group_id %} style="padding-left: 3rem !important;"{% endif %}>
+        <span class="associated-sub-arrow">&#8627;</span><span class="ra-detail-name">{{ name }}</span>{% if size %}<span class="ra-size-chip">{{ size }}</span>{% endif %}
+    </td>
+</tr>
+{% endmacro %}
+
+{# ── one media row (movie, standalone episode, or group child) ── #}
+{% macro ra_location_badge(location) %}
+{% if location == 'cache' %}
+<span class="badge badge-success"><i data-lucide="zap"></i> On Cache</span>
+{% elif location == 'array' %}
+<span class="badge badge-muted"><i data-lucide="server"></i> On Array</span>
+{% else %}
+<span class="badge badge-muted">Unknown</span>
+{% endif %}
+{% endmacro %}
+
+{# Outcome badge — names what happens to the file next rather than a state noun.
+   Every arm is explicit: the terminal branch renders a neutral em-dash, which is
+   true of any input, rather than letting an unrecognised outcome silently borrow
+   another state's badge (the defect the old {% else %} → "Protected" produced).
+   tests/test_outcome_vocabulary.py asserts every enum member appears here. #}
+{% macro ra_status_badge(row) %}
+{% if   row.outcome == 'held'              %}<span class="badge badge-pinned" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="pin"></i> Stays on cache</span>
+{% elif row.outcome == 'held_mover_gap'    %}<span class="badge badge-pinned" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="pin"></i> Stays on cache</span>
+{% elif row.outcome == 'arriving'          %}<span class="badge badge-pinned" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="arrow-down-to-line"></i> Pinned, not on cache yet</span>
+{% elif row.outcome == 'held_by_setting'   %}<span class="badge badge-info" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="sliders-horizontal"></i> Not moved back</span>
+{% elif row.outcome == 'returns_when_done' %}<span class="badge badge-info" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="clock"></i> Returns when watched</span>
+    {# Which list is holding it. Same badges and wording as Cached Files. #}
+    {% if row.is_ondeck %}{{ ondeck_badge() }}{% endif %}
+    {% if row.is_watchlist %}{{ watchlist_badge() }}{% endif %}
+{% elif row.outcome == 'moves_back'        %}<span class="badge badge-muted" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="arrow-down"></i> Moves to array</span>
+{% elif row.outcome == 'mover_decides'     %}<span class="badge badge-released" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="send"></i> Mover's call</span>
+{% elif row.outcome == 'stays_on_array'    %}<span class="badge badge-muted" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="server"></i> Not on cache</span>
+{% elif row.outcome == 'unmapped'          %}<span class="badge badge-muted ra-badge-dashed" title="{{ outcome_tooltip(row.outcome) }}"><i data-lucide="help-circle"></i> Unmapped</span>
+{% elif row.outcome == 'pin_unknown'       %}<span class="badge badge-muted ra-badge-dashed" title="{{ outcome_tooltip(row.outcome) }}">Pin state unknown</span>
+{% else %}<span class="badge badge-muted" title="Unrecognised outcome — please report">&mdash;</span>
+{% endif %}
+{% endmacro %}
+
+{% macro ra_row(row, is_child=False, group_id='') %}
+{# data-row-id is identity, not search: RecentlyAdded._state.details keys on it
+   to re-open a row's file details after an HTMX swap. rating_key is stable
+   across Sonarr/Radarr upgrades; filename covers the rows Plex gave no key. #}
+<tr class="ra-row {% if is_child %}ra-group-child{% else %}ra-item{% endif %}"
+    data-row-id="{{ row.rating_key or row.filename }}"
+    {% if is_child %}data-group="{{ group_id }}" style="display: none;"{% endif %}
+    data-library="{{ row.library_title }}"
+    data-loc="{{ row.location }}"
+    {# `or ''` before |lower: a missing show would render the literal "none" into
+       the search index and make every row match a search for "none". #}
+    data-title="{{ row.title|lower }}{% if row.episode_info %} {{ (row.episode_info.show or '')|lower }}{% endif %} {{ row.filename|lower }}">
+    <td class="ra-title-cell" onclick="RecentlyAdded.toggleDetail(this)"
+        style="cursor: pointer;{% if is_child %} padding-left: 2.4rem;{% endif %}"
+        title="Show file details">
+        <div class="title-cell" style="display: flex; align-items: center; gap: 0.5rem;">
+            <span class="ra-detail-chevron"><i data-lucide="chevron-right"></i></span>
+            {% if not is_child %}
+            <span class="media-ic" style="width: 30px; height: 30px; border-radius: 7px; background: var(--plex-bg-hover); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                <i data-lucide="{{ 'tv' if row.media_type == 'episode' else 'film' }}" style="width: 15px; height: 15px; color: var(--plex-text-muted);"></i>
+            </span>
+            {% endif %}
+            <div>
+                {% if row.media_type == 'episode' and row.episode_info %}
+                    {# "" when Plex gave no usable numbering, so the row falls back
+                       to the episode title rather than inventing S00E00 — which a
+                       genuine Specials episode 0 also renders as. #}
+                    {% set se = format_season_episode(row.episode_info.season, row.episode_info.episode) %}
+                    {% if is_child %}
+                    <div style="font-weight: 500;">{% if se %}{{ se }}{% if row.title %} — {{ row.title }}{% endif %}{% else %}{{ row.title or 'Episode' }}{% endif %}</div>
+                    {% else %}
+                    <div style="font-weight: 500;">{{ row.episode_info.show or row.title }}</div>
+                    <div class="text-muted" style="font-size: 0.76rem;">
+                        {% if se %}{{ se }}{% if row.title %} — {{ row.title }}{% endif %}{% else %}{{ row.title or 'Episode' }}{% endif %}
+                    </div>
+                    {% endif %}
+                {% else %}
+                <div style="font-weight: 500;">{{ row.title }}</div>
+                {# Terminal arm, so a row built outside plex_api cannot land here
+                   and label an episode "Movie" underneath a tv icon. #}
+                <div class="text-muted" style="font-size: 0.76rem;">{% if row.media_type == 'episode' %}Episode{% else %}Movie{% endif %}</div>
+                {% endif %}
+            </div>
+            {% if row.associated_files %}<span class="badge badge-muted badge-sm" title="{{ row.associated_files|length }} associated file(s)">+{{ row.associated_files|length }}</span>{% endif %}
+        </div>
+    </td>
+    <td class="text-muted">{{ row.library_title }}</td>
+    <td class="text-muted" style="white-space: nowrap;">{{ row.added_display or '—' }}</td>
+    <td style="white-space: nowrap;">{{ row.size_display or '—' }}</td>
+    <td>{{ ra_location_badge(row.location) }}</td>
+    <td>{{ ra_status_badge(row) }}</td>
+    <td>
+        {% if row.rating_key %}
+        {# The pin that actually holds this file may be a show/season pin, so the
+           button must unpin the HOLDER — writing a redundant episode pin under a
+           show pin double-counts its bytes in budget_check and strands an
+           invisible pin when the show is later unpinned. #}
+        {% if row.outcome == 'pin_unknown' %}
+        {{ pin_button(row.rating_key, row.pin_type, row.title, False,
+                      disabled=True,
+                      disabled_reason='Plex did not answer, so PlexCache cannot tell whether this is pinned. Refresh to retry.') }}
+        {% elif row.is_pinned and row.pin_scope in ('show', 'season') %}
+        {{ pin_button(row.pin_holder_key, row.pin_scope, row.pin_holder_title, True,
+                      label='Unpin ' ~ row.pin_scope,
+                      confirm='This episode is held by a ' ~ row.pin_scope ~ ' pin on "' ~ row.pin_holder_title ~ '". Unpinning releases every episode it covers. Continue?') }}
+        {% else %}
+        {{ pin_button(row.rating_key, row.pin_type, row.title, row.is_pinned) }}
+        {% endif %}
+        {% if row.outcome == 'stays_on_array' %}
+        <div class="ra-status-note">copies ~{{ row.size_display }} to cache</div>
+        {% elif row.outcome == 'arriving' %}
+        <div class="ra-status-note">next run copies ~{{ row.size_display }} across</div>
+        {% elif row.is_pinned and row.pin_scope in ('show', 'season') %}
+        <div class="ra-status-note">held by a {{ row.pin_scope }} pin</div>
+        {% endif %}
+        {% else %}
+        <span class="text-muted">—</span>
+        {% endif %}
+    </td>
+</tr>
+{# Expand detail: the primary media file, then any associated files, then any
+   other Plex versions of the same item (which PlexCache does not manage). #}
+{{ ra_detail_file(row.filename or row.title, row.size_display, group_id if is_child else '') }}
+{% for af in row.associated_files %}
+{{ ra_detail_file(af.filename, af.size, group_id if is_child else '') }}
+{% endfor %}
+{% for ov in row.other_versions %}
+{{ ra_detail_file(ov.filename ~ (' — other version' if not ov.label else ' — ' ~ ov.label ~ ' version, not managed'), ov.size, group_id if is_child else '') }}
+{% endfor %}
+{% endmacro %}
+
+{% if not available %}
+<div class="card">
+    <div class="card-body" style="text-align: center; padding: 3rem;">
+        <i data-lucide="cloud-off" style="width: 36px; height: 36px; color: var(--plex-text-muted);"></i>
+        <h3 style="margin: 0.75rem 0 0.25rem;">Recently added is unavailable</h3>
+        <p class="text-muted" style="margin: 0;">{{ error or "Could not load recently added media." }}</p>
+    </div>
+    {# Keep the days input present so Refresh still works in the error state. #}
+    <input type="hidden" id="ra-days-input" name="days" value="{{ days }}">
+</div>
+{% else %}
+
+{# A library Plex refused to list is missing from the table, the counts and the
+   Library filter alike. Same register as the pin_unknown outcome: an
+   unverifiable fetch becomes a named state, never a reassuring default. Markup
+   copied from cache/partials/storage_stats.html rather than including
+   partials/alert.html, which appends its own lucide.createIcons() call that
+   this template already makes. #}
+{% if unreadable_libraries %}
+<div class="alert alert-warning mb-2" style="display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.75rem 1rem;">
+    <i data-lucide="alert-triangle" style="flex-shrink: 0; margin-top: 2px;"></i>
+    <div>
+        <strong>Couldn't read {{ unreadable_libraries|length }} librar{{ 'ies' if unreadable_libraries|length != 1 else 'y' }}:</strong>
+        {{ unreadable_libraries|join(', ') }}. Plex didn't answer, so anything
+        added there is missing from the counts and the table below. Refresh to retry.
+    </div>
+</div>
+{% endif %}
+
+<!-- Stat cards -->
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="stat-card-header"><i data-lucide="sparkles"></i> Recently Added</div>
+        <div class="stat-value">{{ summary.total }}</div>
+        <div class="stat-label">last {{ days }} day{{ 's' if days != 1 else '' }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-card-header"><i data-lucide="zap"></i> Already on Cache</div>
+        <div class="stat-value success">{{ summary.on_cache }}</div>
+        <div class="stat-label">on fast storage now</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-card-header"><i data-lucide="server"></i> On Array</div>
+        <div class="stat-value">{{ summary.on_array }}</div>
+        <div class="stat-label">not currently cached</div>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="card mb-2">
+    <div class="card-body">
+        <div class="grid grid-3">
+            <div class="form-group mb-0">
+                <label for="ra-lib-filter">Library</label>
+                <select id="ra-lib-filter">
+                    <option value="all">All Libraries</option>
+                    {% for lib in libraries %}
+                    <option value="{{ lib }}">{{ lib }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group mb-0">
+                <label for="ra-days-input">Added Within</label>
+                <select id="ra-days-input" name="days"
+                        hx-get="/recently-added/list"
+                        hx-target="#ra-content"
+                        hx-swap="innerHTML">
+                    <option value="1" {% if days == 1 %}selected{% endif %}>Last 24 hours</option>
+                    <option value="7" {% if days == 7 %}selected{% endif %}>Last 7 days</option>
+                    <option value="30" {% if days == 30 %}selected{% endif %}>Last 30 days</option>
+                </select>
+            </div>
+            <div class="form-group mb-0">
+                <label for="ra-search">Search</label>
+                <input type="search" id="ra-search" placeholder="Search titles...">
+            </div>
+        </div>
+        <div class="activity-filter-bar" style="padding: 0.75rem 0 0;">
+            <button type="button" class="activity-filter-pill ra-loc-pill active" data-loc="all">All</button>
+            <button type="button" class="activity-filter-pill ra-loc-pill" data-loc="cache">On Cache</button>
+            <button type="button" class="activity-filter-pill ra-loc-pill" data-loc="array">On Array</button>
+        </div>
+    </div>
+</div>
+
+<!-- Table -->
+<div class="card">
+    <div class="card-body" style="padding: 0; overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Title</th>
+                    <th>Library</th>
+                    <th>Added</th>
+                    <th>Size</th>
+                    <th>Location</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="ra-table-body">
+                {% for item in groups %}
+                    {% if item.kind == 'show' %}
+                    <tr class="ra-group-header" data-group-id="{{ item.group_id }}"
+                        data-library="{{ item.library_title }}"
+                        onclick="RecentlyAdded.toggleGroup(this)">
+                        <td>
+                            <div class="title-cell" style="display: flex; align-items: center; gap: 0.55rem;">
+                                <span class="ra-chevron"><i data-lucide="chevron-right"></i></span>
+                                <span class="media-ic" style="width: 30px; height: 30px; border-radius: 7px; background: var(--plex-bg-hover); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                                    <i data-lucide="tv" style="width: 15px; height: 15px; color: var(--plex-text-muted);"></i>
+                                </span>
+                                <div>
+                                    <div style="font-weight: 500;">{{ item.show }}{% if item.season_display %} — {{ item.season_display }}{% endif %}</div>
+                                    <div class="text-muted" style="font-size: 0.76rem;">{{ item.episode_count }} new episode{{ 's' if item.episode_count != 1 else '' }}</div>
+                                </div>
+                            </div>
+                        </td>
+                        <td class="text-muted">{{ item.library_title }}</td>
+                        <td class="text-muted" style="white-space: nowrap;">{{ item.added_display or '—' }}</td>
+                        <td style="white-space: nowrap;">{{ item.total_size_display or '—' }}</td>
+                        <td>
+                            {% if item.locations|length == 1 %}{{ ra_location_badge(item.locations[0]) }}
+                            {% else %}<span class="badge badge-muted">Mixed</span>{% endif %}
+                        </td>
+                        {# Weakest-outcome-wins, computed in Python (_group_outcome).
+                           The old chain lived here in Jinja and fell through to
+                           "Protected" for groups where nothing was protected. #}
+                        <td>
+                            {% if   item.outcome_lead == 'held'              %}<span class="badge badge-pinned" title="{{ item.outcome_tooltip }}"><i data-lucide="pin"></i> {{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'held_mover_gap'    %}<span class="badge badge-pinned" title="{{ item.outcome_tooltip }}"><i data-lucide="pin"></i> {{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'arriving'          %}<span class="badge badge-pinned" title="{{ item.outcome_tooltip }}"><i data-lucide="arrow-down-to-line"></i> {{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'held_by_setting'   %}<span class="badge badge-info" title="{{ item.outcome_tooltip }}"><i data-lucide="sliders-horizontal"></i> {{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'returns_when_done' %}<span class="badge badge-info" title="{{ item.outcome_tooltip }}"><i data-lucide="clock"></i> {{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'moves_back'        %}<span class="badge badge-muted" title="{{ item.outcome_tooltip }}"><i data-lucide="arrow-down"></i> {{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'mover_decides'     %}<span class="badge badge-released" title="{{ item.outcome_tooltip }}"><i data-lucide="send"></i> {{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'stays_on_array'    %}<span class="badge badge-muted" title="{{ item.outcome_tooltip }}"><i data-lucide="server"></i> {{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'unmapped'          %}<span class="badge badge-muted ra-badge-dashed" title="{{ item.outcome_tooltip }}">{{ item.outcome_label }}</span>
+                            {% elif item.outcome_lead == 'pin_unknown'       %}<span class="badge badge-muted ra-badge-dashed" title="{{ item.outcome_tooltip }}">{{ item.outcome_label }}</span>
+                            {% else %}<span class="badge badge-muted" title="Unrecognised outcome — please report">&mdash;</span>
+                            {% endif %}
+                        </td>
+                        <td><span class="text-muted" style="font-size: 0.72rem;">expand to pin</span></td>
+                    </tr>
+                        {% for ep in item.episodes %}
+                        {{ ra_row(ep, is_child=True, group_id=item.group_id) }}
+                        {% endfor %}
+                    {% else %}
+                    {{ ra_row(item.row) }}
+                    {% endif %}
+                {% endfor %}
+                {% if not groups %}
+                <tr id="ra-empty-row">
+                    <td colspan="7" class="text-muted" style="text-align: center; padding: 2.5rem;">
+                        {# Only claim there is nothing new if every library answered.
+                           Otherwise the sentence would be about media never read. #}
+                        {% if unreadable_libraries %}
+                        No results from the libraries that answered.
+                        {% else %}
+                        Nothing added in the last {{ days }} day{{ 's' if days != 1 else '' }}.
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endif %}
+                <tr id="ra-no-match" style="display: none;">
+                    <td colspan="7" class="text-muted" style="text-align: center; padding: 2.5rem;">
+                        No items match the current filters.
+                    </td>
+                </tr>
+            </tbody>
+            {% if groups %}
+            <tfoot>
+                {# Shared totals styling — an inline rgba() here couldn't be
+                   overridden by the light theme, so it rendered darker than
+                   every other table footer in the app. #}
+                <tr class="totals-row">
+                    <td colspan="7" style="padding: 0.75rem 0.85rem;">
+                        <span class="text-muted"><strong>{{ summary.total }}</strong> items · <strong>{{ summary.total_size_display }}</strong> total · <strong>{{ summary.on_cache }}</strong> on cache · <strong>{{ summary.on_array }}</strong> on array</span>
+                        {% if capped %}
+                        <span class="text-muted" style="display: block; margin-top: 0.35rem; font-size: 0.78rem;">
+                            <i data-lucide="info" style="width: 13px; height: 13px; vertical-align: -2px;"></i>
+                            Showing the {{ max_items }} most recently added files. Raise <strong>Max Items</strong> in Settings → Cache to include older media.
+                        </span>
+                        {% endif %}
+                    </td>
+                </tr>
+            </tfoot>
+            {% endif %}
+        </table>
+    </div>
+</div>
+<script>lucide.createIcons(); if (window.RecentlyAdded) RecentlyAdded.apply();</script>
+{% endif %}

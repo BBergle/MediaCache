@@ -1,0 +1,2018 @@
+"""
+Plex API integration for PlexCache.
+Handles Plex server connections and media fetching operations.
+"""
+
+import json
+import logging
+import os
+import re
+import threading
+import time
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
+from email.utils import parsedate_to_datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, List, Optional, Generator, Tuple, Dict, Set
+from dataclasses import dataclass, field
+from urllib.parse import urlparse
+
+from plexapi.server import PlexServer
+
+
+from plexapi.video import Episode, Movie
+from plexapi.myplex import MyPlexAccount
+from plexapi.exceptions import BadRequest, NotFound
+import requests
+
+
+# Stable Plex device identity (shared with the OAuth flow in core/setup.py).
+PLEXCACHE_CLIENT_ID_KEY = 'plexcache_client_id'
+PLEXCACHE_PRODUCT_NAME = 'PlexCache-D'
+
+
+def apply_plex_client_identity(client_id: str) -> None:
+    """Make every plexapi connection present a stable PlexCache-D device identity.
+
+    By default plexapi derives ``X-Plex-Client-Identifier`` from the host's MAC
+    (``hex(uuid.getnode())``) and the device name from the container hostname.
+    When that value isn't recognized — a recreated container with a new MAC, or
+    after Plex ages the headless device out — Plex registers PlexCache as a brand
+    new device and fires a "New Device" security notification (issue #190).
+
+    Reusing the already-persisted ``plexcache_client_id`` (the same id minted for
+    the OAuth login) pins the identifier across container recreations and runs, so
+    Plex consistently sees one known device. Sets the product/name/version too so
+    the device reads "PlexCache-D" at the app's own version instead of "PlexAPI"
+    at the plexapi library version.
+
+    Must be called before any ``PlexServer``/``MyPlexAccount`` is constructed.
+    """
+    import plexapi
+    from core import __version__ as version
+
+    plexapi.X_PLEX_IDENTIFIER = client_id
+    plexapi.X_PLEX_PRODUCT = PLEXCACHE_PRODUCT_NAME
+    plexapi.X_PLEX_DEVICE_NAME = PLEXCACHE_PRODUCT_NAME
+    plexapi.X_PLEX_VERSION = version
+
+    # reset_base_headers() rebuilds from the X_PLEX_* globals and returns a fresh
+    # dict. Mutate the existing BASE_HEADERS in place rather than reassigning, so
+    # modules that bound it via ``from plexapi import BASE_HEADERS`` see the change.
+    new_headers = plexapi.reset_base_headers()
+    plexapi.BASE_HEADERS.clear()
+    plexapi.BASE_HEADERS.update(new_headers)
+    logging.debug(
+        f"Plex client identity set: id={client_id} "
+        f"product={PLEXCACHE_PRODUCT_NAME} version={version}"
+    )
+
+
+def ensure_plex_client_identity(settings_file: str) -> Optional[str]:
+    """Load (or create and persist) the stable client id, then apply it to plexapi.
+
+    Reads ``plexcache_client_id`` directly from the settings file so the on-disk
+    value is preserved verbatim and only the missing key is added (a one-time
+    write for installs configured by manual token rather than OAuth). The identity
+    is applied to plexapi even if persistence fails, so a run is never blocked.
+
+    Returns the client id that was applied, or ``None`` when there are no usable
+    settings to pin against (no Plex connections happen in that state anyway):
+      - the settings file does not exist yet (pre-setup), or
+      - the settings file exists but cannot be parsed — in which case the file is
+        left untouched rather than clobbered with a stub.
+    """
+    if not os.path.exists(settings_file):
+        return None
+
+    try:
+        with open(settings_file, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+    except (json.JSONDecodeError, IOError, OSError) as e:
+        logging.warning(f"Could not read settings for Plex client identity: {e}")
+        return None
+    if not isinstance(raw, dict):
+        return None
+
+    client_id = raw.get(PLEXCACHE_CLIENT_ID_KEY)
+    if not client_id:
+        import uuid
+        client_id = str(uuid.uuid4())
+        raw[PLEXCACHE_CLIENT_ID_KEY] = client_id
+        try:
+            from core.file_operations import save_json_atomically
+            save_json_atomically(settings_file, raw, label="settings")
+        except Exception as e:
+            logging.warning(f"Could not persist {PLEXCACHE_CLIENT_ID_KEY}: {e}")
+
+    apply_plex_client_identity(client_id)
+    return client_id
+
+
+@dataclass
+class OnDeckItem:
+    """Represents an OnDeck item with metadata.
+
+    Attributes:
+        file_path: Path to the media file.
+        username: The user who has this on their OnDeck.
+        episode_info: For TV episodes, dict with 'show', 'season', 'episode' keys.
+        is_current_ondeck: True if this is the actual OnDeck episode (not prefetched next).
+    """
+    file_path: str
+    username: str
+    episode_info: Optional[Dict[str, any]] = None
+    is_current_ondeck: bool = False
+    rating_key: Optional[str] = None
+
+
+@dataclass
+class RecentlyAddedItem:
+    """Represents a recently-added library item with metadata.
+
+    Unlike OnDeck/Watchlist items, recently-added media is server-wide
+    (library-level), so there is no per-user ``username`` field. One item is
+    emitted per media file (part).
+
+    Attributes:
+        file_path: Plex path to the media file.
+        rating_key: Plex rating key (for pin lookups and version grouping).
+        title: The item's own title — episode title for episodes, movie title
+            for movies. Use ``episode_info`` for show/season context.
+        media_type: "movie" or "episode".
+        added_at: When the item was added to the library (None if unavailable).
+        library_title: Display name of the source library section.
+        library_section_id: The library section id (matches ``valid_sections``).
+        size: File size in bytes for this part (0 if unavailable).
+        episode_info: For episodes, dict with 'show', 'season', 'episode' keys.
+    """
+    file_path: str
+    rating_key: Optional[str] = None
+    title: str = ""
+    media_type: str = "movie"
+    added_at: Optional[datetime] = None
+    library_title: str = ""
+    library_section_id: Optional[int] = None
+    size: int = 0
+    episode_info: Optional[Dict[str, any]] = None
+    # For episodes, the *show's* rating key. Stable identity for grouping —
+    # two distinct shows can share a title ("The Office" US and UK), and
+    # grouping on the display title merges them into one nonsense group.
+    show_rating_key: str = ""
+    # Every file behind this item, across all versions:
+    # [{file_path, size, is_preferred, label}]. ``file_path``/``size`` above
+    # describe the PREFERRED version only — the one PlexCache caches and pins.
+    version_files: List[Dict[str, any]] = field(default_factory=list)
+
+
+@dataclass
+class RecentlyAddedResult:
+    """What a recently-added sweep found, and what it could not read.
+
+    A per-library fetch can fail on its own — a section that times out or 5xxes
+    while its neighbours answer. Returning only the items would make that
+    library indistinguishable from one that genuinely had nothing new, so the
+    page would state "Nothing added" about media it never managed to look at.
+
+    Attributes:
+        items: Recently-added items, newest first, one entry per Plex item.
+        unreadable_libraries: Titles of sections that were attempted and
+            failed. Empty on a clean sweep. A total failure — no section
+            readable at all — raises instead, since there is no partial
+            result to report.
+    """
+    items: List[RecentlyAddedItem] = field(default_factory=list)
+    unreadable_libraries: List[str] = field(default_factory=list)
+
+
+def _partial_attr(obj: Any, name: str, default: Any = None) -> Any:
+    """Read an attribute off a plexapi *listing* object without failing the caller.
+
+    Section listings hand back partial objects, and plexapi reloads on any
+    ``None``/``[]`` value — so reading an unnumbered special's ``index`` or an
+    unanalyzed item's ``media`` fires a live metadata GET that can 5xx or time
+    out. ``getattr``'s 3-arg default only swallows ``AttributeError``, not
+    transport errors, so one bad item would otherwise abort the whole fetch and
+    discard every library already collected.
+    """
+    try:
+        return getattr(obj, name, default)
+    except Exception as e:
+        # Read the label out of __dict__ so this can't re-enter __getattribute__
+        # and raise a second time; plexapi's own error path does the same.
+        label = obj.__dict__.get('title') or obj.__dict__.get('ratingKey') or '?'
+        logging.warning(
+            f"Recently added: could not read '{name}' for '{label}': "
+            f"{type(e).__name__}: {e}"
+        )
+        return default
+
+
+def _media_version_label(media: Any) -> str:
+    """Short human label for a Plex Media version, e.g. "4k" or "1080p".
+
+    Used to distinguish rows in the multi-version expand detail. Falls back to
+    an empty string when Plex reports no resolution.
+    """
+    res = getattr(media, 'videoResolution', None)
+    if not res:
+        return ""
+    res = str(res).strip().lower()
+    return res if res.endswith('k') else f"{res}p"
+
+
+# API delay between plex.tv calls (seconds)
+PLEX_API_DELAY = 1.0
+
+# RSS feed retry and cache settings
+RSS_MAX_RETRIES = 3
+RSS_TIMEOUT = 15  # seconds
+
+# Age at which cached RSS data stops being treated as fresh. The cache is a
+# safety net for a brief plex.tv hiccup, not a substitute for the feed - past
+# this the user is told their remote watchlist data is going stale.
+RSS_CACHE_STALE_HOURS = 24
+
+# Hosts we're willing to attach X-Plex-Token to. remote_watchlist_rss_url is
+# user-supplied, so the token must never ride along to an arbitrary domain.
+_PLEX_TOKEN_HOSTS = ("plex.tv", "plex.direct")
+
+# Plex serves watchlist RSS from rss.plex.tv/<uuid>. In July 2026 that host
+# started returning 401 without a token and 404 with one, while the same feed
+# stayed reachable via discover.provider.plex.tv/rss/<uuid> (which 302s to a
+# presigned S3 object). Plex's own UI still hands out rss.plex.tv URLs, so we
+# keep using the configured URL and only fall back when it refuses us.
+_RSS_PRIMARY_HOST = "rss.plex.tv"
+_RSS_FALLBACK_TEMPLATE = "https://discover.provider.plex.tv/rss/{feed_id}"
+
+# Status codes that mean "this URL will not work" rather than "try again".
+_RSS_NO_RETRY_STATUS = (401, 403, 404)
+
+
+def _should_send_plex_token(url: str) -> bool:
+    """True if `url` points at a Plex-controlled host that may receive the token."""
+    try:
+        hostname = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return any(hostname == h or hostname.endswith("." + h) for h in _PLEX_TOKEN_HOSTS)
+
+
+def _derive_rss_fallback_url(url: str) -> Optional[str]:
+    """Map a legacy rss.plex.tv feed URL to its discover.provider equivalent.
+
+    Returns None when `url` isn't an rss.plex.tv feed URL, so a custom or
+    already-migrated URL is never rewritten.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    if (parsed.hostname or "").lower() != _RSS_PRIMARY_HOST:
+        return None
+    feed_id = parsed.path.strip("/")
+    if not feed_id or "/" in feed_id:
+        return None
+    return _RSS_FALLBACK_TEMPLATE.format(feed_id=feed_id)
+
+# plex.tv API retry settings for transient network errors
+PLEXTV_MAX_RETRIES = 3
+PLEXTV_RETRY_BASE_WAIT = 2  # seconds (exponential: 2s, 4s)
+
+# plexapi collapses every non-2xx response that isn't 401/404 into BadRequest,
+# with the status code only present in the message text ("(503) service_unavailable;
+# https://..."). 5xx from plex.tv is a transient upstream hiccup and worth
+# retrying; 4xx means the request itself is wrong and never will be.
+_PLEXTV_RETRY_STATUS_RE = re.compile(r"^\((5\d\d)\)")
+
+
+def _is_transient_plextv_error(error: Exception) -> bool:
+    """True if `error` is a plex.tv 5xx that a retry could plausibly clear."""
+    return bool(_PLEXTV_RETRY_STATUS_RE.match(str(error)))
+
+
+def _retry_plextv_call(func, label: str, max_attempts: int = PLEXTV_MAX_RETRIES):
+    """Call a plex.tv function, retrying on transient network errors.
+
+    Retries `requests.Timeout`, `requests.ConnectionError`, and 5xx responses
+    (which plexapi raises as `BadRequest`). Other exceptions — auth failures,
+    4xx, parse errors, logic bugs — are raised immediately so callers can
+    distinguish retry-worthy failures from permanent ones.
+
+    Args:
+        func: Zero-argument callable to invoke (wrap args via lambda).
+        label: Short description for log messages (e.g. "watchlist for Brandon").
+        max_attempts: Total attempts including the first try.
+
+    Returns:
+        The return value of func() on success.
+
+    Raises:
+        The underlying exception if all attempts fail, or any non-retriable
+        exception on the first hit.
+    """
+    last_error = None
+    for attempt in range(max_attempts):
+        try:
+            return func()
+        except (requests.Timeout, requests.ConnectionError, BadRequest) as e:
+            if isinstance(e, BadRequest) and not _is_transient_plextv_error(e):
+                raise
+            last_error = e
+            if attempt < max_attempts - 1:
+                wait_time = PLEXTV_RETRY_BASE_WAIT ** (attempt + 1)  # 2s, 4s
+                logging.warning(
+                    f"plex.tv {label} attempt {attempt + 1}/{max_attempts} "
+                    f"failed: {e}. Retrying in {wait_time}s..."
+                )
+                time.sleep(wait_time)
+    raise last_error
+
+
+def _log_api_error(context: str, error: Exception) -> None:
+    """Log API errors with specific detection for common HTTP status codes.
+
+    Strips HTML from error messages — plex.tv's nginx returns full HTML error
+    pages on 5xx responses that otherwise get dumped into logs and notifications.
+    Transient 5xx errors are logged at WARNING (not ERROR) because the caching
+    layer falls back to cached data and the outage isn't user-actionable.
+    """
+    error_str = str(error)
+    clean_error = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", error_str)).strip()
+
+    if "401" in error_str or "Unauthorized" in error_str:
+        logging.error(f"[PLEX API] Authentication failed ({context}): {clean_error}")
+        logging.error(f"[PLEX API] Your Plex token is invalid or has been revoked.")
+        logging.error(f"[PLEX API] To fix: Run 'python3 plexcache_setup.py' and select 'y' to re-authenticate.")
+    elif "429" in error_str or "Too Many Requests" in error_str:
+        logging.warning(f"[PLEX API] Rate limited by Plex.tv ({context}): {clean_error}")
+        logging.warning(f"[PLEX API] Consider increasing delays between API calls")
+    elif "403" in error_str or "Forbidden" in error_str:
+        logging.error(f"[PLEX API] Access forbidden ({context}): {clean_error}")
+        logging.error(f"[PLEX API] User may not have permission for this resource")
+    elif "404" in error_str or "Not Found" in error_str:
+        logging.warning(f"[PLEX API] Resource not found ({context}): {clean_error}")
+    elif "500" in error_str or "502" in error_str or "503" in error_str:
+        logging.warning(f"[PLEX API] Plex server error ({context}): {clean_error}")
+        logging.warning(f"[PLEX API] Plex.tv may be experiencing issues — using cached data when available")
+    else:
+        logging.error(f"[PLEX API] Error ({context}): {clean_error}")
+
+
+class UserProxy:
+    """Simple proxy object to pass username to methods expecting a user object."""
+
+    def __init__(self, title: str):
+        self.title = title
+
+
+class UserTokenCache:
+    """Cache for user tokens to reduce API calls to plex.tv.
+
+    Tokens are cached in memory for the duration of the run, and optionally
+    persisted to disk for reuse across runs (with configurable expiry).
+    """
+
+    def __init__(self, cache_file: Optional[str] = None, cache_expiry_hours: int = 24):
+        """Initialize the token cache.
+
+        Args:
+            cache_file: Optional path to persist tokens to disk
+            cache_expiry_hours: How long cached tokens are valid (default 24 hours)
+        """
+        self._memory_cache: Dict[str, Dict] = {}  # username -> {token, timestamp, machine_id}
+        self._lock = threading.Lock()
+        self._cache_file = cache_file
+        self._cache_expiry_seconds = cache_expiry_hours * 3600
+
+        # Load from disk if cache file exists
+        if cache_file:
+            self._load_from_disk()
+
+    def get_token(self, username: str, machine_id: str) -> Optional[str]:
+        """Get a cached token for a user, if valid."""
+        with self._lock:
+            if username in self._memory_cache:
+                entry = self._memory_cache[username]
+                # Check if token is for the same machine and not expired
+                if entry.get('machine_id') == machine_id:
+                    age = time.time() - entry.get('timestamp', 0)
+                    if age < self._cache_expiry_seconds:
+                        logging.debug(f"[TOKEN CACHE] Hit for {username} (age: {age/3600:.1f}h)")
+                        return entry.get('token')
+                    else:
+                        logging.debug(f"[TOKEN CACHE] Expired for {username} (age: {age/3600:.1f}h)")
+                else:
+                    logging.debug(f"[TOKEN CACHE] Machine ID mismatch for {username}")
+            return None
+
+    def set_token(self, username: str, token: str, machine_id: str) -> None:
+        """Cache a token for a user."""
+        with self._lock:
+            self._memory_cache[username] = {
+                'token': token,
+                'timestamp': time.time(),
+                'machine_id': machine_id
+            }
+            logging.debug(f"[TOKEN CACHE] Stored token for {username}")
+
+            # Persist to disk if configured
+            if self._cache_file:
+                self._save_to_disk()
+
+    def invalidate(self, username: str) -> None:
+        """Invalidate a cached token (e.g., after auth failure)."""
+        with self._lock:
+            if username in self._memory_cache:
+                del self._memory_cache[username]
+                logging.info(f"[TOKEN CACHE] Invalidated token for {username}")
+                if self._cache_file:
+                    self._save_to_disk()
+
+    def _load_from_disk(self) -> None:
+        """Load cached tokens from disk."""
+        if not self._cache_file or not os.path.exists(self._cache_file):
+            return
+        try:
+            with open(self._cache_file, 'r') as f:
+                data = json.load(f)
+                self._memory_cache = data.get('tokens', {})
+                logging.debug(f"[TOKEN CACHE] Loaded {len(self._memory_cache)} cached tokens from disk")
+        except (json.JSONDecodeError, IOError) as e:
+            logging.warning(f"[TOKEN CACHE] Could not load cache file: {e}")
+            self._memory_cache = {}
+
+    def _save_to_disk(self) -> None:
+        """Save cached tokens to disk."""
+        if not self._cache_file:
+            return
+        try:
+            with open(self._cache_file, 'w') as f:
+                json.dump({'tokens': self._memory_cache}, f, indent=2)
+        except IOError as e:
+            logging.warning(f"[TOKEN CACHE] Could not save cache file: {e}")
+
+
+class PlexManager:
+    """Manages Plex server connections and operations."""
+
+    def __init__(self, plex_url: str, plex_token: str, retry_limit: int = 3, delay: int = 5,
+                 token_cache_file: Optional[str] = None, rss_cache_file: Optional[str] = None,
+                 plex_db_path: str = "", watchlist_enabled: bool = True,
+                 timeout: Optional[int] = None):
+        self.plex_url = plex_url
+        self.plex_token = plex_token
+        self.retry_limit = retry_limit
+        self.delay = delay
+        self.timeout = timeout
+        self.plex = None
+        self._token_cache = UserTokenCache(cache_file=token_cache_file, cache_expiry_hours=24)
+        self._rss_cache_file = rss_cache_file  # Path to RSS cache file
+        self._plex_db_path = plex_db_path  # Path to Plex SQLite DB (fallback for tokenless shared users)
+        self.watchlist_enabled = watchlist_enabled  # Controls watchlist-specific warnings on plex.tv failure
+        self._user_tokens: Dict[str, str] = {}  # username -> token (populated at startup)
+        self._token_lock = threading.Lock()  # Protects _user_tokens dict access
+        self._user_id_to_name: Dict[str, str] = {}  # user_id (str) -> username (for RSS author lookup)
+        self._user_is_home: Dict[str, bool] = {}  # username -> True if home/managed user (for switchHomeUser fallback)
+        self._user_account_ids: Dict[str, int] = {}  # username -> Plex account ID (for DB fallback)
+        self._resolved_uuids: Set[str] = set()  # UUIDs we've tried to resolve (avoid repeated API calls)
+        self._newly_discovered_users: List[dict] = []  # Users found on plex.tv but not in settings
+        self._users_loaded = False
+        self._api_lock = threading.Lock()  # For rate limiting plex.tv calls
+        self._plex_tv_reachable = True  # Track if plex.tv is accessible
+        self._watchlist_data_complete = True  # Track if we got complete watchlist data
+        self._ondeck_data_complete = True  # Track if we got complete OnDeck data
+
+    def connect(self) -> None:
+        """Connect to the Plex server."""
+        logging.debug(f"Connecting to Plex server: {self.plex_url}")
+
+        try:
+            self.plex = PlexServer(self.plex_url, self.plex_token, timeout=self.timeout)
+            logging.debug(f"Plex server version: {self.plex.version}")
+        except Exception as e:
+            # Extract the root cause from nested exception chains
+            root = e
+            while root.__cause__:
+                root = root.__cause__
+            reason = str(root)
+            # Log clean message (no traceback), raise with concise reason
+            logging.error(f"Cannot connect to Plex server at {self.plex_url}: {reason}")
+            raise ConnectionError(f"Cannot connect to Plex server: {reason}") from None
+
+    def _rate_limited_api_call(self) -> None:
+        """Enforce rate limiting for plex.tv API calls."""
+        with self._api_lock:
+            time.sleep(PLEX_API_DELAY)
+
+    def _load_tokens_from_settings(self, settings_users: List[dict],
+                                    skip_users: List[str], machine_id: str) -> Set[str]:
+        """Load user tokens from settings file (no plex.tv needed).
+
+        Args:
+            settings_users: List of user dicts from settings file with tokens.
+            skip_users: List of usernames or tokens to skip.
+            machine_id: Plex server machine identifier.
+
+        Returns:
+            Set of usernames loaded from settings.
+        """
+        settings_loaded = 0
+        settings_usernames = set()
+
+        for user_entry in settings_users:
+            username = user_entry.get("title")
+            token = user_entry.get("token")
+            is_local = user_entry.get("is_local", False)
+            user_id = user_entry.get("id")
+
+            if not username:
+                continue
+
+            # Track username even if no token (user may have been auto-added with tracking prefs only)
+            settings_usernames.add(username)
+
+            # Track home user status for switchHomeUser fallback (before token check)
+            self._user_is_home[username] = is_local
+
+            # Track account ID for DB fallback
+            if user_id:
+                self._user_account_ids[username] = int(user_id)
+
+            # Skip token loading if no token present
+            if not token:
+                continue
+
+            # Build user ID -> username map for RSS author lookup
+            if user_id:
+                self._user_id_to_name[str(user_id)] = username
+                logging.debug(f"[PLEX API] Mapped ID {user_id} -> {username}")
+            user_uuid = user_entry.get("uuid")
+            if user_uuid:
+                self._user_id_to_name[str(user_uuid)] = username
+                logging.debug(f"[PLEX API] Mapped UUID {user_uuid} -> {username}")
+
+            # Check skip list
+            if username in skip_users or token in skip_users:
+                logging.debug(f"[USER:{username}] Skipping (in skip list)")
+                continue
+
+            with self._token_lock:
+                self._user_tokens[username] = token
+            self._token_cache.set_token(username, token, machine_id)
+            user_type = "home" if is_local else "remote"
+            logging.debug(f"[USER:{username}] Loaded from settings ({user_type})")
+            settings_loaded += 1
+
+        logging.debug(f"[PLEX API] Loaded {settings_loaded} users from settings file")
+        return settings_usernames
+
+    def _get_main_account(self, main_username: Optional[str]) -> Optional['MyPlexAccount']:
+        """Try to get main account info from plex.tv.
+
+        Args:
+            main_username: Main account username from settings (fallback).
+
+        Returns:
+            MyPlexAccount object if plex.tv reachable, None otherwise.
+        """
+        try:
+            self._rate_limited_api_call()
+            # Retry transient network errors (DNS blips, connection resets). This is
+            # the first plex.tv call of a run, and a single failure here previously
+            # marked plex.tv unreachable for the whole run.
+            account = _retry_plextv_call(
+                lambda: self.plex.myPlexAccount(),
+                "main account lookup"
+            )
+            actual_main_username = account.title
+
+            # Update main account token with actual username from plex.tv
+            if actual_main_username != main_username:
+                with self._token_lock:
+                    if main_username and main_username in self._user_tokens:
+                        del self._user_tokens[main_username]
+                    self._user_tokens[actual_main_username] = self.plex_token
+                logging.debug(f"[PLEX API] Main account: {actual_main_username}")
+            return account
+        except Exception as e:
+            _log_api_error("load user tokens", e)
+            self._plex_tv_reachable = False
+            logging.warning("[PLEX API] plex.tv unreachable - using cached user data only")
+            # Only a watchlist run depends on plex.tv data being complete. With
+            # watchlist disabled there is nothing incomplete to guard against, so
+            # don't flag it and don't block array restore.
+            if self.watchlist_enabled:
+                self._watchlist_data_complete = False
+                logging.warning("[PLEX API] Watchlist data will be incomplete - array restore will be skipped")
+            return None
+
+    def _discover_new_users(self, account: 'MyPlexAccount', settings_usernames: Set[str],
+                            skip_users: List[str], machine_id: str) -> None:
+        """Check plex.tv for new users not in settings.
+
+        Args:
+            account: MyPlexAccount object.
+            settings_usernames: Set of usernames already loaded from settings.
+            skip_users: List of usernames or tokens to skip.
+            machine_id: Plex server machine identifier.
+        """
+        try:
+            self._rate_limited_api_call()
+            users = account.users()
+            self._newly_discovered_users = []  # Reset for this run
+
+            for user in users:
+                username = user.title
+
+                # Extract user metadata
+                user_id = getattr(user, 'id', None)
+                user_uuid = None
+                thumb = getattr(user, 'thumb', '')
+                if thumb and '/users/' in thumb:
+                    try:
+                        user_uuid = thumb.split('/users/')[1].split('/')[0]
+                    except (IndexError, AttributeError):
+                        pass
+
+                # Build user ID -> username map (even if skipped)
+                if user_id:
+                    self._user_id_to_name[str(user_id)] = username
+                if user_uuid:
+                    self._user_id_to_name[user_uuid] = username
+
+                # Skip if already loaded from settings
+                if username in settings_usernames:
+                    continue
+
+                # Check skip list
+                if username in skip_users:
+                    logging.debug(f"[USER:{username}] Skipping (in skip list)")
+                    continue
+
+                is_home = getattr(user, "home", False)
+
+                # Helper to build user info dict
+                def build_user_info(token: Optional[str]) -> dict:
+                    info = {
+                        'title': username,
+                        'token': token,
+                        'is_local': bool(is_home),
+                        'skip_ondeck': True,
+                        'skip_watchlist': True
+                    }
+                    if user_id:
+                        info['id'] = user_id
+                    if user_uuid:
+                        info['uuid'] = user_uuid
+                    return info
+
+                # Track home user status for switchHomeUser fallback
+                self._user_is_home[username] = bool(is_home)
+
+                # Try to get token from disk cache first
+                cached_token = self._token_cache.get_token(username, machine_id)
+                if cached_token:
+                    if cached_token in skip_users:
+                        logging.debug(f"[USER:{username}] Skipping (token in skip list)")
+                        continue
+                    with self._token_lock:
+                        self._user_tokens[username] = cached_token
+                    logging.debug(f"[USER:{username}] Using cached token")
+                    self._newly_discovered_users.append(build_user_info(cached_token))
+                    continue
+
+                # Fetch fresh token from plex.tv. Home/managed users from
+                # plexapi arrive as UserProxy-like objects without get_token;
+                # they authenticate via switchHomeUser at runtime instead.
+                token = None
+                if hasattr(user, 'get_token'):
+                    try:
+                        self._rate_limited_api_call()
+                        token = user.get_token(machine_id)
+                    except Exception as e:
+                        _log_api_error(f"get token for {username}", e)
+                        token = None
+                else:
+                    logging.debug(f"[USER:{username}] Home/managed user — no individual token, will use switchHomeUser at runtime")
+
+                if token:
+                    if token in skip_users:
+                        logging.debug(f"[USER:{username}] Skipping (token in skip list)")
+                        continue
+                    with self._token_lock:
+                        self._user_tokens[username] = token
+                    self._token_cache.set_token(username, token, machine_id)
+                    logging.debug(f"[USER:{username}] Fetched fresh token")
+                else:
+                    logging.debug(f"[USER:{username}] No token available (Plex API change)")
+
+                self._newly_discovered_users.append(build_user_info(token))
+        except Exception as e:
+            _log_api_error("check for new users", e)
+
+    def get_newly_discovered_users(self) -> List[dict]:
+        """Return list of user info dicts for users found on plex.tv but not in settings.
+
+        These users were discovered during load_user_tokens() and their tokens
+        were loaded, but they need to be added to settings.
+
+        Returns:
+            List of dicts with keys: title, token, is_local, id, uuid, skip_ondeck, skip_watchlist
+        """
+        return self._newly_discovered_users
+
+    def load_user_tokens(self, skip_users: Optional[List[str]] = None,
+                         settings_users: Optional[List[dict]] = None,
+                         main_username: Optional[str] = None) -> Dict[str, str]:
+        """Load and cache tokens for all users at startup.
+
+        Offline-resilient approach:
+        1. First load tokens from settings file (no plex.tv needed)
+        2. Then optionally check plex.tv for main account info and new users
+        3. If plex.tv is unreachable, proceed with cached data only
+
+        Args:
+            skip_users: List of usernames or tokens to skip
+            settings_users: List of user dicts from settings file with tokens
+            main_username: Main account username from settings (fallback if plex.tv unreachable)
+
+        Returns:
+            Dict mapping username -> token
+        """
+        if self._users_loaded:
+            logging.debug("[PLEX API] User tokens already loaded, using cached values")
+            with self._token_lock:
+                return dict(self._user_tokens)
+
+        skip_users = skip_users or []
+        settings_users = settings_users or []
+        machine_id = self.plex.machineIdentifier
+        logging.debug("[PLEX API] Loading user tokens...")
+
+        # Step 1: Load tokens from settings file (no plex.tv needed)
+        settings_usernames = self._load_tokens_from_settings(settings_users, skip_users, machine_id)
+
+        # Add main account token from settings as fallback
+        if main_username and main_username not in skip_users:
+            with self._token_lock:
+                self._user_tokens[main_username] = self.plex_token
+            logging.debug(f"[PLEX API] Added main account from settings: {main_username}")
+
+        # Step 2: Try to get main account info from plex.tv
+        account = self._get_main_account(main_username)
+
+        # Step 3: Check for new users not in settings
+        if account and self._plex_tv_reachable:
+            self._discover_new_users(account, settings_usernames, skip_users, machine_id)
+
+        self._users_loaded = True
+        with self._token_lock:
+            total_users = len(self._user_tokens)
+            logging.info(f"Connected to Plex ({total_users} users)")
+            if self._user_tokens:
+                user_names = sorted(self._user_tokens.keys(), key=str.lower)
+                logging.info(f"USERS: {', '.join(user_names)}")
+            return dict(self._user_tokens)
+
+    def get_user_token(self, username: str) -> Optional[str]:
+        """Get a cached token for a user (must call load_user_tokens first)."""
+        with self._token_lock:
+            return self._user_tokens.get(username)
+
+    def invalidate_user_token(self, username: str) -> None:
+        """Invalidate a user's token (e.g., after auth failure)."""
+        with self._token_lock:
+            if username in self._user_tokens:
+                del self._user_tokens[username]
+        self._token_cache.invalidate(username)
+
+    def is_plex_tv_reachable(self) -> bool:
+        """Check if plex.tv was reachable during token loading."""
+        return self._plex_tv_reachable
+
+    def is_watchlist_data_complete(self) -> bool:
+        """Check if watchlist data is complete (no fetch failures)."""
+        return self._watchlist_data_complete
+
+    def mark_watchlist_incomplete(self) -> None:
+        """Mark watchlist data as incomplete (e.g., after fetch failure)."""
+        self._watchlist_data_complete = False
+
+    def is_ondeck_data_complete(self) -> bool:
+        """Check if OnDeck data is complete (no fetch failures)."""
+        return self._ondeck_data_complete
+
+    def resolve_user_uuid(self, uuid: str) -> Optional[str]:
+        """Try to resolve a UUID to a username by querying the Plex API.
+
+        Args:
+            uuid: The UUID string to look up (e.g., from RSS feed author).
+
+        Returns:
+            The username if found, None otherwise.
+        """
+        # Check if already in mapping
+        if uuid in self._user_id_to_name:
+            return self._user_id_to_name[uuid]
+
+        if uuid in self._resolved_uuids:
+            return None  # Already tried, not found
+
+        self._resolved_uuids.add(uuid)
+
+        # Re-query Plex API to find this UUID
+        try:
+            self._rate_limited_api_call()
+            account = self.plex.myPlexAccount()
+            users = account.users()
+
+            for user in users:
+                username = user.title
+                # Extract UUID from thumb URL
+                thumb = getattr(user, 'thumb', '')
+                if thumb and '/users/' in thumb:
+                    try:
+                        user_uuid = thumb.split('/users/')[1].split('/')[0]
+                        # Add to mapping
+                        self._user_id_to_name[user_uuid] = username
+                        # Check if this is the one we're looking for
+                        if user_uuid == uuid:
+                            logging.debug(f"[PLEX API] Resolved UUID {uuid} to username: {username}")
+                            return username
+                    except (IndexError, AttributeError):
+                        pass
+
+            logging.debug(f"[PLEX API] Could not resolve UUID: {uuid}")
+            return None
+
+        except Exception as e:
+            _log_api_error(f"resolve UUID {uuid}", e)
+            return None
+
+    def get_plex_instance(self, user=None) -> Tuple[Optional[str], Optional[PlexServer]]:
+        """Get Plex instance for a specific user using cached tokens."""
+        if user:
+            username = user.title
+            # Use cached token if available
+            with self._token_lock:
+                token = self._user_tokens.get(username)
+            if not token:
+                # Our internal UserProxy wrapper and Home/managed users have no
+                # individual plex.tv token — skip get_token and let the
+                # switchHomeUser fallback below handle auth.
+                is_home = self._user_is_home.get(username, False)
+                if hasattr(user, 'get_token') and not is_home:
+                    logging.warning(f"[PLEX API] No cached token for {username}, fetching fresh...")
+                    try:
+                        self._rate_limited_api_call()
+                        token = user.get_token(self.plex.machineIdentifier)
+                        if token:
+                            with self._token_lock:
+                                self._user_tokens[username] = token
+                            self._token_cache.set_token(username, token, self.plex.machineIdentifier)
+                    except Exception as e:
+                        _log_api_error(f"get token for {username}", e)
+
+            if not token:
+                # Try switchHomeUser for home/managed users (no individual token needed)
+                is_home = self._user_is_home.get(username, False)
+                if is_home:
+                    try:
+                        from plexapi.myplex import MyPlexAccount
+                        logging.debug(f"[PLEX API] No token for {username}, trying switchHomeUser...")
+
+                        def _switch_to_home_user():
+                            self._rate_limited_api_call()
+                            admin = MyPlexAccount(token=self.plex_token)
+                            self._rate_limited_api_call()
+                            return admin.switchHomeUser(username)
+
+                        switched = _retry_plextv_call(
+                            _switch_to_home_user,
+                            label=f"switchHomeUser for {username}",
+                        )
+                        return username, PlexServer(self.plex_url, switched.authenticationToken)
+                    except Exception as e:
+                        _log_api_error(f"switchHomeUser for {username}", e)
+                        return None, None
+                else:
+                    logging.warning(f"[PLEX API] No token for shared user {username} — OnDeck unavailable")
+                    return None, None
+
+            try:
+                return username, PlexServer(self.plex_url, token)
+            except Exception as e:
+                _log_api_error(f"create PlexServer for {username}", e)
+                # Invalidate token on auth failure
+                if "401" in str(e) or "Unauthorized" in str(e):
+                    self.invalidate_user_token(username)
+                return None, None
+        else:
+            # Main account - use stored token (no API call needed)
+            try:
+                username = self.plex.myPlexAccount().title
+            except Exception:
+                username = "main"
+            return username, PlexServer(self.plex_url, self.plex_token)
+    
+    def search_plex(self, title: str, guid: str = None, expected_type: str = None,
+                     valid_sections: List[int] = None):
+        """Search for a file in the Plex server.
+
+        Args:
+            title: The title to search for (used as fallback)
+            guid: IMDB/TVDB GUID like 'imdb://tt0898367' or 'tvdb://267247' (preferred)
+            expected_type: Expected type ('movie' or 'show') to filter results
+            valid_sections: List of section IDs to search in (None = all sections)
+
+        Returns:
+            Matched Plex item or None if not found
+        """
+        # Try GUID lookup first (most accurate)
+        if guid:
+            for section in self.plex.library.sections():
+                # Skip sections not in valid_sections if specified
+                if valid_sections and int(section.key) not in valid_sections:
+                    continue
+                try:
+                    item = section.getGuid(guid)
+                    if item:
+                        # Verify the item actually has this GUID (defensive check against PlexAPI bugs)
+                        item_guids = [g.id for g in getattr(item, 'guids', [])]
+                        if guid in item_guids:
+                            logging.debug(f"GUID lookup matched '{item.title}' ({item.TYPE}) for {guid}")
+                            return item
+                        # getGuid returned wrong item (can happen with items that have empty GUIDs)
+                        continue
+                except NotFound:
+                    pass
+                except Exception as e:
+                    logging.debug(f"GUID lookup error for {guid}: {e}")
+
+        # No GUID match found - item is not in library
+        # Note: We intentionally do NOT fall back to title search as it can return
+        # incorrect matches (e.g., "Weapons" matching to "Mary Poppins")
+        logging.debug(f"No GUID match found for '{title}' (guid={guid}) — item not in library")
+        return None
+    
+    def get_active_sessions(self) -> List:
+        """Get active sessions from Plex."""
+        return self.plex.sessions()
+    
+    def get_on_deck_media(self, valid_sections: List[int], days_to_monitor: int,
+                        number_episodes: int, users_toggle: bool, skip_ondeck: List[str],
+                        per_user_days: Optional[Dict[str, int]] = None,
+                        prefetch_minimum_minutes: int = 0) -> List[OnDeckItem]:
+        """Get OnDeck media files using cached tokens (no plex.tv API calls).
+
+        Returns:
+            List of OnDeckItem objects containing file path, username, and episode metadata.
+        """
+        on_deck_files: List[OnDeckItem] = []
+
+        # Build list of users to fetch using cached tokens + home users via switchHomeUser
+        users_to_fetch = [None]  # Always include main local account
+        if users_toggle:
+            added_usernames = set()
+            # Users with cached tokens
+            with self._token_lock:
+                token_items = list(self._user_tokens.items())
+            for username, token in token_items:
+                # Skip main account (already added as None)
+                if token == self.plex_token:
+                    added_usernames.add(username)  # Prevent re-add in tokenless loop
+                    continue
+                # Check skip list
+                if username in skip_ondeck or (token and token in skip_ondeck):
+                    logging.info(f"[USER:{username}] Skipping for OnDeck — in skip list")
+                    continue
+                users_to_fetch.append(UserProxy(username))
+                added_usernames.add(username)
+
+            # Also add home users without cached tokens (switchHomeUser handles auth)
+            for username, is_home in self._user_is_home.items():
+                if not is_home or username in added_usernames:
+                    continue
+                if username in skip_ondeck:
+                    continue
+                users_to_fetch.append(UserProxy(username))
+
+        logging.debug(f"Fetching OnDeck media for {len(users_to_fetch)} users (using cached tokens)")
+
+        # Fetch concurrently
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {}
+            for user in users_to_fetch:
+                username = user.title if user else "main"
+                user_days = (per_user_days or {}).get(username, days_to_monitor)
+                futures[executor.submit(
+                    self._fetch_user_on_deck_media,
+                    valid_sections, user_days, number_episodes, user,
+                    prefetch_minimum_minutes
+                )] = username
+
+            for future in as_completed(futures):
+                try:
+                    on_deck_files.extend(future.result())
+                except Exception as e:
+                    logging.error(f"An error occurred while fetching OnDeck media for a user: {e}")
+
+        # DB fallback for shared users with no token
+        if users_toggle and self._plex_db_path:
+            users_with_results = {item.username for item in on_deck_files}
+            db_fallback_users = []
+            for username, is_home in self._user_is_home.items():
+                if is_home or username in users_with_results or username in (skip_ondeck or []):
+                    continue
+                with self._token_lock:
+                    has_token = username in self._user_tokens
+                if not has_token:
+                    db_fallback_users.append(username)
+
+            if db_fallback_users:
+                logging.info(f"[DB FALLBACK] Querying Plex DB for {len(db_fallback_users)} shared user(s): {', '.join(db_fallback_users)}")
+                try:
+                    from core.plex_db import fetch_on_deck_from_db
+                    db_items = fetch_on_deck_from_db(
+                        db_path=self._plex_db_path,
+                        usernames=db_fallback_users,
+                        valid_sections=valid_sections,
+                        days_to_monitor=days_to_monitor,
+                        number_episodes=number_episodes,
+                        user_id_map=self._user_account_ids,
+                        per_user_days=per_user_days,
+                        prefetch_minimum_minutes=prefetch_minimum_minutes
+                    )
+                    on_deck_files.extend(db_items)
+                except Exception as e:
+                    logging.error(f"[DB FALLBACK] Failed: {e}")
+                    self._ondeck_data_complete = False
+
+        # Log OnDeck items grouped by user (sequential output after parallel fetch)
+        items_by_user: Dict[str, List[OnDeckItem]] = {}
+        for item in on_deck_files:
+            if item.username not in items_by_user:
+                items_by_user[item.username] = []
+            items_by_user[item.username].append(item)
+
+        for username in sorted(items_by_user.keys()):
+            items = items_by_user[username]
+            for item in items:
+                logging.debug(f"[USER:{username}] OnDeck found: {item.file_path}")
+            logging.debug(f"[USER:{username}] Found {len(items)} OnDeck items")
+
+        return on_deck_files
+
+    
+    def _fetch_user_on_deck_media(self, valid_sections: List[int], days_to_monitor: int,
+                                number_episodes: int, user=None,
+                                prefetch_minimum_minutes: int = 0) -> List[OnDeckItem]:
+        """Fetch onDeck media for a specific user using cached tokens.
+
+        Returns:
+            List of OnDeckItem objects containing file path, username, and episode metadata.
+        """
+        username = user.title if user else "main"
+        try:
+            username, plex_instance = self.get_plex_instance(user)
+            if not plex_instance:
+                logging.info(f"[USER:{username}] Skipping OnDeck fetch — no Plex instance available")
+                return []
+
+            logging.debug(f"[USER:{username}] Fetching onDeck media...")
+
+            on_deck_files: List[OnDeckItem] = []
+            # Per-section iteration (not plex_instance.library.onDeck()) so libraries
+            # marked "Exclude from home screen" still surface — the global /library/onDeck
+            # endpoint applies that visibility filter server-side and silently drops them.
+            available_sections = [section.key for section in plex_instance.library.sections()]
+            if valid_sections:
+                sections_to_query = list(set(available_sections) & set(valid_sections))
+            else:
+                sections_to_query = available_sections
+
+            for section_key in sections_to_query:
+                try:
+                    section = plex_instance.library.sectionByID(section_key)
+                    for video in section.onDeck():
+                        delta = datetime.now() - video.lastViewedAt
+                        if delta.days > days_to_monitor:
+                            continue
+                        if isinstance(video, Episode):
+                            self._process_episode_ondeck(video, number_episodes, on_deck_files, username,
+                                                         prefetch_minimum_minutes=prefetch_minimum_minutes)
+                        elif isinstance(video, Movie):
+                            self._process_movie_ondeck(video, on_deck_files, username)
+                        else:
+                            logging.warning(f"Skipping OnDeck item '{video.title}' — unknown type {type(video)}")
+                except Exception as e:
+                    logging.warning(f"[USER:{username}] Failed to fetch onDeck for section {section_key}: {e}")
+                    if not user:
+                        self._ondeck_data_complete = False
+                    continue
+
+            return on_deck_files
+
+        except Exception as e:
+            _log_api_error(f"fetch OnDeck for {username}", e)
+            # Invalidate token on auth failure
+            if "401" in str(e) or "Unauthorized" in str(e):
+                self.invalidate_user_token(username)
+            # Mark OnDeck data incomplete if main account fails
+            if not user:
+                self._ondeck_data_complete = False
+                logging.warning("OnDeck data incomplete — main account fetch failed")
+            return []
+    
+    def _process_episode_ondeck(self, video: Episode, number_episodes: int, on_deck_files: List[OnDeckItem],
+                                 username: str = "unknown", prefetch_minimum_minutes: int = 0) -> None:
+        """Process an episode from onDeck.
+
+        Args:
+            video: The episode video object.
+            number_episodes: Number of next episodes to fetch.
+            on_deck_files: List to append OnDeckItem objects to.
+            username: The user who has this OnDeck.
+            prefetch_minimum_minutes: Minimum total runtime (minutes) the prefetched
+                next episodes must cover. 0 disables the runtime check.
+        """
+        show = video.grandparentTitle
+        current_season = video.parentIndex
+        current_episode = video.index
+
+        # Create episode info dict for this episode (the actual OnDeck episode)
+        episode_info = None
+        if current_season is not None and current_episode is not None:
+            episode_info = {
+                'show': show,
+                'season': current_season,
+                'episode': current_episode
+            }
+
+        # Add the current OnDeck episode
+        video_rating_key = str(getattr(video, 'ratingKey', '') or '')
+        for media in video.media:
+            for part in media.parts:
+                on_deck_files.append(OnDeckItem(
+                    file_path=part.file,
+                    username=username,
+                    episode_info=episode_info,
+                    is_current_ondeck=True,  # This is the actual OnDeck episode
+                    rating_key=video_rating_key or None
+                ))
+
+        # Skip fetching next episodes if current episode has missing index data
+        if current_season is None or current_episode is None:
+            logging.warning(f"Skipping next episode fetch for '{show}' - missing index data (parentIndex={current_season}, index={current_episode})")
+            return
+
+        parent_show = video.show()
+        episodes = list(parent_show.episodes())
+        next_episodes = self._get_next_episodes(
+            episodes, current_season, current_episode, number_episodes,
+            prefetch_minimum_minutes=prefetch_minimum_minutes
+        )
+
+        # Add the prefetched next episodes
+        for episode in next_episodes:
+            next_ep_info = {
+                'show': show,
+                'season': episode.parentIndex,
+                'episode': episode.index
+            }
+            ep_rating_key = str(getattr(episode, 'ratingKey', '') or '')
+            for media in episode.media:
+                for part in media.parts:
+                    on_deck_files.append(OnDeckItem(
+                        file_path=part.file,
+                        username=username,
+                        episode_info=next_ep_info,
+                        is_current_ondeck=False,  # This is a prefetched next episode
+                        rating_key=ep_rating_key or None
+                    ))
+    
+    def _process_movie_ondeck(self, video: Movie, on_deck_files: List[OnDeckItem], username: str = "unknown") -> None:
+        """Process a movie from onDeck.
+
+        Args:
+            video: The movie video object.
+            on_deck_files: List to append OnDeckItem objects to.
+            username: The user who has this OnDeck.
+        """
+        movie_rating_key = str(getattr(video, 'ratingKey', '') or '')
+        for media in video.media:
+            for part in media.parts:
+                on_deck_files.append(OnDeckItem(
+                    file_path=part.file,
+                    username=username,
+                    episode_info=None,  # Movies don't have episode info
+                    is_current_ondeck=True,
+                    rating_key=movie_rating_key or None
+                ))
+    
+    def _get_next_episodes(self, episodes: List[Episode], current_season: int,
+                          current_episode_index: int, number_episodes: int,
+                          prefetch_minimum_minutes: int = 0) -> List[Episode]:
+        """Get the next episodes after the current one.
+
+        `number_episodes` is the minimum number of episodes to return. When
+        `prefetch_minimum_minutes` > 0, additional episodes are appended until
+        their summed runtime meets or exceeds that target. Episodes missing
+        duration metadata are weighted with the running average of episodes
+        already collected (or a 45-minute fallback when no data is available
+        yet) — biased toward fetching one too many rather than too few.
+        """
+        next_episodes: List[Episode] = []
+        total_minutes = 0.0
+        duration_sum = 0.0
+        duration_count = 0
+        # Used when no prior episode has duration metadata yet.
+        FALLBACK_MINUTES = 45.0
+
+        def _minutes_from_ms(d_ms) -> float:
+            # Plex stores duration in milliseconds. Fall back to the running
+            # average when the metadata is missing, or to FALLBACK_MINUTES when
+            # no real duration has been seen yet.
+            if d_ms and d_ms > 0:
+                return d_ms / 60000.0
+            if duration_count > 0:
+                return duration_sum / duration_count
+            return FALLBACK_MINUTES
+
+        def _target_met() -> bool:
+            return (len(next_episodes) >= number_episodes
+                    and total_minutes >= prefetch_minimum_minutes)
+
+        for episode in episodes:
+            # Skip episodes with missing index data
+            if episode.parentIndex is None or episode.index is None:
+                logging.debug(f"Skipping episode '{episode.title}' from '{episode.grandparentTitle}' - missing index data (parentIndex={episode.parentIndex}, index={episode.index})")
+                continue
+            if not (episode.parentIndex > current_season or
+                    (episode.parentIndex == current_season and episode.index > current_episode_index)):
+                continue
+            if _target_met():
+                break
+            d_ms = getattr(episode, 'duration', None)
+            ep_minutes = _minutes_from_ms(d_ms)
+            next_episodes.append(episode)
+            total_minutes += ep_minutes
+            if d_ms and d_ms > 0:
+                duration_sum += d_ms / 60000.0
+                duration_count += 1
+            if _target_met():
+                break
+        if prefetch_minimum_minutes > 0:
+            show_name = getattr(next_episodes[0], 'grandparentTitle', '?') if next_episodes else '?'
+            logging.debug(
+                f"Prefetch buffer for {show_name!r}: {len(next_episodes)} eps, "
+                f"total {total_minutes:.1f} min "
+                f"(min count={number_episodes}, min runtime={prefetch_minimum_minutes} min, "
+                f"real durations seen={duration_count})"
+            )
+        return next_episodes
+
+    def clean_rss_title(self, title: str) -> str:
+        """Remove trailing year in parentheses from a title, e.g. 'Movie (2023)' -> 'Movie'."""
+        return re.sub(r"\s\(\d{4}\)$", "", title)
+
+    # -------------------- Watchlist Helper Methods --------------------
+
+    def _parse_rss_response(self, text: str) -> List[Tuple[str, str, Optional[datetime], str, str]]:
+        """Parse RSS XML response into list of items.
+
+        Returns list of tuples: (title, category, pub_date, author_id, guid)
+        The guid contains IMDB/TVDB IDs like 'imdb://tt0898367' or 'tvdb://267247'
+        """
+        root = ET.fromstring(text)
+        items = []
+        for item in root.findall("channel/item"):
+            title = item.find("title").text
+            category_elem = item.find("category")
+            category = category_elem.text if category_elem is not None else ""
+            # Parse pubDate (RFC 822 format) - this is when item was added to watchlist
+            pub_date = None
+            pub_date_elem = item.find("pubDate")
+            if pub_date_elem is not None and pub_date_elem.text:
+                try:
+                    pub_date = parsedate_to_datetime(pub_date_elem.text)
+                except (ValueError, TypeError):
+                    pass  # Invalid date format, use None
+            # Get author ID (Plex user ID who added to watchlist)
+            author_id = ""
+            author_elem = item.find("author")
+            if author_elem is not None and author_elem.text:
+                author_id = author_elem.text
+            # Get GUID (IMDB/TVDB ID) for accurate matching
+            guid = ""
+            guid_elem = item.find("guid")
+            if guid_elem is not None and guid_elem.text:
+                guid = guid_elem.text
+            items.append((title, category, pub_date, author_id, guid))
+        return items
+
+    def _save_rss_cache(self, url: str, items: List[Tuple[str, str, Optional[datetime], str, str]]) -> None:
+        """Save RSS items to cache file."""
+        if not self._rss_cache_file:
+            return
+        try:
+            cache_data = {
+                'timestamp': datetime.now().isoformat(),
+                'url': url,
+                'items': [
+                    (title, category, pub_date.isoformat() if pub_date else None, author_id, guid)
+                    for title, category, pub_date, author_id, guid in items
+                ]
+            }
+            with open(self._rss_cache_file, 'w') as f:
+                json.dump(cache_data, f, indent=2)
+            logging.debug(f"Saved {len(items)} RSS items to cache")
+        except IOError as e:
+            logging.debug(f"Failed to save RSS cache: {e}")
+
+    def _load_rss_cache(self) -> List[Tuple[str, str, Optional[datetime], str, str]]:
+        """Load RSS items from cache file."""
+        if not self._rss_cache_file:
+            return []
+        try:
+            if os.path.exists(self._rss_cache_file):
+                with open(self._rss_cache_file, 'r') as f:
+                    cache_data = json.load(f)
+                items = []
+                for item_data in cache_data['items']:
+                    # Handle both old format (4 fields) and new format (5 fields with guid)
+                    if len(item_data) == 4:
+                        title, category, pub_date_str, author_id = item_data
+                        guid = ""
+                    else:
+                        title, category, pub_date_str, author_id, guid = item_data
+                    pub_date = datetime.fromisoformat(pub_date_str) if pub_date_str else None
+                    items.append((title, category, pub_date, author_id, guid))
+                cache_time = datetime.fromisoformat(cache_data['timestamp'])
+                cache_age = datetime.now() - cache_time
+                cache_age_hours = cache_age.total_seconds() / 3600
+                if cache_age_hours >= RSS_CACHE_STALE_HOURS:
+                    # Still returned - stale data beats losing every remote
+                    # watchlist item - but the user needs to know it's stale.
+                    logging.warning(
+                        f"Using cached RSS data ({len(items)} items) but it is "
+                        f"{cache_age_hours:.1f} hours old - the Plex RSS feed has been "
+                        f"unreachable for over {RSS_CACHE_STALE_HOURS}h. Remote watchlist "
+                        f"changes are not being picked up; check the feed URL in Settings."
+                    )
+                else:
+                    logging.info(f"Using cached RSS data ({len(items)} items, {cache_age_hours:.1f} hours old)")
+                return items
+        except Exception as e:
+            logging.debug(f"Failed to load RSS cache: {e}")
+        return []
+
+    def _request_rss(self, url: str) -> str:
+        """GET an RSS feed, adding the Plex token only for Plex-controlled hosts.
+
+        Plex redirects feed requests to a presigned S3 object. The redirect is
+        followed manually so the token isn't forwarded to the storage host,
+        which carries its own signed credentials.
+
+        Raises:
+            requests.HTTPError / requests.RequestException on failure.
+        """
+        headers = {}
+        if _should_send_plex_token(url) and self.plex_token:
+            headers["X-Plex-Token"] = self.plex_token
+
+        resp = requests.get(url, timeout=RSS_TIMEOUT, headers=headers, allow_redirects=False)
+
+        if resp.is_redirect or resp.is_permanent_redirect:
+            location = resp.headers.get("Location")
+            if location:
+                # No Plex headers here - the presigned URL authenticates itself.
+                resp = requests.get(location, timeout=RSS_TIMEOUT, allow_redirects=True)
+
+        resp.raise_for_status()
+        return resp.text
+
+    def _fetch_rss_from(self, url: str, label: str) -> Optional[List[Tuple[str, str, Optional[datetime], str, str]]]:
+        """Try one RSS URL, retrying only transient failures.
+
+        Returns parsed items, or None if the URL is unusable. Auth/not-found
+        responses return immediately - retrying them just burns time on a
+        deterministic answer.
+        """
+        for attempt in range(RSS_MAX_RETRIES):
+            try:
+                items = self._parse_rss_response(self._request_rss(url))
+                if attempt or label != "primary":
+                    logging.debug(f"RSS fetch succeeded from {label} URL")
+                return items
+            except requests.HTTPError as e:
+                status = e.response.status_code if e.response is not None else None
+                if status in _RSS_NO_RETRY_STATUS:
+                    logging.debug(f"RSS {label} URL returned {status} - not retrying")
+                    return None
+                last_error = e
+            except (requests.RequestException, ET.ParseError) as e:
+                last_error = e
+
+            if attempt < RSS_MAX_RETRIES - 1:
+                wait_time = 2 ** attempt  # 1s, 2s
+                logging.debug(
+                    f"RSS {label} fetch attempt {attempt + 1}/{RSS_MAX_RETRIES} "
+                    f"failed: {last_error}. Retrying in {wait_time}s..."
+                )
+                time.sleep(wait_time)
+
+        logging.debug(f"RSS {label} URL failed after {RSS_MAX_RETRIES} attempts: {last_error}")
+        return None
+
+    def _fetch_rss_titles(self, url: str) -> List[Tuple[str, str, Optional[datetime], str, str]]:
+        """Fetch titles, categories, pubDate, author ID, and GUID from a Plex RSS feed.
+
+        Tries the configured URL first. If Plex refuses it outright, retries via
+        the discover.provider mirror for the same feed before giving up. Falls
+        back to cached data when neither responds.
+
+        Returns list of tuples: (title, category, pub_date, author_id, guid)
+        """
+        items = self._fetch_rss_from(url, "primary")
+
+        if items is None:
+            fallback_url = _derive_rss_fallback_url(url)
+            if fallback_url:
+                items = self._fetch_rss_from(fallback_url, "fallback")
+                if items is not None:
+                    logging.info(
+                        "RSS: primary feed URL unavailable, served from Plex's "
+                        "discover endpoint instead"
+                    )
+
+        if items is not None:
+            self._save_rss_cache(url, items)
+            return items
+
+        # Neither URL worked - fall back to the last good copy.
+        cached_items = self._load_rss_cache()
+        if cached_items:
+            return cached_items
+
+        logging.error("RSS feed unreachable and no cached data available - remote watchlist items will be missing")
+        return []
+
+    def _process_watchlist_show(self, file, watchlist_episodes: int, username: str,
+                                 watchlisted_at: Optional[datetime]) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str], str], None, None]:
+        """Process a show and yield episode file paths with metadata.
+
+        Iterates all media versions and parts per episode (e.g., 4K + 1080p),
+        matching the OnDeck discovery pattern.
+        """
+        episodes = file.episodes()
+        episodes_to_process = episodes[:watchlist_episodes]
+        logging.debug(f"Processing show {file.title} with {len(episodes)} episodes (limit: {watchlist_episodes})")
+
+        yielded_count = 0
+        skipped_watched = 0
+        skipped_no_media = 0
+
+        for episode in episodes_to_process:
+            has_media = False
+            for media in episode.media:
+                for part in media.parts:
+                    has_media = True
+                    if not episode.isPlayed:
+                        file_path = part.file
+                        logging.debug(f"[USER:{username}] Watchlist found: {file_path}")
+                        # Build episode_info from Plex metadata (same format as OnDeck)
+                        episode_info = None
+                        ep_season = getattr(episode, 'parentIndex', None)
+                        ep_index = getattr(episode, 'index', None)
+                        if ep_season is not None and ep_index is not None:
+                            episode_info = {
+                                'show': file.title,
+                                'season': ep_season,
+                                'episode': ep_index
+                            }
+                        ep_rating_key = str(getattr(episode, 'ratingKey', '') or '')
+                        yield (file_path, username, watchlisted_at, episode_info, ep_rating_key or None, "episode")
+                        yielded_count += 1
+                    else:
+                        skipped_watched += 1
+            if not has_media:
+                skipped_no_media += 1
+
+        # Log summary for this show
+        if skipped_watched > 0:
+            logging.debug(f"  {file.title}: {yielded_count} episodes to cache, {skipped_watched} skipped (already watched)")
+        if skipped_no_media > 0:
+            logging.warning(f"  {file.title}: {skipped_no_media} episodes skipped (no media files)")
+
+    def _process_watchlist_movie(self, file, username: str,
+                                  watchlisted_at: Optional[datetime]) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str], str], None, None]:
+        """Process a movie and yield file paths with metadata.
+
+        Iterates all media versions and parts (e.g., 4K + 1080p),
+        matching the OnDeck discovery pattern.
+        """
+        movie_rating_key = str(getattr(file, 'ratingKey', '') or '')
+        for media in file.media:
+            for part in media.parts:
+                file_path = part.file
+                logging.debug(f"[USER:{username}] Watchlist found: {file_path}")
+                yield (file_path, username, watchlisted_at, None, movie_rating_key or None, "movie")
+
+    def _fetch_user_watchlist(self, user, valid_sections: List[int], watchlist_episodes: int,
+                               skip_watchlist: List[str], rss_url: Optional[str],
+                               filtered_sections: List[int]) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str], str], None, None]:
+        """Fetch watchlist media for a user, yielding file paths with metadata.
+
+        Uses separate MyPlexAccount instances per user to avoid session state contamination.
+        See: https://github.com/StudioNirin/PlexCache-D/issues/20
+        """
+        current_username = user.title if user else "main"
+
+        # Use rate limiting
+        self._rate_limited_api_call()
+
+        # Get username from cached tokens if available
+        if user is None:
+            try:
+                current_username = self.plex.myPlexAccount().title
+            except Exception:
+                current_username = "main"
+        else:
+            current_username = user.title
+
+        logging.debug(f"[USER:{current_username}] Fetching watchlist media")
+
+        # Skip users in the skip list
+        if user:
+            with self._token_lock:
+                token = self._user_tokens.get(current_username)
+            if current_username in skip_watchlist or (token and token in skip_watchlist):
+                logging.info(f"[USER:{current_username}] Skipping — in watchlist skip list")
+                return
+            # No token is OK for home users — switchHomeUser path below handles auth
+
+        # --- Obtain Plex account instance ---
+        try:
+            fresh_session = requests.Session()
+
+            if user is None:
+                # Main account - use the main token with a fresh session.
+                # Retried like its home-user sibling below: constructing the
+                # account is a plex.tv round trip, and on an install with no
+                # home users it is the only one, so a single read timeout here
+                # marks the whole watchlist incomplete and skips array restore
+                # for the run.
+                def _fresh_main_account():
+                    self._rate_limited_api_call()
+                    return MyPlexAccount(token=self.plex_token, session=fresh_session)
+
+                account = _retry_plextv_call(
+                    _fresh_main_account,
+                    label=f"main account for {current_username}",
+                )
+                logging.debug(f"[USER:{current_username}] Created fresh MyPlexAccount (main user)")
+            else:
+                # Home/managed user - create fresh admin account then switch to home user
+                try:
+                    def _switch_to_home_user():
+                        self._rate_limited_api_call()
+                        admin = MyPlexAccount(token=self.plex_token, session=fresh_session)
+                        self._rate_limited_api_call()
+                        return admin.switchHomeUser(current_username)
+
+                    account = _retry_plextv_call(
+                        _switch_to_home_user,
+                        label=f"switch to home user {current_username}",
+                    )
+                    logging.debug(f"[USER:{current_username}] Switched to home user via fresh admin account")
+                except Exception as e:
+                    _log_api_error(f"switch to home user {current_username}", e)
+                    self.mark_watchlist_incomplete()
+                    return
+        except Exception as e:
+            _log_api_error(f"get Plex account for {current_username}", e)
+            self.mark_watchlist_incomplete()
+            return
+
+        # --- RSS feed processing ---
+        if rss_url:
+            yield from self._process_rss_watchlist(rss_url, current_username, filtered_sections, watchlist_episodes, skip_watchlist)
+            return
+
+        # --- Local Plex watchlist processing ---
+        try:
+            self._rate_limited_api_call()
+            watchlist = _retry_plextv_call(
+                lambda: account.watchlist(filter='released', sort='watchlistedAt:desc'),
+                label=f"watchlist for {current_username}",
+            )
+            logging.debug(f"[USER:{current_username}] Found {len(watchlist)} watchlist items")
+            for item in watchlist:
+                try:
+                    yield from self._process_watchlist_item(
+                        account, item, current_username, filtered_sections, watchlist_episodes
+                    )
+                except Exception as e:
+                    # One unreadable item must not cost us the rest of the list.
+                    # plexapi resolves `guids` lazily against metadata.provider.plex.tv,
+                    # so a 5xx on a single item used to escape to the handler below and
+                    # drop every remaining item for this user.
+                    item_title = getattr(item, 'title', '<unknown>')
+                    logging.warning(
+                        f"[USER:{current_username}] Skipping watchlist item '{item_title}': {e}"
+                    )
+                    self.mark_watchlist_incomplete()
+        except Exception as e:
+            logging.error(f"[USER:{current_username}] Error fetching watchlist: {e}")
+            self.mark_watchlist_incomplete()
+
+    def _process_watchlist_item(self, account, item, current_username: str,
+                                 filtered_sections: List[int],
+                                 watchlist_episodes: int) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str], str], None, None]:
+        """Resolve one plex.tv watchlist item to local media files.
+
+        Raises whatever plex.tv or the local server raises — the caller decides
+        whether a failure costs just this item or the whole watchlist.
+        """
+        watchlisted_at = None
+        try:
+            user_state = _retry_plextv_call(
+                lambda: account.userState(item),
+                label=f"userState for '{item.title}'",
+            )
+            watchlisted_at = getattr(user_state, 'watchlistedAt', None)
+        except Exception as e:
+            logging.debug(f"Could not get userState for {item.title}: {e}")
+
+        # Extract GUID for accurate matching (prefer IMDB, then TVDB). Reading
+        # `guids` on a watchlist item triggers a lazy plex.tv reload, so wrap it
+        # in the retry helper like every other plex.tv call.
+        guid = None
+        item_guids = _retry_plextv_call(
+            lambda: getattr(item, 'guids', []),
+            label=f"guids for '{item.title}'",
+        )
+        for g in item_guids:
+            gid = getattr(g, 'id', str(g))
+            if gid.startswith('imdb://') or gid.startswith('tvdb://'):
+                guid = gid
+                break
+
+        # Determine expected type from watchlist item
+        expected_type = getattr(item, 'type', None)
+
+        file = self.search_plex(item.title, guid=guid, expected_type=expected_type,
+                               valid_sections=filtered_sections)
+        if file and (not filtered_sections or file.librarySectionID in filtered_sections):
+            try:
+                if file.TYPE == 'show':
+                    yield from self._process_watchlist_show(file, watchlist_episodes, current_username, watchlisted_at)
+                elif file.TYPE == 'movie':
+                    yield from self._process_watchlist_movie(file, current_username, watchlisted_at)
+                else:
+                    logging.debug(f"Ignoring item '{file.title}' of type '{file.TYPE}'")
+            except Exception as e:
+                logging.warning(f"Error processing '{file.title}': {e}")
+        elif file:
+            logging.debug(f"Skipping watchlist item '{file.title}' — section {file.librarySectionID} not in valid_sections {filtered_sections}")
+
+    def _process_rss_watchlist(self, rss_url: str, current_username: str,
+                                filtered_sections: List[int], watchlist_episodes: int,
+                                skip_watchlist: List[str] = None) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str], str], None, None]:
+        """Process RSS feed items and yield matching media files.
+
+        Args:
+            skip_watchlist: List of usernames to skip (filters RSS items by who added them)
+        """
+        if skip_watchlist is None:
+            skip_watchlist = []
+        rss_items = self._fetch_rss_titles(rss_url)
+        logging.debug(f"RSS feed contains {len(rss_items)} items")
+        unknown_user_ids = set()
+        rss_not_found = []
+        rss_skipped_users = {}  # username -> count of skipped items
+
+        for title, category, pub_date, author_id, guid in rss_items:
+            # Look up username from author ID
+            if author_id and author_id in self._user_id_to_name:
+                rss_username = self._user_id_to_name[author_id]
+            elif author_id:
+                resolved_name = self.resolve_user_uuid(author_id)
+                if resolved_name:
+                    rss_username = resolved_name
+                else:
+                    rss_username = f"User#{author_id}"
+                    unknown_user_ids.add(author_id)
+            else:
+                rss_username = "Friends (RSS)"
+
+            # Skip items from users in the skip list (fixes issue #51)
+            if skip_watchlist and rss_username in skip_watchlist:
+                logging.debug(f"RSS: Skipping '{title}' — added by {rss_username} (in skip list)")
+                rss_skipped_users[rss_username] = rss_skipped_users.get(rss_username, 0) + 1
+                continue
+
+            cleaned_title = self.clean_rss_title(title)
+            file = self.search_plex(cleaned_title, guid=guid, expected_type=category,
+                                   valid_sections=filtered_sections)
+            if file:
+                logging.debug(f"RSS title '{title}' matched Plex item '{file.title}' ({file.TYPE})")
+                try:
+                    if file.TYPE == 'show':
+                        yield from self._process_watchlist_show(file, watchlist_episodes, rss_username, pub_date)
+                    elif file.TYPE == 'movie':
+                        yield from self._process_watchlist_movie(file, rss_username, pub_date)
+                    else:
+                        logging.debug(f"Ignoring item '{file.title}' of type '{file.TYPE}'")
+                except Exception as e:
+                    logging.warning(f"Error processing '{file.title}': {e}")
+            else:
+                rss_not_found.append((title, rss_username))
+                logging.debug(f"RSS title '{title}' (added by {rss_username}) not found in Plex — discarded")
+
+        # Log summary of not-found items
+        if rss_not_found:
+            if logging.getLogger().getEffectiveLevel() <= logging.DEBUG:
+                logging.info(f"RSS: Skipped {len(rss_not_found)} items not in library")
+            else:
+                logging.info(f"RSS: Skipped {len(rss_not_found)} items not in library (use --verbose for details)")
+
+        # Log summary of skipped users
+        if rss_skipped_users:
+            total_skipped = sum(rss_skipped_users.values())
+            user_summary = ", ".join(f"{user}: {count}" for user, count in sorted(rss_skipped_users.items()))
+            logging.info(f"RSS: Skipped {total_skipped} items from disabled users ({user_summary})")
+
+        if unknown_user_ids:
+            logging.debug(f"[PLEX API] {len(unknown_user_ids)} unknown user ID(s) in RSS feed: {', '.join(sorted(unknown_user_ids))}. Run 'python3 plexcache_setup.py' and refresh users to resolve.")
+
+    def get_recently_added_media(self, valid_sections: List[int], days_to_monitor: int,
+                                 max_items: int = 100,
+                                 version_preference: str = "highest") -> 'RecentlyAddedResult':
+        """Get recently-added media across enabled libraries (server-wide).
+
+        Recently-added is a library-level view, so this uses the main account
+        only — there is no per-user token machinery (unlike OnDeck/Watchlist).
+
+        Args:
+            valid_sections: Library section ids to include (matches enabled
+                path mappings). An empty list means all available sections.
+            days_to_monitor: Only include items added within this many days.
+            max_items: Cap on the number of items returned (newest first).
+            version_preference: ``pinned_preferred_resolution`` value used to
+                pick which version represents a multi-version item — the same
+                choice the pin and caching paths make.
+
+        Returns:
+            RecentlyAddedResult. ``items`` is newest first, one entry per Plex
+            item (not per file) — ``version_files`` carries every underlying
+            file. ``unreadable_libraries`` names any section that was attempted
+            and failed, so the caller can say so instead of reporting an empty
+            library as empty.
+
+        Raises:
+            Exception: If the library list itself cannot be read. Nothing was
+                enumerated in that case, so there is no partial result and the
+                caller must render the failure rather than an empty view.
+        """
+        items: List[RecentlyAddedItem] = []
+        unreadable: List[str] = []
+        read_sections: List[str] = []
+        cutoff = datetime.now() - timedelta(days=days_to_monitor)
+
+        try:
+            sections = self.plex.library.sections()
+        except Exception as e:
+            # Nothing was enumerated, so there is no partial result to report.
+            # Returning [] here would render as "Nothing added", stating a fact
+            # about libraries that were never contacted.
+            _log_api_error("list library sections for recently added", e)
+            raise
+
+        # plexapi exposes section.key as a string ("1"), while valid_sections
+        # from config are ints — compare as strings so the filter actually matches.
+        section_ids = {str(s) for s in (valid_sections or [])}
+        for section in sections:
+            if section_ids and str(getattr(section, 'key', '')) not in section_ids:
+                continue
+            section_type = getattr(section, 'type', None)
+            try:
+                # recentlyAdded() returns newest first; the days cutoff trims further.
+                # For SHOW libraries recentlyAdded() yields show-level items, so use
+                # recentlyAddedEpisodes() to get the actual recently-added episodes.
+                if section_type == 'show' and hasattr(section, 'recentlyAddedEpisodes'):
+                    recent = section.recentlyAddedEpisodes(maxresults=max_items)
+                else:
+                    recent = section.recentlyAdded(maxresults=max_items)
+            except Exception as e:
+                section_title = str(
+                    getattr(section, 'title', '') or f"section {getattr(section, 'key', '?')}"
+                )
+                _log_api_error(f"fetch recently added for section '{section_title}'", e)
+                # Name it rather than dropping it: an unreadable library that
+                # vanishes silently looks exactly like an empty one.
+                unreadable.append(section_title)
+                continue
+
+            read_sections.append(str(getattr(section, 'title', '?')))
+            section_kept = 0
+            for video in recent:
+                # Read-only view over listing fields: opt out of plexapi's lazy
+                # reload so a null `index` (unnumbered special) or empty `media`
+                # (unanalyzed item) costs no per-item metadata GET, and so it
+                # can't 5xx mid-fetch. Best-effort — older plexapi lacks the attr.
+                try:
+                    video._autoReload = False
+                except Exception:
+                    pass
+
+                media_type = getattr(video, 'type', None)
+                if media_type not in ('movie', 'episode'):
+                    # Skip season/show wrappers — we surface individual files.
+                    continue
+
+                added_at = getattr(video, 'addedAt', None)
+                if added_at is not None and added_at < cutoff:
+                    continue
+
+                episode_info = None
+                if media_type == 'episode':
+                    # _partial_attr, not getattr: these are the two reads that
+                    # legitimately hold None and so trigger the reload above.
+                    # Emitted whenever the item is an episode, even with the
+                    # numbering missing — the show name is the more useful half
+                    # and gating the whole dict on the numbers threw it away,
+                    # leaving the row to render as a movie. Renderers format the
+                    # code with format_season_episode(), which yields "" rather
+                    # than a fabricated S00E00 when a number is unusable.
+                    episode_info = {
+                        'show': getattr(video, 'grandparentTitle', None),
+                        'season': _partial_attr(video, 'parentIndex'),
+                        'episode': _partial_attr(video, 'index'),
+                    }
+
+                rating_key = str(getattr(video, 'ratingKey', '') or '')
+                title = getattr(video, 'title', '') or ''
+                library_title = getattr(section, 'title', '') or ''
+                library_section_id = getattr(section, 'key', None)
+
+                # One item per rating_key, describing the version PlexCache would
+                # actually manage. Multi-VERSION items (4K + 1080p) are distinct
+                # Media objects and only the preferred one is ever cached or
+                # pinned (core/pinned_media.select_media_version) — emitting a
+                # row per version would put two pin controls on one rating_key,
+                # where the second reads "Pin" but unpins. Multi-PART items
+                # (cd1/cd2) are parts of ONE Media and are all cached together,
+                # so they stay folded into this item's file list.
+                medias = list(_partial_attr(video, 'media') or [])
+                if not medias:
+                    continue
+                try:
+                    from core.pinned_media import select_media_version
+                    preferred = select_media_version(video, version_preference)
+                except (ValueError, AttributeError, ImportError):
+                    preferred = medias[0]
+
+                version_files: List[Dict[str, Any]] = []
+                for media in medias:
+                    is_preferred = media is preferred
+                    for part in getattr(media, 'parts', None) or []:
+                        part_file = getattr(part, 'file', None)
+                        if not part_file:
+                            continue
+                        version_files.append({
+                            'file_path': part_file,
+                            'size': int(getattr(part, 'size', 0) or 0),
+                            'is_preferred': is_preferred,
+                            'label': _media_version_label(media),
+                        })
+
+                preferred_files = [f for f in version_files if f['is_preferred']]
+                if not preferred_files:
+                    continue
+
+                items.append(RecentlyAddedItem(
+                    file_path=preferred_files[0]['file_path'],
+                    rating_key=rating_key,
+                    title=title,
+                    media_type=media_type,
+                    added_at=added_at,
+                    library_title=library_title,
+                    library_section_id=library_section_id,
+                    # Every part of the preferred version is cached together, so
+                    # the item's footprint is their sum.
+                    size=sum(f['size'] for f in preferred_files),
+                    episode_info=episode_info,
+                    # plexapi casts this to int; grouping keys on it as a string.
+                    show_rating_key=str(_partial_attr(video, 'grandparentRatingKey') or ''),
+                    version_files=version_files,
+                ))
+                section_kept += 1
+
+            logging.debug(
+                f"Recently added [{getattr(section, 'title', '?')}] "
+                f"(type={section_type}): {section_kept} file(s) within {days_to_monitor}d"
+            )
+
+        # Newest first, then cap. Items without added_at sort last.
+        items.sort(key=lambda i: i.added_at or datetime.min, reverse=True)
+        if len(items) > max_items:
+            logging.info(
+                f"Recently added: {len(items)} files found, capping display to {max_items}"
+            )
+            items = items[:max_items]
+
+        # Count sections actually answered, not the ones config asked for —
+        # the old form reported "from 2 section(s)" even when both had failed.
+        answered = len(read_sections)
+        summary = (
+            f"Recently added: returning {len(items)} item(s) from "
+            f"{answered} section(s) within {days_to_monitor}d"
+        )
+        if unreadable:
+            summary += f"; {len(unreadable)} unreadable ({', '.join(unreadable)})"
+        logging.info(summary)
+        return RecentlyAddedResult(items=items, unreadable_libraries=unreadable)
+
+    def get_watchlist_media(self, valid_sections: List[int], watchlist_episodes: int,
+                            users_toggle: bool, skip_watchlist: List[str], rss_url: Optional[str] = None,
+                            home_users: Optional[List[str]] = None) -> Generator[Tuple[str, str, Optional[datetime], Optional[Dict], Optional[str], str], None, None]:
+        """Get watchlist media files, optionally via RSS, with proper user filtering.
+
+        Args:
+            valid_sections: List of library section IDs to include.
+            watchlist_episodes: Number of episodes to fetch per show.
+            users_toggle: Whether to include other users' media.
+            skip_watchlist: List of usernames or tokens to skip.
+            rss_url: Optional RSS feed URL for remote user watchlists.
+            home_users: List of usernames that are home/managed users (can access watchlist).
+
+        Yields:
+            Tuples of (file_path, username, watchlisted_at, episode_info, rating_key, media_type)
+            where watchlisted_at is the datetime when the item was added to the user's
+            watchlist (None for RSS items), episode_info is a dict with 'show', 'season',
+            'episode' keys for TV episodes (None for movies), rating_key is the Plex
+            rating key for version grouping (None if unavailable), and media_type is
+            "episode" or "movie" so downstream code can tell a watchlisted episode apart
+            from a watchlisted movie even when episode_info is missing.
+        """
+        if home_users is None:
+            home_users = []
+
+        # Build filtered sections list
+        available_sections = [section.key for section in self.plex.library.sections()]
+        filtered_sections = list(set(available_sections) & set(valid_sections))
+
+        # Prepare users to fetch
+        users_to_fetch = [None]  # always include the main local account
+
+        if users_toggle:
+            added_usernames = set()
+            with self._token_lock:
+                token_items = list(self._user_tokens.items())
+            for username, token in token_items:
+                if token == self.plex_token:
+                    added_usernames.add(username)  # Prevent re-add in tokenless loop
+                    continue
+                if username in skip_watchlist or (token and token in skip_watchlist):
+                    logging.info(f"[USER:{username}] Skipping for watchlist — in skip list")
+                    continue
+                if username not in home_users:
+                    continue
+                users_to_fetch.append(UserProxy(username))
+                added_usernames.add(username)
+
+            # Also add home users without cached tokens (switchHomeUser handles auth)
+            for username in home_users:
+                if username in added_usernames or username in skip_watchlist:
+                    continue
+                users_to_fetch.append(UserProxy(username))
+
+        logging.debug(f"Processing {len(users_to_fetch)} users for watchlist (main + {len(users_to_fetch)-1} home users)")
+
+        # Fetch concurrently using extracted helper methods
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {
+                executor.submit(
+                    self._fetch_user_watchlist, user, valid_sections, watchlist_episodes,
+                    skip_watchlist, rss_url, filtered_sections
+                )
+                for user in users_to_fetch
+            }
+            for future in as_completed(futures):
+                retries = 0
+                while retries < self.retry_limit:
+                    try:
+                        yield from future.result()
+                        break
+                    except Exception as e:
+                        error_str = str(e)
+                        if "429" in error_str or "Too Many Requests" in error_str:
+                            logging.warning(f"[PLEX API] Rate limited. Retrying in {self.delay} seconds...")
+                            time.sleep(self.delay)
+                            retries += 1
+                        else:
+                            _log_api_error("fetch watchlist media", e)
+                            break
