@@ -364,8 +364,11 @@ MediaCache stands on a long line of work:
 - **brimur**[^3]: the original script that inspired the project.
 - **bexem**[^4]: PlexCache.
 - **bbergle**[^5]: this repo; the fork of PlexCache refactored into understandable modules.
-- **StudioNirin**: PlexCache-D, built on that refactor. It made the Plex API work for real-world
-  multi-user setups and added the Web UI, Docker image and Unraid template that MediaCache now builds on.
+- **[StudioNirin](https://github.com/StudioNirin)**: PlexCache-D, built on that refactor. It made
+  the Plex API work for real-world multi-user setups and added the Web UI, Docker image and Unraid
+  template that MediaCache now builds on. Much of the code here is their work. Support them via
+  [GitHub Sponsors](https://github.com/sponsors/StudioNirin), [Nirin.Studio](https://Nirin.Studio)
+  or [Buy Me a Coffee](https://buymeacoffee.com/studionirin).
 - **[Brandon-Haney](https://github.com/Brandon-Haney)**: a large number of contributions to PlexCache-D.
 
 Licensed under the MIT License; see `LICENSE.txt`.
