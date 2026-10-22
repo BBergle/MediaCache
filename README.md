@@ -323,9 +323,10 @@ For additional help, check the [Wiki](https://github.com/StudioNirin/PlexCache-D
 
 ## Jellyfin (Experimental)
 
-Caching runs can use Jellyfin instead of Plex. Pick **Jellyfin** as the media server in setup
-wizard step 2 or under **Settings → Plex Server**. For the CLI, add these to `plexcache_settings.json`
-(`PLEX_URL`/`PLEX_TOKEN` are then not needed):
+Caching runs can use Jellyfin instead of Plex, or Plex and Jellyfin together. Pick **Jellyfin**
+as the media server in setup wizard step 2, or switch on **Plex** and/or **Jellyfin** under
+**Settings → Media Server**. For the CLI, add these to `plexcache_settings.json`
+(`PLEX_URL`/`PLEX_TOKEN` are then not needed; use `"both"` to run Plex and Jellyfin together):
 
 ```json
 "media_server": "jellyfin",
@@ -338,9 +339,16 @@ wizard step 2 or under **Settings → Plex Server**. For the CLI, add these to `
 - **Watchlist** = Favorites (favorite a series to cache its next unwatched `watchlist_episodes`).
 - `jellyfin_user` is the main user (blank = first administrator). With `users_toggle` on, all
   Jellyfin users are included; skip users via `users` entries with `skip_ondeck`/`skip_watchlist`.
-- Requires Jellyfin 10.9+. Path mappings use Jellyfin's paths in place of Plex paths.
+- Requires Jellyfin 10.9+. Path mappings use each server's own paths:
+  with `"media_server": "both"`, add one mapping per server (the Plex path and the Jellyfin path)
+  pointing at the same `real_path`; files are matched on the real path.
+- The Users settings tab lists Plex and Jellyfin users; Jellyfin users are named
+  `"<name> (Jellyfin)"`, e.g. `"Ben (Jellyfin)"`.
 - Plex-only: pinned media, recently added, remote RSS watchlists, Plex OAuth login, and the
-  Libraries/Users settings tabs (the wizard's library picker works with Jellyfin).
+  Libraries settings tab (the wizard's library picker works with Jellyfin).
+- **Upgrading a Jellyfin-only install:** because Jellyfin users are now named `"<name> (Jellyfin)"`,
+  hand-written skip or per-user entries that use bare Jellyfin names no longer match. Open
+  **Settings → Users**, click **Sync Users**, and set those users' options again.
 
 ## Notes
 

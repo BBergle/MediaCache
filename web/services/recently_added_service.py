@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from web.config import DATA_DIR, SETTINGS_FILE
+from core.media_servers import enabled_media_servers
 from core.file_operations import is_sidecar_candidate, name_matches_video_stem
 from core.system_utils import get_array_direct_path, format_bytes, format_cache_age
 from core.media_grouping import format_season_range, group_ordered, stable_group_id
@@ -146,7 +147,7 @@ class RecentlyAddedService:
             logger.warning(f"RecentlyAddedService: settings not loadable: {e}")
             return self._empty_result("MediaCache is not configured yet.")
 
-        if config.plex.media_server == "jellyfin":
+        if "plex" not in enabled_media_servers(config.plex.media_server):
             return self._empty_result("Recently Added needs Plex, so it isn't available with Jellyfin.")
         if not config.plex.plex_url or not config.plex.plex_token:
             return self._empty_result("Plex server is not configured.")
@@ -310,7 +311,9 @@ class RecentlyAddedService:
                 pin_holder_title = item.title if is_pinned else ""
 
             is_ondeck = bool(real_path) and real_path in ondeck_keys
-            is_watchlist = item.file_path in watchlist_keys
+            # Tracker keys are real paths; older entries may still be Plex paths.
+            is_watchlist = item.file_path in watchlist_keys or (
+                bool(real_path) and real_path in watchlist_keys)
             is_cache_tracked = bool(cache_path) and cache_path in timestamps_keys
             is_mover_protected = bool(cache_path) and cache_path in exclude_paths
             is_released = bool(cache_path) and cache_path in released_paths

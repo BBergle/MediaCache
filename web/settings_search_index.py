@@ -35,7 +35,7 @@ _INDEX: List[Dict[str, Any]] = [
     # --- Plex Server -------------------------------------------------------
     {
         "tab": "plex", "setting_id": "media_server",
-        "label": "Media Server", "hint": "Plex, or Jellyfin (experimental) for caching runs.",
+        "label": "Media Server", "hint": "Use Plex, Jellyfin (experimental), or both for caching runs.",
         "section": "Media Server", "subsection": "Server Connection",
         "icon": "server", "tone": "",
         "keywords": ["jellyfin", "media server", "plex", "api key"],

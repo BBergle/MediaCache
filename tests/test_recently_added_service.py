@@ -122,6 +122,13 @@ class TestEnrichState:
         assert rows[0].state == "protected"
         assert rows[0].protected_by == ["Watchlist"]
 
+    def test_watchlist_membership_keyed_by_real_path(self):
+        # The watchlist tracker keys by real path now (both servers share it).
+        svc = _service(on_disk={"/mnt/cache/movies/Movie.mkv"})
+        rows = _enrich(svc, [_item()], watchlist=["/mnt/user/movies/Movie.mkv"])
+        assert rows[0].is_watchlist is True
+        assert rows[0].protected_by == ["Watchlist"]
+
     def test_unknown_location_for_unmapped_path(self):
         svc = _service(on_disk=set())
         rows = _enrich(svc, [_item(plex_path="/somewhere/else/x.mkv")])

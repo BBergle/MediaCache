@@ -17,7 +17,7 @@
                        onchange="var d = this.checked ? 'block' : 'none'; document.getElementById('user-list-section').style.display = d; document.getElementById('auth-link-section').style.display = d; document.getElementById('db-fallback-section').style.display = d; document.getElementById('rss-section').style.display = d;">
                 <span>Enable Multi-User Support</span>
             </label>
-            <div class="form-hint">Cache media from other Plex Home users' OnDeck and Watchlist</div>
+            <div class="form-hint">Cache media from other {% if not jellyfin_enabled %}Plex Home {% endif %}users' OnDeck and Watchlist</div>
         </div>
     </div>
 </div>

@@ -91,9 +91,11 @@ templates.env.globals["share_warning"] = _share_warning
 
 
 def _media_server_name() -> str:
-    """'Jellyfin' or 'Plex', for status text that names the configured server."""
+    """'Plex', 'Jellyfin' or 'Plex and Jellyfin', for status text naming the enabled servers."""
     from web.services.settings_service import get_settings_service  # circular at import time
-    return "Jellyfin" if get_settings_service().get_all().get("media_server") == "jellyfin" else "Plex"
+    from core.media_servers import enabled_media_servers, server_label
+    servers = enabled_media_servers(get_settings_service().get_all().get("media_server"))
+    return " and ".join(server_label(s) for s in servers)
 
 
 templates.env.globals["media_server_name"] = _media_server_name

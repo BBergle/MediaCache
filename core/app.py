@@ -31,6 +31,7 @@ from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock, get
 from core.plex_api import PlexManager, OnDeckItem
 from core.file_operations import MultiPathModifier, SiblingFileFinder, FileFilter, FileMover, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration, get_media_identity, find_matching_plexcached, is_directory_level_file, is_video_file, save_json_atomically
 from core.pinned_media import PinnedMediaTracker, resolve_pins_to_paths
+from core.media_servers import CombinedMediaManager, enabled_media_servers, plex_rating_key, server_label, server_of_user
 
 
 class PlexCacheApp:
@@ -559,27 +560,30 @@ class PlexCacheApp:
         return False
 
     def _init_plex_manager(self) -> None:
-        """Initialize the Plex manager with token cache."""
+        """Initialize the media server manager(s) (Plex, Jellyfin, or both)."""
         logging.debug("Initializing Plex manager...")
         token_cache_file = str(self.config_manager.get_user_tokens_file())
         rss_cache_file = str(self.config_manager.get_rss_cache_file())
         plex_config = self.config_manager.plex
-        if plex_config.media_server == "jellyfin":
-            from core.jellyfin_api import JellyfinManager
-            self.plex_manager = JellyfinManager(
-                plex_config.jellyfin_url, plex_config.jellyfin_api_key, plex_config.jellyfin_user
+        managers = {}
+        for server in enabled_media_servers(plex_config.media_server):
+            if server == "jellyfin":
+                from core.jellyfin_api import JellyfinManager
+                managers[server] = JellyfinManager(
+                    plex_config.jellyfin_url, plex_config.jellyfin_api_key, plex_config.jellyfin_user
+                )
+                continue
+            managers[server] = PlexManager(
+                plex_url=self.config_manager.plex.plex_url,
+                plex_token=self.config_manager.plex.plex_token,
+                retry_limit=self.config_manager.performance.retry_limit,
+                delay=self.config_manager.performance.delay,
+                token_cache_file=token_cache_file,
+                rss_cache_file=rss_cache_file,
+                plex_db_path=self.config_manager.plex.plex_db_path,
+                watchlist_enabled=self.config_manager.cache.watchlist_toggle
             )
-            return
-        self.plex_manager = PlexManager(
-            plex_url=self.config_manager.plex.plex_url,
-            plex_token=self.config_manager.plex.plex_token,
-            retry_limit=self.config_manager.performance.retry_limit,
-            delay=self.config_manager.performance.delay,
-            token_cache_file=token_cache_file,
-            rss_cache_file=rss_cache_file,
-            plex_db_path=self.config_manager.plex.plex_db_path,
-            watchlist_enabled=self.config_manager.cache.watchlist_toggle
-        )
+        self.plex_manager = CombinedMediaManager(managers)
 
     def _init_path_modifier(self) -> None:
         """Initialize path modifier and subtitle finder."""
@@ -1018,7 +1022,8 @@ class PlexCacheApp:
             # Use "main" as fallback username if plex.tv unreachable
             self.plex_manager.load_user_tokens(
                 skip_users=skip_users,
-                settings_users=self.config_manager.plex.users,
+                settings_users=[u for u in self.config_manager.plex.users
+                                if server_of_user(u.get("title", "")) == "plex"],
                 main_username="main"  # Fallback if plex.tv unreachable
             )
 
@@ -1149,10 +1154,8 @@ class PlexCacheApp:
         # viewing gaps (e.g. cache S04E04+E05 while skipping S04E03). See #169.
         modified_paths: Dict[str, None] = {}
 
-        # Prepare OnDeck tracker for new run (preserves first_seen for retention tracking)
         # Snapshot the rating_key index before update loop for upgrade detection
         pre_run_rk_index = {rk: set(paths) for rk, paths in getattr(self.ondeck_tracker, '_rating_key_index', {}).items()}
-        self.ondeck_tracker.prepare_for_run()
 
         # --- Pinned Media (always-cached items) ---
         # Resolve pins BEFORE OnDeck so pinned wins over OnDeck in source_map when
@@ -1176,6 +1179,10 @@ class PlexCacheApp:
             per_user_days=self.config_manager.plex.per_user_ondeck_days,
             prefetch_minimum_minutes=self.config_manager.cache.prefetch_minimum_minutes
         )
+        # Prepare OnDeck tracker for new run (preserves first_seen for retention tracking).
+        # Prepared only after the fetch: a server that failed it keeps its users' entries.
+        missing = self.plex_manager.missing_servers()
+        self.ondeck_tracker.prepare_for_run(keep_user=lambda u: server_of_user(u) in missing)
 
         # Extract just the file paths for path modification
         ondeck_files = [item.file_path for item in ondeck_items_list]
@@ -1205,7 +1212,7 @@ class PlexCacheApp:
                 item.username,
                 episode_info=item.episode_info,
                 is_current_ondeck=item.is_current_ondeck,
-                rating_key=item.rating_key
+                rating_key=plex_rating_key(item.username, item.rating_key)
             )
             # Build media_info_map from OnDeck metadata
             ep = item.episode_info
@@ -1350,22 +1357,35 @@ class PlexCacheApp:
         # Check for files that should be moved back to array (no longer needed in cache)
         # Only check if watched_move is enabled - otherwise files stay on cache indefinitely
         # Skip if OnDeck or watchlist data is incomplete to prevent accidental moves.
-        # The watchlist guard only applies when watchlist caching is enabled - with it
-        # off, no cached file is held by the watchlist, so incomplete plex.tv data
-        # can't cause a wrong move.
         if self.config_manager.cache.watched_move:
-            if not self.plex_manager.is_ondeck_data_complete():
-                logging.warning("Skipping array restore - OnDeck data incomplete (Plex server unreachable)")
-                logging.warning("Files will remain on cache until next successful run")
-            elif (self.config_manager.cache.watchlist_toggle
-                    and not self.plex_manager.is_watchlist_data_complete()):
-                logging.warning("Skipping array restore - watchlist data incomplete (plex.tv unreachable)")
-                logging.warning("Files will remain on cache until next successful run")
-            else:
+            if self._can_remove_from_cache("array restore"):
                 logging.debug("Checking for files to move back to array...")
                 # Provide Plex media type metadata for classification
                 self.file_filter.set_media_info_map(self.media_info_map)
                 self._check_files_to_move_back_to_array()
+
+    def _incomplete_data_reason(self) -> Optional[str]:
+        """Why media server data is too incomplete to drop files from cache, or None.
+
+        The watchlist guard only applies when watchlist caching is enabled - with it
+        off, no cached file is held by the watchlist, so incomplete plex.tv data
+        can't cause a wrong removal.
+        """
+        if not self.plex_manager.is_ondeck_data_complete():
+            return ", ".join(sorted(server_label(s) for s in self.plex_manager.missing_servers()))
+        if (self.config_manager.cache.watchlist_toggle
+                and not self.plex_manager.is_watchlist_data_complete()):
+            return "watchlist"
+        return None
+
+    def _can_remove_from_cache(self, action: str) -> bool:
+        """True when every media server's data is complete enough to drop files from cache."""
+        reason = self._incomplete_data_reason()
+        if reason is None:
+            return True
+        logging.warning(f"Skipping {action} - media server data incomplete ({reason})")
+        logging.warning("Files will remain on cache until next successful run")
+        return False
 
     def _process_pinned_media(self, modified_paths: Dict[str, None]) -> None:
         """Resolve pinned media to real-path file set and merge into the run.
@@ -1528,8 +1548,10 @@ class PlexCacheApp:
             # Build list of home users from settings (only home users have accessible watchlists)
             home_users = [
                 u.get("title") for u in self.config_manager.plex.users
-                if u.get("is_local", False)
+                if u.get("is_local", False) and server_of_user(u.get("title", "")) == "plex"
             ]
+            # Tracker entries are keyed by real path so both servers' entries for a file meet
+            self.watchlist_tracker.rekey_paths(lambda p: self.file_path_modifier.convert_plex_to_real(p)[0])
             fetched_watchlist = list(self.plex_manager.get_watchlist_media(
                 self.config_manager.plex.valid_sections,
                 self.config_manager.cache.watchlist_episodes,
@@ -1543,17 +1565,18 @@ class PlexCacheApp:
                     logging.info("Operation stopped during watchlist processing")
                     return result_set
                 file_path, username, watchlisted_at, episode_info, rating_key, media_type = item
+                real_path = self.file_path_modifier.convert_plex_to_real(file_path)[0]
 
                 # Update watchlist tracker with timestamp and rating_key
                 self.watchlist_tracker.update_entry(
-                    file_path, username, watchlisted_at,
-                    rating_key=rating_key, media_type=media_type,
+                    real_path, username, watchlisted_at,
+                    rating_key=plex_rating_key(username, rating_key), media_type=media_type,
                 )
 
                 # Check watchlist retention (skip expired items, with per-user override)
                 user_retention = per_user_wl_days.get(username, retention_days)
                 if user_retention > 0:
-                    if self.watchlist_tracker.is_expired(file_path, user_retention, username=username):
+                    if self.watchlist_tracker.is_expired(real_path, user_retention, username=username):
                         expired_count += 1
                         continue
 
@@ -1586,16 +1609,17 @@ class PlexCacheApp:
                             logging.info("Operation stopped during watchlist processing")
                             return result_set
                         file_path, username, watchlisted_at, episode_info, rating_key, media_type = item
+                        real_path = self.file_path_modifier.convert_plex_to_real(file_path)[0]
                         # Update tracker (RSS items use pubDate from feed)
                         self.watchlist_tracker.update_entry(
-                            file_path, username, watchlisted_at,
-                            rating_key=rating_key, media_type=media_type,
+                            real_path, username, watchlisted_at,
+                            rating_key=plex_rating_key(username, rating_key), media_type=media_type,
                         )
 
                         # Check watchlist retention (skip expired items, with per-user override)
                         rss_user_retention = per_user_wl_days.get(username, retention_days)
                         if rss_user_retention > 0:
-                            if self.watchlist_tracker.is_expired(file_path, rss_user_retention, username=username):
+                            if self.watchlist_tracker.is_expired(real_path, rss_user_retention, username=username):
                                 rss_expired_count += 1
                                 continue
 
@@ -1705,13 +1729,14 @@ class PlexCacheApp:
                 return '/mnt/user0/' + p[len('/mnt/user/'):]
             return p
 
-        # Build current rating_key → set of real paths
+        # Build current rating_key → set of real paths (Plex keys only)
         current_rk_paths = {}
         for item in ondeck_items_list:
-            if not item.rating_key:
+            rating_key = plex_rating_key(item.username, item.rating_key)
+            if not rating_key:
                 continue
             real_path = plex_to_real.get(item.file_path, item.file_path)
-            current_rk_paths.setdefault(item.rating_key, set()).add(real_path)
+            current_rk_paths.setdefault(rating_key, set()).add(real_path)
 
         upgrades_detected = 0
         for rk, old_paths in pre_run_rk_index.items():
@@ -2395,7 +2420,8 @@ class PlexCacheApp:
 
         # Step 2: Run smart eviction BEFORE filtering/caching (frees more space if needed)
         # This runs after array moves so we have accurate space calculations
-        if self.media_to_cache:
+        if (self.media_to_cache and self.config_manager.cache.cache_eviction_mode != "none"
+                and self._can_remove_from_cache("eviction")):
             evicted_count, evicted_bytes = self._run_smart_eviction()
             self.evicted_count += evicted_count
             self.evicted_bytes += evicted_bytes
@@ -3568,8 +3594,13 @@ class PlexCacheApp:
 
         # Clean up stale watchlist tracker entries
         # Skip in dry-run mode to avoid modifying tracking files
+        # Stale cleanup waits while a server is missing, so its entries and retention clocks survive
         if hasattr(self, 'watchlist_tracker') and self.watchlist_tracker and not self.dry_run:
-            self.watchlist_tracker.cleanup_stale_entries()
+            reason = self._incomplete_data_reason()
+            if reason is None:
+                self.watchlist_tracker.cleanup_stale_entries()
+            else:
+                logging.info(f"Keeping stale watchlist entries - media server data incomplete ({reason})")
             self.watchlist_tracker.cleanup_missing_files()
 
         # Log results summary for all runs (INFO level)

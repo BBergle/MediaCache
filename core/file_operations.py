@@ -1371,6 +1371,41 @@ class WatchlistTracker(JSONTracker):
 
             self._save()
 
+    def rekey_paths(self, convert: Callable[[str], str]) -> int:
+        """Re-key every entry to convert(key); merge entries that collide.
+
+        On collision the already-present target keeps its fields, except users
+        are unioned and the most recent watchlisted_at / last_seen win.
+
+        Returns:
+            Number of keys that changed. Saves only if any changed.
+        """
+        with self._lock:
+            rekeyed: Dict[str, dict] = {}
+            moved = []
+            for key, entry in self._data.items():
+                new_key = convert(key)
+                if new_key == key:
+                    rekeyed[key] = entry
+                else:
+                    moved.append((new_key, entry))
+            for new_key, entry in moved:
+                target = rekeyed.get(new_key)
+                if target is None:
+                    rekeyed[new_key] = entry
+                    continue
+                for u in entry.get('users', []):
+                    if u not in target.setdefault('users', []):
+                        target['users'].append(u)
+                # ISO strings from the same source sort chronologically
+                for field in ('watchlisted_at', 'last_seen'):
+                    if entry.get(field) and entry[field] > target.get(field, ''):
+                        target[field] = entry[field]
+            if moved:
+                self._data = rekeyed
+                self._save()
+            return len(moved)
+
     def is_expired(self, file_path: str, retention_days: int, username: str = None) -> bool:
         """Check if a watchlist item has expired based on retention period.
 
@@ -1691,7 +1726,7 @@ class OnDeckTracker(JSONTracker):
                 self._save()
                 logging.debug(f"Removed {self._tracker_name} entry for: {file_path}")
 
-    def prepare_for_run(self) -> None:
+    def prepare_for_run(self, keep_user: Optional[Callable[[str], bool]] = None) -> None:
         """Prepare tracker for a new run while preserving first_seen timestamps.
 
         Clears per-run fields (users, ondeck_users, episode_info) on all entries
@@ -1700,13 +1735,21 @@ class OnDeckTracker(JSONTracker):
 
         Unlike the old clear_for_run(), this does NOT delete entries — first_seen
         timestamps are preserved so OnDeck retention can accumulate correctly.
+
+        Users for whom keep_user(user) is true (e.g. a media server that is
+        down this run) are carried over, and entries still holding one count
+        as seen so cleanup_unseen() keeps them.
         """
         with self._lock:
             self._seen_this_run = set()
             for file_path, entry in self._data.items():
-                entry['users'] = []
-                entry['ondeck_users'] = []
-                entry.pop('episode_info', None)
+                kept = [u for u in entry.get('users', []) if keep_user and keep_user(u)]
+                entry['users'] = kept
+                entry['ondeck_users'] = [u for u in entry.get('ondeck_users', []) if u in kept]
+                if kept:
+                    self._seen_this_run.add(file_path)
+                else:
+                    entry.pop('episode_info', None)
             # Don't save yet — update_entry() calls will save as entries are refreshed
             logging.debug("Prepared OnDeck tracker for new run (preserved first_seen timestamps)")
 
@@ -2757,6 +2800,61 @@ class PlexcachedMigration:
                 self._last_display_lines = len(lines)
 
 
+def merge_shared_real_paths(mappings: List['PathMapping']) -> List['PathMapping']:
+    """Mappings from two servers can point at one real folder; share their flags.
+
+    If any mapping in the group is enabled/cacheable, all are. Missing cache paths
+    come from the first cacheable mapping. Returns copies; input is untouched.
+    """
+    import dataclasses
+
+    groups: Dict[str, List['PathMapping']] = {}
+    for m in mappings:
+        groups.setdefault(m.real_path.rstrip("/"), []).append(m)
+
+    merged = {}
+    for group in groups.values():
+        enabled = any(m.enabled for m in group)
+        source = next((m for m in group if m.cacheable), None)
+        for m in group:
+            changes = {"enabled": enabled}
+            if source:
+                changes["cacheable"] = True
+                changes["cache_path"] = m.cache_path or source.cache_path
+                changes["host_cache_path"] = m.host_cache_path or source.host_cache_path
+            merged[id(m)] = dataclasses.replace(m, **changes)
+    return [merged[id(m)] for m in mappings]
+
+
+def find_mapping_conflicts(mappings: List[dict]) -> List[str]:
+    """Warnings for raw path_mappings dicts that share a folder or server path."""
+    warnings = []
+    by_real: Dict[str, List[dict]] = {}
+    by_plex: Dict[str, List[dict]] = {}
+    for m in mappings:
+        by_real.setdefault(m.get("real_path", "").rstrip("/"), []).append(m)
+        by_plex.setdefault(m.get("plex_path", "").rstrip("/"), []).append(m)
+
+    for group in by_real.values():
+        first = group[0]
+        for key, label, outcome in (("cacheable", "caching", "cached"), ("enabled", "enabled", "used")):
+            other = next((m for m in group[1:] if m.get(key, True) != first.get(key, True)), None)
+            if other:
+                warnings.append(
+                    f"'{first.get('name')}' and '{other.get('name')}' point at {first.get('real_path')} "
+                    f"but disagree on {label}. It will be {outcome}.")
+
+    for group in by_plex.values():
+        first = group[0]
+        other = next((m for m in group[1:]
+                      if m.get("real_path", "").rstrip("/") != first.get("real_path", "").rstrip("/")), None)
+        if other:
+            warnings.append(
+                f"'{first.get('name')}' and '{other.get('name')}' use the same server path "
+                f"{first.get('plex_path')} for different folders. Only one can apply.")
+    return warnings
+
+
 class MultiPathModifier:
     """Handles path conversion with multiple mapping support.
 
@@ -2784,7 +2882,7 @@ class MultiPathModifier:
 
         # Keep all mappings for disabled path checking, sorted by plex_path length (longest first)
         self.all_mappings = sorted(
-            mappings,
+            merge_shared_real_paths(mappings),
             key=lambda m: len(m.plex_path),
             reverse=True
         )
@@ -3837,6 +3935,7 @@ class FileFilter:
             )
 
             pinned_set = current_pinned_cache_paths or set()
+            needed_paths = current_ondeck_items | current_watchlist_items
 
             # Check each cached file
             for cache_file in cache_files:
@@ -3855,6 +3954,17 @@ class FileFilter:
                 # array on the next run even though smart/FIFO eviction protects them.
                 if check_path in pinned_set:
                     logging.debug(f"Keeping pinned file in cache: {os.path.basename(cache_file)}")
+                    continue
+
+                # Array (real) path of this cache file
+                if self.path_modifier:
+                    array_file, _ = self.path_modifier.convert_cache_to_real(check_path)
+                else:
+                    array_file = check_path.replace(self.cache_dir, self.real_source, 1)
+
+                # Still on someone's OnDeck/Watchlist by real path: keep. Name matching
+                # below can miss this when servers name the same show differently.
+                if array_file in needed_paths:
                     continue
 
                 # Try stored metadata first for classification (check_path matches timestamp tracker keys)
@@ -3918,14 +4028,10 @@ class FileFilter:
                     except OSError as e:
                         logging.debug(f"Could not check hard link count for {cache_file}: {e}")
 
-                # Move file back to array (use container path for path conversion)
-                if self.path_modifier:
-                    array_file, _ = self.path_modifier.convert_cache_to_real(check_path)
-                    if array_file is None:
-                        logging.warning(f"Could not convert cache path to array path: {cache_file}")
-                        continue
-                else:
-                    array_file = check_path.replace(self.cache_dir, self.real_source, 1)
+                # Move file back to array
+                if array_file is None:
+                    logging.warning(f"Could not convert cache path to array path: {cache_file}")
+                    continue
 
                 display_name = self._extract_display_name(cache_file)
                 logging.debug(f"Media no longer needed, will move back to array: {display_name} - {cache_file}")

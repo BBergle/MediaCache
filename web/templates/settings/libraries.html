@@ -9,6 +9,15 @@
     <div class="card-body">
         <p class="text-muted mb-2">Select libraries to cache and configure their path mappings.</p>
 
+        {% if mapping_conflicts %}
+        <div class="alert alert-warning">
+            <i data-lucide="alert-triangle"></i>
+            <ul style="margin: 0; padding-left: 1.2rem;">
+                {% for warning in mapping_conflicts %}<li>{{ warning }}</li>{% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
         {% if not library_cards %}
         <div class="alert alert-info">
             <i data-lucide="alert-circle"></i>

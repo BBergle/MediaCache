@@ -17,6 +17,7 @@ from typing import Dict, Generator, List, Optional, Tuple
 
 import requests
 
+from core.media_servers import jellyfin_username
 from core.plex_api import OnDeckItem, PlexManager
 
 FIELDS = "Path,MediaSources"
@@ -110,7 +111,12 @@ class JellyfinManager:
 
     def _users_for(self, users_toggle: bool, skip: List[str]) -> List[str]:
         names = list(self._users) if users_toggle else [self.main_user]
-        return [n for n in names if n == self.main_user or n not in skip]
+        return [n for n in names if n == self.main_user or jellyfin_username(n) not in skip]
+
+    def list_users(self) -> List[dict]:
+        """All Jellyfin users; only the main user is flagged is_admin."""
+        return [{"name": u["Name"], "title": jellyfin_username(u["Name"]), "id": u["Id"],
+                 "is_admin": u["Name"] == self.main_user} for u in self._get("/Users")]
 
     def get_active_sessions(self) -> List[str]:
         """Returns file paths (not session objects) of everything now playing."""
@@ -129,7 +135,7 @@ class JellyfinManager:
                           prefetch_minimum_minutes: int = 0) -> List[OnDeckItem]:
         items: List[OnDeckItem] = []
         for name in self._users_for(users_toggle, skip_ondeck):
-            days = (per_user_days or {}).get(name, days_to_monitor)
+            days = (per_user_days or {}).get(jellyfin_username(name), days_to_monitor)
             try:
                 found = self._fetch_user_on_deck(name, days, number_episodes, prefetch_minimum_minutes)
             except requests.RequestException as e:
@@ -158,10 +164,10 @@ class JellyfinManager:
                 continue
             seen.add(item["Id"])
             info = _episode_info(item) if item.get("Type") == "Episode" else None
-            result += [OnDeckItem(p, name, info, True, item["Id"]) for p in _paths(item)]
+            result += [OnDeckItem(p, jellyfin_username(name), info, True, item["Id"]) for p in _paths(item)]
             if item.get("Type") == "Episode" and info and item.get("SeriesId"):
                 for ep in self._next_episodes(uid, item, number_episodes, prefetch_minimum_minutes):
-                    result += [OnDeckItem(p, name, _episode_info(ep), False, ep["Id"]) for p in _paths(ep)]
+                    result += [OnDeckItem(p, jellyfin_username(name), _episode_info(ep), False, ep["Id"]) for p in _paths(ep)]
         return result
 
     def _next_episodes(self, uid: str, item: dict, number_episodes: int,
@@ -205,7 +211,7 @@ class JellyfinManager:
         for item in favorites:
             if item.get("Type") == "Movie":
                 for p in _paths(item):
-                    yield (p, name, None, None, item["Id"], "movie")
+                    yield (p, jellyfin_username(name), None, None, item["Id"], "movie")
                 continue
             if item.get("Type") == "Series":
                 episodes = self._get(f"/Shows/{item['Id']}/Episodes", userId=uid,
@@ -216,4 +222,4 @@ class JellyfinManager:
                 episodes = [item]
             for ep in episodes:
                 for p in _paths(ep):
-                    yield (p, name, None, _episode_info(ep), ep["Id"], "episode")
+                    yield (p, jellyfin_username(name), None, _episode_info(ep), ep["Id"], "episode")

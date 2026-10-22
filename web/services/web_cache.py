@@ -278,7 +278,9 @@ def _compute_dashboard_stats() -> dict:
     maintenance_service = get_maintenance_service()
 
     cache_stats = cache_service.get_cache_stats()
-    plex_connected = settings_service.check_plex_connection()
+    from core.media_servers import server_label
+    connections = settings_service.check_media_server_connections()
+    plex_connected = all(connections.values())
     last_run = settings_service.get_last_run_time() or "Never"
     schedule_status = scheduler_service.get_status()
     health = maintenance_service.get_health_summary()
@@ -305,6 +307,7 @@ def _compute_dashboard_stats() -> dict:
         "last_run": last_run,
         "is_running": operation_runner.is_running,
         "plex_connected": plex_connected,
+        "server_status": [{"name": server_label(s), "connected": ok} for s, ok in connections.items()],
         "schedule_enabled": schedule_status.get("enabled", False),
         "next_run": schedule_status.get("next_run_display", "Not scheduled"),
         "next_run_relative": schedule_status.get("next_run_relative"),

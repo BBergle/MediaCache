@@ -5,6 +5,7 @@ SettingsService over a temp settings file, with Jellyfin's HTTP calls mocked.
 """
 
 import json
+import re
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -59,7 +60,7 @@ def client(tmp_path):
 def test_settings_tab_saves_and_tests_jellyfin(client):
     test_client, svc, _ = client
     r = test_client.put("/settings/plex", data={
-        "media_server": "jellyfin", "plex_url": "http://plex:32400", "plex_token": "t",
+        "jellyfin_enabled": "on", "plex_url": "http://plex:32400", "plex_token": "t",
         "jellyfin_url": " http://jf:8096 ", "jellyfin_api_key": "key", "jellyfin_user": ""})
     assert r.status_code == 200
     raw = svc._load_raw()
@@ -67,7 +68,8 @@ def test_settings_tab_saves_and_tests_jellyfin(client):
            ("jellyfin", "http://jf:8096", "http://plex:32400")
 
     page = test_client.get("/settings/plex").text
-    assert '<option value="jellyfin" selected>' in page and 'value="http://jf:8096"' in page
+    assert re.search(r'name="jellyfin_enabled"[^>]*checked', page) and 'value="http://jf:8096"' in page
+    assert not re.search(r'name="plex_enabled"[^>]*checked', page)
     assert "Connected to Jellyfin as admin" in test_client.post("/settings/plex/test").text
     assert "</i> Media Server </a>" in " ".join(page.split())  # tab is no longer "Plex Server"
 
@@ -100,3 +102,54 @@ def test_wizard_step2_jellyfin_feeds_step3_libraries(client):
     with patch("core.jellyfin_api.JellyfinManager._get", side_effect=requests.ConnectionError("down")):
         r = test_client.post("/setup/step2", data={"media_server": "jellyfin", "jellyfin_url": "http://jf"})
     assert "Cannot connect to Jellyfin" in r.text and '<option value="jellyfin" selected>' in r.text
+
+
+BOTH_FORM = {"plex_enabled": "on", "jellyfin_enabled": "on", "plex_url": "http://plex:32400",
+             "plex_token": "t", "jellyfin_url": "http://jf:8096", "jellyfin_api_key": "key",
+             "jellyfin_user": ""}
+
+
+def test_both_servers_save_and_status(client):
+    test_client, svc, _ = client
+    test_client.put("/settings/plex", data=BOTH_FORM)
+    assert svc._load_raw()["media_server"] == "both"
+    page = test_client.get("/settings/plex").text
+    assert re.search(r'name="plex_enabled"[^>]*checked', page)
+    assert re.search(r'name="jellyfin_enabled"[^>]*checked', page)
+
+    with patch("requests.get", return_value=MagicMock(status_code=200)):
+        assert svc.check_media_server_connections() == {"plex": True, "jellyfin": True}
+    with patch("requests.get", side_effect=requests.ConnectionError("down")):
+        assert svc.check_media_server_connections() == {"plex": False, "jellyfin": True}
+        assert svc.check_plex_connection() is False
+
+    from web.config import _media_server_name
+    with patch("web.services.settings_service.get_settings_service", return_value=svc):
+        assert _media_server_name() == "Plex and Jellyfin"
+
+
+def test_save_rejects_no_servers(client):
+    test_client, svc, _ = client
+    r = test_client.put("/settings/plex", data={"plex_url": "http://other:32400"})
+    assert "Turn on at least one media server." in r.text
+    raw = svc._load_raw()
+    assert "media_server" not in raw and raw["PLEX_URL"] == "http://plex:32400"
+
+
+def test_test_connection_reports_each_server(client):
+    test_client, svc, _ = client
+    test_client.put("/settings/plex", data=BOTH_FORM)
+    with patch("plexapi.server.PlexServer", side_effect=Exception("Connection refused")):
+        text = test_client.post("/settings/plex/test").text
+    assert "Plex: " in text and "Jellyfin: Connected to Jellyfin as admin" in text and "alert-error" in text
+
+
+def test_setup_complete_needs_every_enabled_server(client):
+    _, svc, setup_router = client
+    raw = svc._load_raw()
+    raw.update(media_server="both")
+    svc._save_raw(raw)
+    assert setup_router.is_setup_complete() is False
+    raw.update(jellyfin_url="http://jf", jellyfin_api_key="k")
+    svc._save_raw(raw)
+    assert setup_router.is_setup_complete() is True
