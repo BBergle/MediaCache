@@ -1,5 +1,7 @@
 from core.media_servers import (enabled_media_servers, media_server_value, jellyfin_username,
-                                server_of_user, server_label, plex_rating_key)
+                                server_of_user, server_label, plex_rating_key,
+                                CombinedMediaManager)
+import pytest
 
 def test_enabled_media_servers():
     assert enabled_media_servers("plex") == ["plex"]
@@ -22,3 +24,72 @@ def test_usernames_are_per_server():
 def test_only_plex_rating_keys_survive():
     assert plex_rating_key("Ben", "123") == "123"
     assert plex_rating_key("Ben (Jellyfin)", "a1b2c3") is None
+
+
+class FakeManager:
+    def __init__(self, ondeck=(), watchlist=(), sessions=(), fail_connect=False):
+        self.plex = object()
+        self.ondeck, self.watchlist, self.sessions = list(ondeck), list(watchlist), list(sessions)
+        self.fail_connect = fail_connect
+        self.ondeck_complete = self.watchlist_complete = True
+        self.rss_seen = "unset"
+
+    def connect(self):
+        if self.fail_connect:
+            raise ConnectionError("down")
+
+    def get_active_sessions(self):
+        return self.sessions
+
+    def get_on_deck_media(self, *args, **kwargs):
+        return self.ondeck
+
+    def get_watchlist_media(self, *args, rss_url=None, home_users=None, **kwargs):
+        self.rss_seen = rss_url
+        yield from self.watchlist
+
+    def is_ondeck_data_complete(self):
+        return self.ondeck_complete
+
+    def is_watchlist_data_complete(self):
+        return self.watchlist_complete
+
+    def get_newly_discovered_users(self):
+        return ["new"]
+
+def _combined(**fakes):
+    c = CombinedMediaManager(fakes)
+    c.connect()
+    return c
+
+def test_merges_both_servers_in_order():
+    p, j = FakeManager(ondeck=["A"], watchlist=["w1"], sessions=["s1"]), FakeManager(ondeck=["B"], watchlist=["w2"], sessions=["s2"])
+    c = _combined(plex=p, jellyfin=j)
+    assert c.get_on_deck_media([1], 7, 5, True, []) == ["A", "B"]
+    assert c.get_active_sessions() == ["s1", "s2"]
+    assert list(c.get_watchlist_media([1], 1, True, [], rss_url="http://rss", home_users=["x"])) == ["w1", "w2"]
+    assert (p.rss_seen, j.rss_seen) == ("http://rss", None)
+    assert c.missing_servers() == set() and c.is_ondeck_data_complete() and c.is_watchlist_data_complete()
+
+def test_one_server_down_is_missing_but_run_continues():
+    p, j = FakeManager(ondeck=["A"]), FakeManager(ondeck=["B"], fail_connect=True)
+    c = _combined(plex=p, jellyfin=j)
+    assert c.missing_servers() == {"jellyfin"}
+    assert c.get_on_deck_media() == ["A"]
+    assert not c.is_ondeck_data_complete() and not c.is_watchlist_data_complete()
+    assert c.plex is p.plex
+
+def test_all_servers_down_raises():
+    c = CombinedMediaManager({"plex": FakeManager(fail_connect=True), "jellyfin": FakeManager(fail_connect=True)})
+    with pytest.raises(ConnectionError, match="No media server"):
+        c.connect()
+
+def test_incomplete_server_counts_as_missing():
+    j = FakeManager()
+    j.ondeck_complete = False
+    c = _combined(plex=FakeManager(), jellyfin=j)
+    assert c.missing_servers() == {"jellyfin"} and not c.is_ondeck_data_complete()
+
+def test_plex_only_features_need_plex():
+    c = _combined(jellyfin=FakeManager())
+    assert c.plex is None and c.get_newly_discovered_users() == []
