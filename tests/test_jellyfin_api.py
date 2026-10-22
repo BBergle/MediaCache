@@ -1,5 +1,7 @@
 """JellyfinManager maps Jellyfin API responses onto the PlexManager run interface."""
 
+from datetime import datetime, timedelta, timezone
+
 from core.jellyfin_api import JellyfinManager
 
 
@@ -50,18 +52,20 @@ def test_jellyfin_manager():
 
     # OnDeck: recent resume movie + next-up episode + 2 prefetched; old movie filtered out
     items = m.get_on_deck_media([], 30, 2, users_toggle=False, skip_ondeck=[])
+    assert items[0].username == "admin (Jellyfin)"
     got = [(i.file_path, i.is_current_ondeck) for i in items]
     assert got == [("/movies/M.mkv", True), ("/tv/Show/S1E2.mkv", True),
                    ("/tv/Show/S1E3.mkv", False), ("/tv/Show/S2E1.mkv", False)]
     assert items[1].episode_info == {"show": "Show", "season": 1, "episode": 2}
 
     # users_toggle fetches every user except skipped ones (main user never skipped)
-    m.get_on_deck_media([], 30, 0, users_toggle=True, skip_ondeck=["kid", "admin"])
+    m.get_on_deck_media([], 30, 0, users_toggle=True, skip_ondeck=["kid (Jellyfin)", "admin (Jellyfin)"])
     resume_users = [p["userId"] for path, p in calls if path == "/UserItems/Resume"]
     assert resume_users == ["u1", "u1"]
 
     # Watchlist = favorites: first N unplayed episodes of a favorite series + movies
     wl = list(m.get_watchlist_media([], 2, users_toggle=False, skip_watchlist=[]))
+    assert all(w[1] == "admin (Jellyfin)" for w in wl)
     assert [(w[0], w[5]) for w in wl] == [("/tv/Show/S1E2.mkv", "episode"),
                                           ("/tv/Show/S1E3.mkv", "episode"),
                                           ("/movies/M.mkv", "movie")]
@@ -69,6 +73,22 @@ def test_jellyfin_manager():
 
     assert m.get_active_sessions() == ["/movies/M.mkv"]
     assert m.is_ondeck_data_complete() and m.is_watchlist_data_complete()
+
+
+def test_per_user_days_use_qualified_names():
+    m, calls = _manager()
+    m.get_on_deck_media([], 30, 0, users_toggle=False, skip_ondeck=[],
+                        per_user_days={"admin (Jellyfin)": 1})
+    cutoff = [p["nextUpDateCutoff"] for path, p in calls if path == "/Shows/NextUp"][-1]
+    assert cutoff > (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+
+
+def test_list_users():
+    m, _ = _manager()
+    assert m.list_users() == [
+        {"name": "admin", "title": "admin (Jellyfin)", "id": "u1", "is_admin": True},
+        {"name": "kid", "title": "kid (Jellyfin)", "id": "u2", "is_admin": False},
+    ]
 
 
 def test_jellyfin_libraries():
