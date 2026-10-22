@@ -307,17 +307,24 @@ def test_watchlist_rss_items_get_real_paths_and_plex_rating_keys():
 
 # --- path mappings ---
 
-def test_path_mappings_are_merged_for_every_consumer():
+def test_path_mappings_keep_user_flags_while_conversion_shares_them():
+    plex = PathMapping(name="Plex", plex_path="/data/tv", real_path="/mnt/user/tv",
+                       cache_path="/mnt/cache/tv", cacheable=True, enabled=True)
+    jf = PathMapping(name="Jellyfin", plex_path="/media/tv", real_path="/mnt/user/tv",
+                     cache_path=None, cacheable=False, enabled=False)
     app = PlexCacheApp.__new__(PlexCacheApp)
     cm = MagicMock()
     cm.has_legacy_path_arrays.return_value = False
-    cm.paths.path_mappings = [
-        PathMapping(name="Plex", plex_path="/data/tv", real_path="/mnt/user/tv",
-                    cache_path="/mnt/cache/tv", cacheable=True, enabled=True),
-        PathMapping(name="Jellyfin", plex_path="/media/tv", real_path="/mnt/user/tv",
-                    cache_path=None, cacheable=False, enabled=True),
-    ]
+    cm.paths.path_mappings = [plex, jf]
     app.config_manager = cm
     app._init_path_modifier()
-    jf = cm.paths.path_mappings[1]
-    assert jf.cacheable and jf.cache_path == "/mnt/cache/tv"
+
+    # Settings keep the user's own flags (they are saved back to the settings file)
+    assert cm.paths.path_mappings[0] is plex and cm.paths.path_mappings[1] is jf
+    assert not jf.enabled and not jf.cacheable and jf.cache_path is None
+
+    # Path conversion shares the folder's flags
+    real, _ = app.file_path_modifier.convert_plex_to_real("/media/tv/Show/e1.mkv")
+    assert real == "/mnt/user/tv/Show/e1.mkv"
+    cache, _ = app.file_path_modifier.convert_real_to_cache(real)
+    assert cache == "/mnt/cache/tv/Show/e1.mkv"

@@ -29,7 +29,7 @@ from core.config import ConfigManager
 from core.logging_config import LoggingManager, reset_warning_error_flag
 from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock, get_disk_usage, get_array_direct_path, detect_zfs, set_zfs_prefixes, format_bytes, create_dir_with_ownership, check_cache_share_alignment, cleanup_empty_parent_folders, resolve_cache_boundary, sweep_empty_folders
 from core.plex_api import PlexManager, OnDeckItem
-from core.file_operations import merge_shared_real_paths, MultiPathModifier, SiblingFileFinder, FileFilter, FileMover, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration, get_media_identity, find_matching_plexcached, is_directory_level_file, is_video_file, save_json_atomically
+from core.file_operations import MultiPathModifier, SiblingFileFinder, FileFilter, FileMover, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration, get_media_identity, find_matching_plexcached, is_directory_level_file, is_video_file, save_json_atomically
 from core.pinned_media import PinnedMediaTracker, resolve_pins_to_paths
 from core.media_servers import CombinedMediaManager, enabled_media_servers, plex_rating_key, server_label, server_of_user
 
@@ -589,9 +589,7 @@ class PlexCacheApp:
         """Initialize path modifier and subtitle finder."""
         logging.debug("Initializing file operation components...")
 
-        # Plex and Jellyfin mappings for one folder share their flags, for every consumer
-        all_mappings = merge_shared_real_paths(self.config_manager.paths.path_mappings or [])
-        self.config_manager.paths.path_mappings = all_mappings
+        all_mappings = self.config_manager.paths.path_mappings or []
         enabled_mappings = [m for m in all_mappings if m.enabled]
         logging.info(f"[CONFIG] Using multi-path mode with {len(all_mappings)} mappings ({len(enabled_mappings)} enabled)")
         self.file_path_modifier = MultiPathModifier(mappings=all_mappings)
