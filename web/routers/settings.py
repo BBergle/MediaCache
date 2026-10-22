@@ -23,6 +23,7 @@ from core.file_operations import (
     PRIORITY_RANGE_ONDECK_MAX,
     PRIORITY_RANGE_WATCHLIST_MIN,
     PRIORITY_RANGE_WATCHLIST_MAX,
+    find_mapping_conflicts,
 )
 
 
@@ -628,6 +629,7 @@ def settings_libraries(request: Request):
             "active_tab": "libraries",
             "library_cards": library_cards,
             "orphan_mappings": orphan_mappings,
+            "mapping_conflicts": find_mapping_conflicts(mappings),
         }
     )
 

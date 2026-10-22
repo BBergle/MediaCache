@@ -2800,6 +2800,61 @@ class PlexcachedMigration:
                 self._last_display_lines = len(lines)
 
 
+def merge_shared_real_paths(mappings: List['PathMapping']) -> List['PathMapping']:
+    """Mappings from two servers can point at one real folder; share their flags.
+
+    If any mapping in the group is enabled/cacheable, all are. Missing cache paths
+    come from the first cacheable mapping. Returns copies; input is untouched.
+    """
+    import dataclasses
+
+    groups: Dict[str, List['PathMapping']] = {}
+    for m in mappings:
+        groups.setdefault(m.real_path.rstrip("/"), []).append(m)
+
+    merged = {}
+    for group in groups.values():
+        enabled = any(m.enabled for m in group)
+        source = next((m for m in group if m.cacheable), None)
+        for m in group:
+            changes = {"enabled": enabled}
+            if source:
+                changes["cacheable"] = True
+                changes["cache_path"] = m.cache_path or source.cache_path
+                changes["host_cache_path"] = m.host_cache_path or source.host_cache_path
+            merged[id(m)] = dataclasses.replace(m, **changes)
+    return [merged[id(m)] for m in mappings]
+
+
+def find_mapping_conflicts(mappings: List[dict]) -> List[str]:
+    """Warnings for raw path_mappings dicts that share a folder or server path."""
+    warnings = []
+    by_real: Dict[str, List[dict]] = {}
+    by_plex: Dict[str, List[dict]] = {}
+    for m in mappings:
+        by_real.setdefault(m.get("real_path", "").rstrip("/"), []).append(m)
+        by_plex.setdefault(m.get("plex_path", "").rstrip("/"), []).append(m)
+
+    for group in by_real.values():
+        first = group[0]
+        for key, label, outcome in (("cacheable", "caching", "cached"), ("enabled", "enabled", "used")):
+            other = next((m for m in group[1:] if m.get(key, True) != first.get(key, True)), None)
+            if other:
+                warnings.append(
+                    f"'{first.get('name')}' and '{other.get('name')}' point at {first.get('real_path')} "
+                    f"but disagree on {label}. It will be {outcome}.")
+
+    for group in by_plex.values():
+        first = group[0]
+        other = next((m for m in group[1:]
+                      if m.get("real_path", "").rstrip("/") != first.get("real_path", "").rstrip("/")), None)
+        if other:
+            warnings.append(
+                f"'{first.get('name')}' and '{other.get('name')}' use the same server path "
+                f"{first.get('plex_path')} for different folders. Only one can apply.")
+    return warnings
+
+
 class MultiPathModifier:
     """Handles path conversion with multiple mapping support.
 
@@ -2827,7 +2882,7 @@ class MultiPathModifier:
 
         # Keep all mappings for disabled path checking, sorted by plex_path length (longest first)
         self.all_mappings = sorted(
-            mappings,
+            merge_shared_real_paths(mappings),
             key=lambda m: len(m.plex_path),
             reverse=True
         )
