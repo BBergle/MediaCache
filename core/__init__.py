@@ -1,6 +1,6 @@
-"""PlexCache-D core package.
+"""MediaCache core package.
 
-This package contains the core application modules for PlexCache-D.
+This package contains the core application modules for MediaCache.
 """
 
 __version__ = "3.2.0"

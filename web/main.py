@@ -1,4 +1,4 @@
-"""PlexCache-D Web UI - FastAPI Application"""
+"""MediaCache Web UI - FastAPI Application"""
 
 import logging
 from contextlib import asynccontextmanager
@@ -111,7 +111,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan - startup and shutdown"""
     # Startup
     _suppress_noisy_loggers()
-    print(f"PlexCache-D Web UI starting...")
+    print(f"MediaCache Web UI starting...")
     print(f"Project root: {PROJECT_ROOT}")
 
     # Detect ZFS-backed path mappings before any file operations
@@ -172,7 +172,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    print("PlexCache-D Web UI shutting down...")
+    print("MediaCache Web UI shutting down...")
     scheduler.stop()
 
     # Stop web cache background refresh
@@ -190,8 +190,8 @@ starlette.requests.Request.form = _form_with_higher_limit
 
 # Create FastAPI app
 app = FastAPI(
-    title="PlexCache-D",
-    description="Web UI for PlexCache-D media cache management",
+    title="MediaCache",
+    description="Web UI for MediaCache media cache management",
     version=__version__,
     lifespan=lifespan
 )

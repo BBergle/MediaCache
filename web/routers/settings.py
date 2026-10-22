@@ -1114,8 +1114,8 @@ def test_webhook(request: Request, webhook_url: str = Form(...)):
     if platform == 'discord':
         payload = {
             "embeds": [{
-                "title": "PlexCache-D Test Notification",
-                "description": "This is a test message from PlexCache-D. Your webhook is configured correctly!",
+                "title": "MediaCache Test Notification",
+                "description": "This is a test message from MediaCache. Your webhook is configured correctly!",
                 "color": 3066993,  # Green
                 "fields": [
                     {"name": "Status", "value": "Connected", "inline": True},
@@ -1129,11 +1129,11 @@ def test_webhook(request: Request, webhook_url: str = Form(...)):
             "blocks": [
                 {
                     "type": "header",
-                    "text": {"type": "plain_text", "text": "PlexCache-D Test Notification"}
+                    "text": {"type": "plain_text", "text": "MediaCache Test Notification"}
                 },
                 {
                     "type": "section",
-                    "text": {"type": "mrkdwn", "text": "This is a test message from PlexCache-D. Your webhook is configured correctly!"}
+                    "text": {"type": "mrkdwn", "text": "This is a test message from MediaCache. Your webhook is configured correctly!"}
                 },
                 {
                     "type": "context",
@@ -1143,7 +1143,7 @@ def test_webhook(request: Request, webhook_url: str = Form(...)):
         }
     else:
         payload = {
-            "text": f"PlexCache-D Test Notification\n\nThis is a test message from PlexCache-D. Your webhook is configured correctly!\n\nSent at {timestamp}"
+            "text": f"MediaCache Test Notification\n\nThis is a test message from MediaCache. Your webhook is configured correctly!\n\nSent at {timestamp}"
         }
 
     # Send the test message

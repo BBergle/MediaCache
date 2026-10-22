@@ -1,4 +1,4 @@
-"""Authentication service for PlexCache-D Web UI.
+"""Authentication service for MediaCache Web UI.
 
 Provides optional Plex OAuth-based login and password fallback.
 Disabled by default — users enable via Settings > Security.

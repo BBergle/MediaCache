@@ -16,7 +16,7 @@ from web.services import get_settings_service
 
 router = APIRouter()
 
-# PlexCache-D OAuth identifiers
+# MediaCache OAuth identifiers
 PLEXCACHE_PRODUCT_NAME = 'PlexCache-D'
 
 # Store OAuth state in memory (cleared on restart, which is fine for setup)

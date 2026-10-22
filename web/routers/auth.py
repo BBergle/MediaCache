@@ -1,4 +1,4 @@
-"""Authentication routes for PlexCache-D Web UI."""
+"""Authentication routes for MediaCache Web UI."""
 
 import logging
 import time

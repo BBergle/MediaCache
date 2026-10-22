@@ -56,8 +56,8 @@ class JellyfinManager:
         self.plex = None  # Plex-only features (pins, session lookup) check this
         self._http = requests.Session()
         self._http.headers["Authorization"] = (
-            'MediaBrowser Client="PlexCache-D", Device="PlexCache-D", '
-            f'DeviceId="plexcache-d", Version="1", Token="{api_key}"'
+            'MediaBrowser Client="MediaCache", Device="MediaCache", '
+            f'DeviceId="mediacache", Version="1", Token="{api_key}"'
         )
         self._users: Dict[str, str] = {}  # name -> id
         self._ondeck_complete = True

@@ -1,12 +1,9 @@
-# PlexCache-D V3.2: Automate Plex Media Management
-### Updated 4/6/26
+# MediaCache: Automate Plex and Jellyfin Media Caching
 
-# Notice - Now on the Unraid Community Apps Store! 
-# Notice - Update to new Dockerised version. For instructions and discussion - https://github.com/StudioNirin/PlexCache-D/discussions/81 
-
-## Current Bugs / Todo List
-
-Now moved to a discussion page [HERE](https://github.com/StudioNirin/PlexCache-D/discussions/16)
+MediaCache is a fork of [PlexCache-D](https://github.com/StudioNirin/PlexCache-D) by StudioNirin
+(itself built on [PlexCache](https://github.com/bexem/PlexCache) by bexem) that adds experimental
+[Jellyfin support](#jellyfin-experimental). The rest of this README is PlexCache-D's documentation:
+the Docker images, Unraid template and discussion links below still point at upstream.
 
 ## Overview
 Automate Plex media management: Efficiently transfer media from the On Deck/Watchlist to the cache, and seamlessly move watched media back to their respective locations.
