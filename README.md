@@ -4,8 +4,9 @@ MediaCache moves the media you're about to watch onto your fast cache drive, so 
 stay spun down, then moves watched media back. It works with **Plex**, with **Jellyfin**
 (experimental), or with **both at the same time**.
 
-It's a fork of [PlexCache-D](https://github.com/StudioNirin/PlexCache-D) by StudioNirin, itself
-built on [PlexCache](https://github.com/bexem/PlexCache) by bexem.
+This repo started as BBergle's fork and refactor of [PlexCache](https://github.com/bexem/PlexCache)
+by bexem. [PlexCache-D](https://github.com/StudioNirin/PlexCache-D) by StudioNirin grew out of that
+refactor. MediaCache brings PlexCache-D's work back here and adds Jellyfin support.
 
 - **Image:** `ghcr.io/bbergle/mediacache:latest`
 - **Unraid template:** [BBergle/unraid-templates › mediacache](https://github.com/BBergle/unraid-templates/tree/main/mediacache)
@@ -362,9 +363,9 @@ thoroughly (try `--dry-run`) before you unleash it.
 MediaCache stands on a long line of work:
 - **brimur**[^3]: the original script that inspired the project.
 - **bexem**[^4]: PlexCache.
-- **bbergle**[^5]: the refactor into understandable modules.
-- **StudioNirin**: PlexCache-D, which made the Plex API work for real-world multi-user setups and
-  built the Web UI, Docker image and Unraid template this fork builds on.
+- **bbergle**[^5]: this repo; the fork of PlexCache refactored into understandable modules.
+- **StudioNirin**: PlexCache-D, built on that refactor. It made the Plex API work for real-world
+  multi-user setups and added the Web UI, Docker image and Unraid template that MediaCache now builds on.
 - **[Brandon-Haney](https://github.com/Brandon-Haney)**: a large number of contributions to PlexCache-D.
 
 Licensed under the MIT License; see `LICENSE.txt`.
