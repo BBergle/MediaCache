@@ -3935,6 +3935,7 @@ class FileFilter:
             )
 
             pinned_set = current_pinned_cache_paths or set()
+            needed_paths = current_ondeck_items | current_watchlist_items
 
             # Check each cached file
             for cache_file in cache_files:
@@ -3953,6 +3954,17 @@ class FileFilter:
                 # array on the next run even though smart/FIFO eviction protects them.
                 if check_path in pinned_set:
                     logging.debug(f"Keeping pinned file in cache: {os.path.basename(cache_file)}")
+                    continue
+
+                # Array (real) path of this cache file
+                if self.path_modifier:
+                    array_file, _ = self.path_modifier.convert_cache_to_real(check_path)
+                else:
+                    array_file = check_path.replace(self.cache_dir, self.real_source, 1)
+
+                # Still on someone's OnDeck/Watchlist by real path: keep. Name matching
+                # below can miss this when servers name the same show differently.
+                if array_file in needed_paths:
                     continue
 
                 # Try stored metadata first for classification (check_path matches timestamp tracker keys)
@@ -4016,14 +4028,10 @@ class FileFilter:
                     except OSError as e:
                         logging.debug(f"Could not check hard link count for {cache_file}: {e}")
 
-                # Move file back to array (use container path for path conversion)
-                if self.path_modifier:
-                    array_file, _ = self.path_modifier.convert_cache_to_real(check_path)
-                    if array_file is None:
-                        logging.warning(f"Could not convert cache path to array path: {cache_file}")
-                        continue
-                else:
-                    array_file = check_path.replace(self.cache_dir, self.real_source, 1)
+                # Move file back to array
+                if array_file is None:
+                    logging.warning(f"Could not convert cache path to array path: {cache_file}")
+                    continue
 
                 display_name = self._extract_display_name(cache_file)
                 logging.debug(f"Media no longer needed, will move back to array: {display_name} - {cache_file}")
