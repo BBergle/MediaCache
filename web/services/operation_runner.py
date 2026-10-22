@@ -246,7 +246,7 @@ class OperationRunner:
     def _parse_external_log(self) -> dict:
         """Parse the log file to extract progress for an external CLI run.
 
-        Finds the last run header ("=== PlexCache") and parses lines after it
+        Finds the last run header ("=== MediaCache") and parses lines after it
         using the same phase markers and file operation patterns as the web runner.
 
         Returns a status dict compatible with the running state format.
@@ -287,7 +287,8 @@ class OperationRunner:
                     f.seek(read_from)
                     chunk = f.read(pos - read_from)
                     # Search for last occurrence of header in this chunk
-                    idx = chunk.rfind(b'=== PlexCache')
+                    # ("=== PlexCache" is the header in logs from before the rename)
+                    idx = max(chunk.rfind(b'=== MediaCache'), chunk.rfind(b'=== PlexCache'))
                     if idx != -1:
                         header_offset = read_from + idx
                         break
@@ -1035,7 +1036,7 @@ class OperationRunner:
             if verbose:
                 mode_str.append("verbose")
             mode_display = f" ({', '.join(mode_str)})" if mode_str else ""
-            self._add_log_message(f"Starting PlexCache operation{mode_display}...")
+            self._add_log_message(f"Starting MediaCache operation{mode_display}...")
 
             # Import PlexCacheApp here to avoid circular imports
             from core.app import PlexCacheApp

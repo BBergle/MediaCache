@@ -518,3 +518,29 @@ class TestCheckExternalProcess:
         """/proc/{pid}/cmdline unreadable (process gone, permission denied) → False."""
         with patch('builtins.open', side_effect=FileNotFoundError):
             assert OperationRunner._is_plexcache_cli_process(1234) is False
+
+
+# ============================================================================
+# External CLI log parsing
+# ============================================================================
+
+class TestParseExternalLogHeader:
+    def test_finds_latest_run_across_old_and_new_headers(self, tmp_path):
+        """Runs log '=== MediaCache v…'; logs from before the rename say '=== PlexCache'."""
+        log = tmp_path / "plexcache.log"
+        log.write_text(
+            "2026-10-20 10:00:00 - INFO - === PlexCache-D v3.1 (build: a) run_id=old ===\n"
+            "2026-10-20 10:00:01 - INFO - DRY RUN mode\n"
+            "2026-10-21 10:00:00 - INFO - === MediaCache v3.2 (build: b) run_id=new ===\n"
+            "2026-10-21 10:00:01 - INFO - Fetching OnDeck media...\n"
+        )
+        with patch('web.services.operation_runner.load_activity', return_value=[]):
+            r = OperationRunner()
+        r._log_file = log
+        result = r._parse_external_log()
+        assert result["dry_run"] is False  # parsed from the new run, not the old dry run
+        assert any("Fetching OnDeck" in line for line in result["recent_logs"])
+
+        log.write_text("2026-10-20 10:00:00 - INFO - === PlexCache-D v3.1 (build: a) run_id=old ===\n"
+                       "2026-10-20 10:00:01 - INFO - DRY RUN mode\n")
+        assert r._parse_external_log()["dry_run"] is True  # pre-rename logs still parse
