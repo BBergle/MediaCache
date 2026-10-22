@@ -1221,7 +1221,9 @@ class SettingsService:
             machine_id = plex.machineIdentifier
 
             raw = self._load_raw()
-            existing_users = {u.get("title"): u for u in raw.get("users", [])}
+            jellyfin_users = [u for u in raw.get("users", []) if u.get("server") == "jellyfin"]
+            existing_users = {u.get("title"): u for u in raw.get("users", [])
+                              if u.get("server") != "jellyfin"}
             existing_skip_ondeck = set(raw.get("skip_ondeck", []))
             existing_skip_watchlist = set(raw.get("skip_watchlist", []))
 
@@ -1307,10 +1309,11 @@ class SettingsService:
             removed_count = len(set(existing_users.keys()) - current_names)
 
             # Save updated users and rebuild skip lists
-            raw["users"] = new_users
-            raw["skip_ondeck"] = [u["title"] for u in new_users if u.get("skip_ondeck")]
+            all_users = new_users + jellyfin_users
+            raw["users"] = all_users
+            raw["skip_ondeck"] = [u["title"] for u in all_users if u.get("skip_ondeck")]
             # All users can have watchlist disabled (local via API, remote via RSS filtering)
-            raw["skip_watchlist"] = [u["title"] for u in new_users if u.get("skip_watchlist")]
+            raw["skip_watchlist"] = [u["title"] for u in all_users if u.get("skip_watchlist")]
             self._save_raw(raw)
 
             # Clear error on success
@@ -1318,7 +1321,7 @@ class SettingsService:
 
             return {
                 "success": True,
-                "users": new_users,
+                "users": all_users,
                 "added_count": added_count,
                 "removed_count": removed_count
             }
@@ -1336,6 +1339,63 @@ class SettingsService:
 
             self._last_plex_error = error
             return {"success": False, "error": error}
+
+    def sync_users_from_jellyfin(self) -> Dict[str, Any]:
+        """Sync Jellyfin users, replacing only the server == "jellyfin" entries."""
+        settings = self.get_plex_settings()
+        if not settings["jellyfin_url"] or not settings["jellyfin_api_key"]:
+            return {"success": False, "error": "Missing Jellyfin URL or API key. Configure in Media Server settings first."}
+        try:
+            from core.jellyfin_api import JellyfinManager
+
+            jf = JellyfinManager(settings["jellyfin_url"], settings["jellyfin_api_key"],
+                                 settings["jellyfin_user"], timeout=15)
+            jf.connect()
+            fetched = jf.list_users()
+        except Exception as e:
+            return {"success": False, "error": f"Jellyfin error: {str(e)[:100]}"}
+
+        raw = self._load_raw()
+        others = [u for u in raw.get("users", []) if u.get("server") != "jellyfin"]
+        existing = {u.get("title"): u for u in raw.get("users", []) if u.get("server") == "jellyfin"}
+        new_users = []
+        for ju in fetched:
+            old = existing.get(ju["title"], {})
+            entry = {
+                "title": ju["title"], "server": "jellyfin", "id": ju["id"],
+                "is_local": True, "is_admin": ju["is_admin"],
+                "skip_ondeck": old.get("skip_ondeck", False),
+                "skip_watchlist": old.get("skip_watchlist", False),
+            }
+            for key in ("days_to_monitor", "watchlist_retention_days"):
+                if key in old:
+                    entry[key] = old[key]
+            new_users.append(entry)
+
+        all_users = others + new_users
+        raw["users"] = all_users
+        raw["skip_ondeck"] = [u["title"] for u in all_users if u.get("skip_ondeck")]
+        raw["skip_watchlist"] = [u["title"] for u in all_users if u.get("skip_watchlist")]
+        self._save_raw(raw)
+        names = {u["title"] for u in new_users}
+        return {"success": True, "users": all_users,
+                "added_count": len(names - set(existing)),
+                "removed_count": len(set(existing) - names)}
+
+    def sync_users(self) -> Dict[str, Any]:
+        """Sync users from every enabled media server."""
+        from core.media_servers import enabled_media_servers
+
+        syncs = {"plex": self.sync_users_from_plex, "jellyfin": self.sync_users_from_jellyfin}
+        results = [syncs[s]() for s in enabled_media_servers(self.get_plex_settings()["media_server"])]
+        errors = [r["error"] for r in results if not r["success"]]
+        return {
+            "success": any(r["success"] for r in results),
+            "users": self._load_raw().get("users", []),
+            "added_count": sum(r.get("added_count", 0) for r in results),
+            "removed_count": sum(r.get("removed_count", 0) for r in results),
+            "error": "; ".join(errors) or None,
+        }
 
     def save_user_settings(self, users: List[Dict[str, Any]], users_toggle: bool,
                            remote_watchlist_toggle: bool = False,

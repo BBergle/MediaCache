@@ -17,7 +17,7 @@ from starlette.datastructures import ImmutableMultiDict
 from web.config import templates, CONFIG_DIR, PLEXCACHE_PRODUCT_VERSION
 from web.dependencies import parse_form
 from web.services import get_settings_service, get_scheduler_service
-from core.media_servers import enabled_media_servers, media_server_value, server_label
+from core.media_servers import enabled_media_servers, media_server_value, server_label, server_of_user
 from core.system_utils import get_disk_usage, detect_zfs, parse_size_bytes
 from core.file_operations import (
     PRIORITY_RANGE_ONDECK_MIN,
@@ -242,6 +242,10 @@ def save_plex_settings(request: Request, form_data: ImmutableMultiDict = Depends
 # Users tab endpoints
 # =============================================================================
 
+def _user_server(user):
+    return user.get("server") or server_of_user(user.get("title", ""))
+
+
 @router.get("/users", response_class=HTMLResponse)
 def settings_users(request: Request):
     """Users settings tab - renders with skeleton for lazy load"""
@@ -250,7 +254,10 @@ def settings_users(request: Request):
     plex_settings = settings_service.get_plex_settings()
 
     # Check if Plex is configured
-    has_plex_config = bool(plex_settings.get("plex_url") and plex_settings.get("plex_token"))
+    required = {"plex": ("plex_url", "plex_token"), "jellyfin": ("jellyfin_url", "jellyfin_api_key")}
+    has_plex_config = any(
+        all(plex_settings.get(k) for k in required[s])
+        for s in enabled_media_servers(plex_settings["media_server"]))
 
     return templates.TemplateResponse(
         request,
@@ -271,7 +278,8 @@ def get_users_list(request: Request):
         settings_service = get_settings_service()
         user_settings = settings_service.get_user_settings()
         plex_error = settings_service.get_last_plex_error()
-        users = user_settings.get("users", [])
+        enabled = enabled_media_servers(settings_service.get_plex_settings()["media_server"])
+        users = [u for u in user_settings.get("users", []) if _user_server(u) in enabled]
 
         logger.info(f"Loading users list: {len(users)} users found")
 
@@ -294,9 +302,9 @@ def get_users_list(request: Request):
 
 @router.post("/users/sync", response_class=HTMLResponse)
 def sync_users(request: Request):
-    """Sync users from Plex (HTMX)"""
+    """Sync users from the enabled media servers (HTMX)"""
     settings_service = get_settings_service()
-    result = settings_service.sync_users_from_plex()
+    result = settings_service.sync_users()
 
     if result["success"]:
         message = f"Synced {len(result['users'])} users"
@@ -340,7 +348,10 @@ def save_user_settings(request: Request, form_data: ImmutableMultiDict = Depends
     # Update skip flags from form
     # Form uses: include_ondeck_{title} and include_watchlist_{title}
     # Checkbox ON = include (not skip), OFF = skip
+    enabled = enabled_media_servers(settings_service.get_plex_settings()["media_server"])
     for user in users:
+        if _user_server(user) not in enabled:
+            continue  # hidden from the form, so its fields are absent: keep as is
         title = user.get("title", "")
         # Checkboxes: "on" if checked, absent if unchecked
         include_ondeck = form_data.get(f"include_ondeck_{title}") == "on"

@@ -67,9 +67,9 @@
                                title="Watchlist retention days (blank = global default: {{ settings.watchlist_retention_days|default(0) or 'disabled' }})">
                     </span>
                 </span>
-                <span class="token-status-col" {% if not user.is_admin %}onclick="toggleTokenPanel({{ loop.index }})"{% endif %}>
-                    {% if user.is_admin %}
-                        {# Admin uses own token — no management needed #}
+                <span class="token-status-col" {% if not (user.is_admin or user.server == 'jellyfin') %}onclick="toggleTokenPanel({{ loop.index }})"{% endif %}>
+                    {% if user.is_admin or user.server == 'jellyfin' %}
+                        {# Admin and Jellyfin users need no token; Admin uses own token — no management needed #}
                     {% elif user.token %}
                         <i data-lucide="key-round" class="token-ok" title="Token configured"></i>
                     {% elif user.is_local %}
@@ -79,7 +79,7 @@
                     {% endif %}
                 </span>
             </div>
-            {% if not user.is_admin %}
+            {% if not (user.is_admin or user.server == 'jellyfin') %}
             <div class="token-detail-row" id="token-panel-{{ loop.index }}" style="display: none;">
                 <input type="password" name="user_token_{{ user.title }}" id="token-input-{{ loop.index }}"
                        value="{{ user.token or '' }}"
