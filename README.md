@@ -22,6 +22,10 @@ It watches what your users have on deck or on their watchlist and copies those f
 drive, fetching the next few episodes of a show ahead of time. Once nobody needs a file any more,
 it goes back to the array.
 
+**Built for Unraid, and runs on other Linux systems too.** On Unraid it uses the cache pool, the
+array and the mover directly. On other Linux setups it works with any fast drive plus slower
+storage; see [Other Linux systems](#other-linux-systems).
+
 ## Features
 
 - **What it caches:** OnDeck and Watchlist media for you and your other users, with the next few
@@ -203,6 +207,24 @@ python3 plexcache.py
 > The entry point is still called `plexcache.py`, and the settings file is still
 > `plexcache_settings.json`, so existing installs and scripts keep working.
 
+### Other Linux systems
+
+MediaCache is designed for Unraid, but it also runs on other Linux systems, either in Docker or
+with Option 2 or 3 above. MediaCache detects when it isn't on Unraid.
+
+When a file is cached, the original is renamed to `.plexcached`. On Unraid your media server keeps
+finding the file at its usual path, because Unraid shows the cache copy there. Elsewhere, pick the
+setup that matches yours:
+
+- **Media and cache merged into one view** (mergerfs or similar): this works the same way as
+  Unraid. No extra setting is needed.
+- **Media and cache are separate folders:** turn on **Settings → Cache → Create Symlinks After
+  Caching**. This leaves a link at the original path pointing to the cached copy, so Plex and
+  Jellyfin still find the file. If it's off, MediaCache logs a warning at startup.
+
+The Unraid mover exclude file and Unraid notifications only apply on Unraid. Discord and Slack
+notifications work everywhere.
+
 ## Plex and Jellyfin
 
 Under **Settings → Media Server**, switch on **Plex**, **Jellyfin**, or both. Each server has its
@@ -322,8 +344,9 @@ after MediaCache has been running, or exclude the directories MediaCache manages
 
 ## Notes
 
-MediaCache is mainly tested on Unraid, with Plex and Jellyfin running as Docker containers. It may
-work on other Linux systems. The setup wizard is the recommended way to configure it. For help,
+MediaCache is mainly tested on Unraid, with Plex and Jellyfin running as Docker containers. Other
+Linux systems are supported too (see [Other Linux systems](#other-linux-systems)). The setup
+wizard is the recommended way to configure it. For help,
 open an [issue](https://github.com/BBergle/MediaCache/issues). The upstream
 [PlexCache-D wiki](https://github.com/StudioNirin/PlexCache-D/wiki) also covers most features in depth.
 
