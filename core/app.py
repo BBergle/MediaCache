@@ -1364,19 +1364,24 @@ class PlexCacheApp:
                 self.file_filter.set_media_info_map(self.media_info_map)
                 self._check_files_to_move_back_to_array()
 
-    def _can_remove_from_cache(self, action: str) -> bool:
-        """True when every media server's data is complete enough to drop files from cache.
+    def _incomplete_data_reason(self) -> Optional[str]:
+        """Why media server data is too incomplete to drop files from cache, or None.
 
         The watchlist guard only applies when watchlist caching is enabled - with it
         off, no cached file is held by the watchlist, so incomplete plex.tv data
         can't cause a wrong removal.
         """
         if not self.plex_manager.is_ondeck_data_complete():
-            reason = ", ".join(sorted(server_label(s) for s in self.plex_manager.missing_servers()))
-        elif (self.config_manager.cache.watchlist_toggle
+            return ", ".join(sorted(server_label(s) for s in self.plex_manager.missing_servers()))
+        if (self.config_manager.cache.watchlist_toggle
                 and not self.plex_manager.is_watchlist_data_complete()):
-            reason = "watchlist"
-        else:
+            return "watchlist"
+        return None
+
+    def _can_remove_from_cache(self, action: str) -> bool:
+        """True when every media server's data is complete enough to drop files from cache."""
+        reason = self._incomplete_data_reason()
+        if reason is None:
             return True
         logging.warning(f"Skipping {action} - media server data incomplete ({reason})")
         logging.warning("Files will remain on cache until next successful run")
@@ -1724,13 +1729,14 @@ class PlexCacheApp:
                 return '/mnt/user0/' + p[len('/mnt/user/'):]
             return p
 
-        # Build current rating_key → set of real paths
+        # Build current rating_key → set of real paths (Plex keys only)
         current_rk_paths = {}
         for item in ondeck_items_list:
-            if not item.rating_key:
+            rating_key = plex_rating_key(item.username, item.rating_key)
+            if not rating_key:
                 continue
             real_path = plex_to_real.get(item.file_path, item.file_path)
-            current_rk_paths.setdefault(item.rating_key, set()).add(real_path)
+            current_rk_paths.setdefault(rating_key, set()).add(real_path)
 
         upgrades_detected = 0
         for rk, old_paths in pre_run_rk_index.items():
@@ -2414,7 +2420,8 @@ class PlexCacheApp:
 
         # Step 2: Run smart eviction BEFORE filtering/caching (frees more space if needed)
         # This runs after array moves so we have accurate space calculations
-        if self.media_to_cache and self._can_remove_from_cache("eviction"):
+        if (self.media_to_cache and self.config_manager.cache.cache_eviction_mode != "none"
+                and self._can_remove_from_cache("eviction")):
             evicted_count, evicted_bytes = self._run_smart_eviction()
             self.evicted_count += evicted_count
             self.evicted_bytes += evicted_bytes
@@ -3589,8 +3596,11 @@ class PlexCacheApp:
         # Skip in dry-run mode to avoid modifying tracking files
         # Stale cleanup waits while a server is missing, so its entries and retention clocks survive
         if hasattr(self, 'watchlist_tracker') and self.watchlist_tracker and not self.dry_run:
-            if self._can_remove_from_cache("watchlist cleanup"):
+            reason = self._incomplete_data_reason()
+            if reason is None:
                 self.watchlist_tracker.cleanup_stale_entries()
+            else:
+                logging.info(f"Keeping stale watchlist entries - media server data incomplete ({reason})")
             self.watchlist_tracker.cleanup_missing_files()
 
         # Log results summary for all runs (INFO level)

@@ -155,6 +155,15 @@ def test_move_files_skips_eviction_while_a_server_is_missing():
     app._safe_move_files.assert_called_once_with(["/real/a.mkv"], "cache")
 
 
+def test_eviction_mode_none_does_not_warn_about_incomplete_data(caplog):
+    app = _move_app(missing={"plex"})
+    app.config_manager.cache.cache_eviction_mode = "none"
+    with caplog.at_level(logging.WARNING):
+        app._move_files()
+    assert "Skipping eviction" not in caplog.text
+    app._run_smart_eviction.assert_not_called()
+
+
 def test_move_files_evicts_when_data_complete():
     app = _move_app()
     app._move_files()
@@ -180,6 +189,16 @@ def test_watchlist_cleanup_waits_for_missing_server():
     app._finish()
     app.watchlist_tracker.cleanup_stale_entries.assert_not_called()
     app.watchlist_tracker.cleanup_missing_files.assert_called_once()
+
+
+def test_watchlist_cleanup_skip_is_info_not_warning(caplog):
+    app = _finish_app(watchlist_complete=False, watchlist_toggle=True)
+    with caplog.at_level(logging.INFO):
+        app._finish()
+    app.watchlist_tracker.cleanup_stale_entries.assert_not_called()
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert "Keeping stale watchlist entries - media server data incomplete (watchlist)" in caplog.text
+    assert "Files will remain on cache" not in caplog.text
 
 
 def test_watchlist_cleanup_runs_when_data_complete():
@@ -242,6 +261,19 @@ def test_ondeck_move_back_runs_when_data_complete():
     keep = app.ondeck_tracker.prepare_for_run.call_args.kwargs["keep_user"]
     assert not keep("Ann (Jellyfin)")
     app._check_files_to_move_back_to_array.assert_called_once()
+
+
+def test_same_episode_from_both_servers_is_cached_once():
+    from core.file_operations import MultiPathModifier
+    items = [_item("/data/tv/S/e1.mkv", "Ben", "42"),
+             _item("/media/tv/S/e1.mkv", "Ben (Jellyfin)", "jf-id")]
+    app = _media_app(items)
+    app.file_path_modifier = MultiPathModifier([
+        PathMapping(name="plex", plex_path="/data/tv/", real_path="/mnt/user/tv/", cache_path="/mnt/cache/tv/"),
+        PathMapping(name="jf", plex_path="/media/tv/", real_path="/mnt/user/tv/", cache_path="/mnt/cache/tv/"),
+    ])
+    app._process_media()
+    assert app.media_to_cache == ["/mnt/user/tv/S/e1.mkv"]
 
 
 # --- watchlist ---
@@ -350,3 +382,12 @@ def test_upgrade_moves_real_path_watchlist_entry(tmp_path):
     assert tracker.get_entry("/mnt/user/tv/Old.mkv") is None
     moved = tracker._data["/mnt/user/tv/New.mkv"]
     assert moved["users"] == ["Ben"] and moved["watchlisted_at"] == first_added
+
+
+def test_upgrade_detection_ignores_jellyfin_ids():
+    app = _app()
+    app._transfer_upgrade_tracking = MagicMock()
+    item = SimpleNamespace(file_path="/data/new.mkv", username="Ben (Jellyfin)", rating_key="100")
+    app._detect_and_transfer_upgrades([item], {"/data/new.mkv": "/real/new.mkv"},
+                                      {"100": {"/real/old.mkv"}})
+    app._transfer_upgrade_tracking.assert_not_called()

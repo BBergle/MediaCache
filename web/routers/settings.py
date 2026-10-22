@@ -252,6 +252,10 @@ def _enabled_users(settings_service, users):
     return [u for u in users if _user_server(u) in enabled]
 
 
+def _both_servers(settings_service):
+    return settings_service.get_plex_settings()["media_server"] == "both"
+
+
 @router.get("/users", response_class=HTMLResponse)
 def settings_users(request: Request):
     """Users settings tab - renders with skeleton for lazy load"""
@@ -272,7 +276,8 @@ def settings_users(request: Request):
             "page_title": "User Settings",
             "active_tab": "users",
             "settings": user_settings,
-            "has_plex_config": has_plex_config
+            "has_plex_config": has_plex_config,
+            "jellyfin_enabled": "jellyfin" in enabled_media_servers(plex_settings["media_server"]),
         }
     )
 
@@ -294,7 +299,8 @@ def get_users_list(request: Request):
             {
                 "users": users,
                 "settings": user_settings,
-                "plex_error": plex_error
+                "plex_error": plex_error,
+                "both_servers": _both_servers(settings_service),
             }
         )
     except Exception as e:
@@ -318,8 +324,6 @@ def sync_users(request: Request):
             message += f" (+{result['added_count']} new)"
         if result["removed_count"] > 0:
             message += f" (-{result['removed_count']} removed)"
-        if result["error"]:
-            message += f". Warning: {result['error']}"
 
         # Return updated user list with success message
         user_settings = settings_service.get_user_settings()
@@ -329,8 +333,10 @@ def sync_users(request: Request):
             {
                 "success": True,
                 "message": message,
+                "warning": result["error"],
                 "users": users,
-                "settings": user_settings
+                "settings": user_settings,
+                "both_servers": _both_servers(settings_service),
             }
         )
     else:

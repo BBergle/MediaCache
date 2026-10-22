@@ -311,7 +311,9 @@ class RecentlyAddedService:
                 pin_holder_title = item.title if is_pinned else ""
 
             is_ondeck = bool(real_path) and real_path in ondeck_keys
-            is_watchlist = item.file_path in watchlist_keys
+            # Tracker keys are real paths; older entries may still be Plex paths.
+            is_watchlist = item.file_path in watchlist_keys or (
+                bool(real_path) and real_path in watchlist_keys)
             is_cache_tracked = bool(cache_path) and cache_path in timestamps_keys
             is_mover_protected = bool(cache_path) and cache_path in exclude_paths
             is_released = bool(cache_path) and cache_path in released_paths

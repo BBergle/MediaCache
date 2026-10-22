@@ -41,14 +41,16 @@ class CombinedMediaManager:
         self.failed = set()
 
     def connect(self):
+        errors = []
         for name, manager in self.managers.items():
             try:
                 manager.connect()
             except ConnectionError as e:
                 logging.warning(f"[MEDIA SERVER] {server_label(name)} unavailable: {e}")
                 self.failed.add(name)
+                errors.append(f"{server_label(name)}: {e}")
         if len(self.failed) == len(self.managers):
-            raise ConnectionError("No media server could be reached")
+            raise ConnectionError(f"No media server could be reached ({'; '.join(errors)})")
 
     def _connected(self):
         return [(n, m) for n, m in self.managers.items() if n not in self.failed]
@@ -80,8 +82,8 @@ class CombinedMediaManager:
         for name, m in self._connected():
             if name == "plex":
                 yield from m.get_watchlist_media(*args, rss_url=rss_url, home_users=home_users, **kwargs)
-            else:
-                yield from m.get_watchlist_media(*args, rss_url=None, **kwargs)
+            elif not rss_url:  # the remote-RSS pass is Plex-only
+                yield from m.get_watchlist_media(*args, **kwargs)
 
     def missing_servers(self):
         return set(self.failed) | {n for n, m in self._connected() if not m.is_ondeck_data_complete()}

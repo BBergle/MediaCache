@@ -5,6 +5,12 @@
     <span>{{ message }}</span>
 </div>
 {% endif %}
+{% if warning %}
+<div class="alert alert-warning mb-2" role="alert" style="display: flex; align-items: center; gap: 0.5rem;">
+    <i data-lucide="alert-triangle" style="flex-shrink: 0; width: 18px; height: 18px;"></i>
+    <span>{{ warning }}</span>
+</div>
+{% endif %}
 
 <!-- Include the updated users table -->
 {% include "settings/partials/users_table.html" %}

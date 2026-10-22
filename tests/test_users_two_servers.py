@@ -147,3 +147,32 @@ def test_sync_shows_error_of_failed_server(env):
     with patch("plexapi.server.PlexServer", side_effect=Exception("plex down")):
         page = client.post("/settings/users/sync").text
     assert "kid (Jellyfin)" in page and "plex down" in page
+
+
+PLEX_BADGE = '<span class="badge badge-muted">Plex</span>'
+
+
+def test_plex_users_get_a_server_badge_only_with_both_servers(env):
+    client, _ = env({"media_server": "both", "users": [dict(BEN), dict(JF_BEN)]})
+    assert client.get("/settings/users/list").text.count(PLEX_BADGE) == 1
+    client, _ = env({"media_server": "plex", "users": [dict(BEN)]})
+    assert PLEX_BADGE not in client.get("/settings/users/list").text
+
+
+def test_multi_user_hint_is_server_neutral_with_jellyfin(env):
+    hint = '<div class="form-hint">Cache media from other {}users\' OnDeck and Watchlist</div>'
+    client, _ = env({"media_server": "both", "users": []})
+    page = client.get("/settings/users").text
+    assert hint.format("") in page and hint.format("Plex Home ") not in page
+    client, _ = env({"media_server": "plex", "users": []})
+    assert hint.format("Plex Home ") in client.get("/settings/users").text
+
+
+def test_partial_sync_error_is_a_warning_not_success(env):
+    client, _ = env({"media_server": "both", "users": []})
+    with patch("plexapi.server.PlexServer", side_effect=Exception("plex down")):
+        page = client.post("/settings/users/sync").text
+    success = page.split('alert-success', 1)[1].split('</div>', 1)[0]
+    assert "plex down" not in success and "Warning" not in success
+    warning = page.split('alert-warning', 1)[1].split('</div>', 1)[0]
+    assert "plex down" in warning

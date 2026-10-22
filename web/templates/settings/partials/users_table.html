@@ -24,6 +24,7 @@
             <div class="user-row {% if user.is_admin %}user-admin{% endif %}">
                 <span class="user-col">
                     <span class="user-name">{{ user.title }}</span>
+                    {% if both_servers and user.server != 'jellyfin' %}<span class="badge badge-muted">Plex</span>{% endif %}
                     {% if user.is_admin %}
                         <span class="badge badge-muted">Admin</span>
                     {% elif user.is_local %}

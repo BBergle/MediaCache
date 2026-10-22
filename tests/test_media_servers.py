@@ -32,11 +32,11 @@ class FakeManager:
         self.ondeck, self.watchlist, self.sessions = list(ondeck), list(watchlist), list(sessions)
         self.fail_connect = fail_connect
         self.ondeck_complete = self.watchlist_complete = True
-        self.rss_seen = "unset"
+        self.rss_seen = self.home_users_seen = "unset"
 
     def connect(self):
         if self.fail_connect:
-            raise ConnectionError("down")
+            raise ConnectionError(self.fail_connect)
 
     def get_active_sessions(self):
         return self.sessions
@@ -44,8 +44,8 @@ class FakeManager:
     def get_on_deck_media(self, *args, **kwargs):
         return self.ondeck
 
-    def get_watchlist_media(self, *args, rss_url=None, home_users=None, **kwargs):
-        self.rss_seen = rss_url
+    def get_watchlist_media(self, *args, rss_url=None, home_users="unset", **kwargs):
+        self.rss_seen, self.home_users_seen = rss_url, home_users
         yield from self.watchlist
 
     def is_ondeck_data_complete(self):
@@ -67,22 +67,36 @@ def test_merges_both_servers_in_order():
     c = _combined(plex=p, jellyfin=j)
     assert c.get_on_deck_media([1], 7, 5, True, []) == ["A", "B"]
     assert c.get_active_sessions() == ["s1", "s2"]
-    assert list(c.get_watchlist_media([1], 1, True, [], rss_url="http://rss", home_users=["x"])) == ["w1", "w2"]
-    assert (p.rss_seen, j.rss_seen) == ("http://rss", None)
+    assert list(c.get_watchlist_media([1], 1, True, [], home_users=["x"])) == ["w1", "w2"]
+    assert (p.home_users_seen, j.home_users_seen) == (["x"], "unset")
     assert c.missing_servers() == set() and c.is_ondeck_data_complete() and c.is_watchlist_data_complete()
 
 def test_one_server_down_is_missing_but_run_continues():
-    p, j = FakeManager(ondeck=["A"]), FakeManager(ondeck=["B"], fail_connect=True)
+    p, j = FakeManager(ondeck=["A"]), FakeManager(ondeck=["B"], fail_connect="down")
     c = _combined(plex=p, jellyfin=j)
     assert c.missing_servers() == {"jellyfin"}
     assert c.get_on_deck_media() == ["A"]
     assert not c.is_ondeck_data_complete() and not c.is_watchlist_data_complete()
     assert c.plex is p.plex
 
-def test_all_servers_down_raises():
-    c = CombinedMediaManager({"plex": FakeManager(fail_connect=True), "jellyfin": FakeManager(fail_connect=True)})
-    with pytest.raises(ConnectionError, match="No media server"):
+def test_all_servers_down_raises_with_each_reason():
+    c = CombinedMediaManager({"plex": FakeManager(fail_connect="bad token"),
+                              "jellyfin": FakeManager(fail_connect="timed out")})
+    with pytest.raises(ConnectionError) as e:
         c.connect()
+    assert str(e.value) == "No media server could be reached (Plex: bad token; Jellyfin: timed out)"
+
+def test_rss_pass_asks_plex_only():
+    p, j = FakeManager(watchlist=["w1"]), FakeManager(watchlist=["w2"])
+    c = _combined(plex=p, jellyfin=j)
+    assert list(c.get_watchlist_media([1], 1, True, [], rss_url="http://rss")) == ["w1"]
+    assert p.rss_seen == "http://rss" and j.rss_seen == "unset"
+
+def test_incomplete_watchlist_on_a_connected_server_is_incomplete():
+    j = FakeManager()
+    j.watchlist_complete = False
+    c = _combined(plex=FakeManager(), jellyfin=j)
+    assert not c.is_watchlist_data_complete()
 
 def test_incomplete_server_counts_as_missing():
     j = FakeManager()

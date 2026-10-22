@@ -342,8 +342,13 @@ as the media server in setup wizard step 2, or switch on **Plex** and/or **Jelly
 - Requires Jellyfin 10.9+. Path mappings use each server's own paths:
   with `"media_server": "both"`, add one mapping per server (the Plex path and the Jellyfin path)
   pointing at the same `real_path`; files are matched on the real path.
+- The Users settings tab lists Plex and Jellyfin users; Jellyfin users are named
+  `"<name> (Jellyfin)"`, e.g. `"Ben (Jellyfin)"`.
 - Plex-only: pinned media, recently added, remote RSS watchlists, Plex OAuth login, and the
-  Libraries/Users settings tabs (the wizard's library picker works with Jellyfin).
+  Libraries settings tab (the wizard's library picker works with Jellyfin).
+- **Upgrading a Jellyfin-only install:** because Jellyfin users are now named `"<name> (Jellyfin)"`,
+  hand-written skip or per-user entries that use bare Jellyfin names no longer match. Open
+  **Settings → Users**, click **Sync Users**, and set those users' options again.
 
 ## Notes
 
