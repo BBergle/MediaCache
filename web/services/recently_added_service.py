@@ -144,7 +144,7 @@ class RecentlyAddedService:
             config.load_config(persist_updates=False)
         except Exception as e:
             logger.warning(f"RecentlyAddedService: settings not loadable: {e}")
-            return self._empty_result("PlexCache is not configured yet.")
+            return self._empty_result("MediaCache is not configured yet.")
 
         if config.plex.media_server == "jellyfin":
             return self._empty_result("Recently Added needs Plex, so it isn't available with Jellyfin.")

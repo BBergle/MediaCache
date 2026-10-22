@@ -1,4 +1,4 @@
-/* MediaCache Plex-Inspired Theme */
+/* MediaCache Theme: graphite neutrals, mint accent */
 
 * {
     margin: 0;
@@ -17,12 +17,14 @@ body {
 }
 
 :root {
-    /* Shared colors */
-    --plex-orange: #e5a00d;
-    --plex-orange-dark: #cc8a00;
-    --plex-orange-light: #f5b82e;
-    --plex-success: #34C759;
-    --plex-warning: #ff9800;
+    /* Shared colors. The --plex-orange* names are historical: they hold the
+       MediaCache mint accent. */
+    --plex-orange: #4ade80;
+    --plex-orange-dark: #22c55e;
+    --plex-orange-light: #86efac;
+    --plex-on-accent: #05230f;  /* text on accent fills */
+    --plex-success: #4ade80;
+    --plex-warning: #fbbf24;
     --plex-error: #FF453A;
     --plex-info: #0A84FF;
     --plex-purple: #a78bfa;
@@ -31,8 +33,8 @@ body {
     --plex-user-shared: var(--plex-success);
     /* Text-on-surface variants of the accent colours. In dark mode they are the
        accents themselves; light mode overrides them with deeper shades, because
-       Plex orange and the bright semantic colours are too light to read as text
-       on white (#e5a00d is about 2:1). Use these for text, keep the plain accent
+       mint and the bright semantic colours are too light to read as text
+       on white (#4ade80 is about 1.7:1). Use these for text, keep the plain accent
        tokens for icons, fills, borders and bars. */
     --plex-orange-text: var(--plex-orange);
     --plex-orange-text-lg: var(--plex-orange);  /* large display numbers */
@@ -47,61 +49,65 @@ body {
     --danger: var(--plex-error);
     --info: var(--plex-info);
     --danger-bg: rgba(244, 67, 54, 0.1);
-    --warning-bg: rgba(255, 152, 0, 0.1);
-    --success-bg: rgba(76, 175, 80, 0.1);
+    --warning-bg: rgba(251, 191, 36, 0.12);
+    --success-bg: rgba(74, 222, 128, 0.11);
 
     /* Dark theme (default) */
-    --plex-bg-dark: #161618;
-    --plex-bg-darker: #0e0e10;
-    --plex-bg-card: #1c1c1e;
-    --plex-bg-card-hover: #242426;
-    --plex-bg-hover: #2c2c2e;
-    --plex-bg-input: #131315;
-    --plex-text: #f5f5f7;
-    --plex-text-muted: #8e8e93;
-    --plex-text-light: #aeaeb2;
-    --plex-border: rgba(255,255,255,0.08);
-    --plex-border-light: rgba(255,255,255,0.12);
+    --plex-bg-dark: #16171a;
+    --plex-bg-darker: #111214;
+    --plex-bg-card: #1b1c20;
+    --plex-bg-card-hover: #212227;
+    --plex-bg-hover: #26282d;
+    --plex-bg-input: #141518;
+    --plex-text: #f2f3f5;
+    --plex-text-muted: #9a9ca3;
+    --plex-text-light: #c4c6cc;
+    --plex-border: rgba(255,255,255,0.07);
+    --plex-border-light: rgba(255,255,255,0.11);
 
     /* Shadows & Radii */
-    --plex-shadow-card: 0 2px 12px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04);
-    --plex-shadow-elevated: 0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.06);
-    --plex-radius-xs: 4px;
-    --plex-radius-sm: 8px;
-    --plex-radius-md: 12px;
-    --plex-radius-lg: 16px;
+    --plex-shadow-card: 0 1px 2px rgba(0,0,0,0.25), 0 0 0 1px rgba(255,255,255,0.05);
+    --plex-shadow-elevated: 0 8px 28px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.07);
+    --plex-radius-xs: 6px;
+    --plex-radius-sm: 10px;
+    --plex-radius-md: 16px;
+    --plex-radius-lg: 20px;
 }
 
 /* Light theme */
 [data-theme="light"] {
-    --plex-bg-dark: #e8e8ed;
-    --plex-bg-darker: #e8e8ec;
+    --plex-orange: #15803d;        /* white text 5.0:1 */
+    --plex-orange-dark: #14532d;
+    --plex-orange-light: #166534;  /* hover: darker in light mode */
+    --plex-on-accent: #ffffff;
+    --plex-bg-dark: #eef0f3;
+    --plex-bg-darker: #f4f5f7;
     --plex-bg-card: #ffffff;
-    --plex-bg-card-hover: #f5f5f8;
-    --plex-bg-hover: #dddde2;
-    --plex-bg-input: #f0f0f3;
-    --plex-text: #1c1c1e;
-    --plex-text-muted: #58585d;
-    --plex-text-light: #3a3a3c;
-    --plex-border: rgba(0,0,0,0.10);
-    --plex-border-light: rgba(0,0,0,0.15);
-    --plex-success: #248a3d;
+    --plex-bg-card-hover: #f7f8fa;
+    --plex-bg-hover: #e5e7eb;
+    --plex-bg-input: #f7f8fa;
+    --plex-text: #16181d;
+    --plex-text-muted: #5b5f69;
+    --plex-text-light: #3d4049;
+    --plex-border: #e5e7eb;
+    --plex-border-light: #d9dce1;
+    --plex-success: #15803d;
     --plex-error: #d70015;
-    --plex-warning: #c77c02;
+    --plex-warning: #a16207;
     --plex-info: #0066cc;
     --plex-purple: #6d4cd8;
-    --plex-orange-text: #9e6700;     /* 4.8:1 on white */
-    --plex-orange-text-lg: #b87800;  /* 3.7:1 on white, large text (3:1 needed) */
-    --plex-success-text: #1a6e2f;    /* 5.5:1 on the success badge tint */
+    --plex-orange-text: #15803d;     /* 5.0:1 on white */
+    --plex-orange-text-lg: #15803d;  /* large display numbers */
+    --plex-success-text: #166534;    /* 5.5:1 on the success badge tint */
     --plex-info-text: #0058b0;       /* 5.9:1 on the info badge tint */
-    --plex-shadow-card: 0 1px 3px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.05);
-    --plex-shadow-elevated: 0 4px 12px rgba(0,0,0,0.10), 0 0 0 1px rgba(0,0,0,0.07);
+    --plex-shadow-card: 0 1px 2px rgba(16,24,40,0.05), 0 6px 18px rgba(16,24,40,0.05);
+    --plex-shadow-elevated: 0 8px 28px rgba(16,24,40,0.10), 0 0 0 1px rgba(16,24,40,0.06);
 }
 
 /* Light theme component overrides */
 [data-theme="light"] .sidebar {
     background: #ffffff;
-    border-right-color: rgba(0,0,0,0.10);
+    border-right-color: var(--plex-border);
 }
 [data-theme="light"] .card-header { background: rgba(0,0,0,0.02); }
 [data-theme="light"] .card-footer { background: rgba(0,0,0,0.03); }
@@ -111,11 +117,11 @@ body {
 [data-theme="light"] th { color: var(--plex-text-light); }
 [data-theme="light"] .stat-detail { opacity: 0.85; }
 [data-theme="light"] .page-subtitle { color: var(--plex-text-light); }
-/* Active nav item: dark label on the orange tint, orange kept on the icon and
-   a left accent bar. Orange-on-orange text measured 2.1:1. */
+/* Active nav item: dark label on the mint tint, mint kept on the icon and
+   a left accent bar, so the label never relies on green-on-green contrast. */
 [data-theme="light"] .sidebar-nav li a.active {
     color: var(--plex-text);
-    background: rgba(229, 160, 13, 0.12);
+    background: color-mix(in srgb, var(--plex-orange) 12%, transparent);
     box-shadow: inset 3px 0 0 var(--plex-orange);
 }
 [data-theme="light"] .sidebar-nav li a.active svg { color: var(--plex-orange); }
@@ -124,6 +130,9 @@ body {
 /* Footer: opacity on top of the muted grey left the version at 2.1:1 */
 [data-theme="light"] footer,
 [data-theme="light"] footer .version { opacity: 1; }
+
+/* Plain links (no component class) were browser-default blue, unreadable in dark mode */
+a:not([class]) { color: var(--plex-orange-text); }
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
@@ -176,7 +185,7 @@ body {
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    box-shadow: 0 2px 6px rgba(229,160,13,0.2);
+    box-shadow: 0 2px 6px color-mix(in srgb, var(--plex-orange) 20%, transparent);
 }
 
 .sidebar-brand-icon i {
@@ -244,10 +253,10 @@ body {
 }
 
 .sidebar-nav li a.active {
-    background: rgba(229, 160, 13, 0.08);
+    background: color-mix(in srgb, var(--plex-orange) 8%, transparent);
     color: var(--plex-orange);
-    border-color: rgba(229,160,13,0.15);
-    box-shadow: 0 0 12px rgba(229,160,13,0.06);
+    border-color: color-mix(in srgb, var(--plex-orange) 15%, transparent);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--plex-orange) 6%, transparent);
 }
 
 /* Lucide swaps each <i data-lucide> for an <svg> at load, so size the svg too.
@@ -410,7 +419,7 @@ body {
 
 /* Active marker drawn as an inset shadow so it takes no extra height */
 .sidebar.collapsed .sidebar-nav li a.active {
-    box-shadow: inset 0 -3px 0 var(--plex-orange), 0 0 12px rgba(229, 160, 13, 0.06);
+    box-shadow: inset 0 -3px 0 var(--plex-orange), 0 0 12px color-mix(in srgb, var(--plex-orange) 6%, transparent);
 }
 
 .sidebar.collapsed .sidebar-collapse-btn i,
@@ -479,10 +488,11 @@ body {
     box-sizing: border-box;
 }
 
-/* Constrain content width on wide screens */
+/* Use wide screens, but stop line lengths running away on ultrawide ones */
 .content-wrapper {
-    max-width: 1200px;
+    max-width: 1920px;
     width: 100%;
+    margin: 0 auto;
     position: relative;
 }
 
@@ -513,7 +523,7 @@ body {
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    box-shadow: 0 4px 12px rgba(229,160,13,0.2);
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--plex-orange) 20%, transparent);
 }
 
 .page-title-icon i {
@@ -564,14 +574,14 @@ body {
 
 .btn-primary {
     background: var(--plex-orange);
-    color: var(--plex-bg-darker);
-    box-shadow: 0 2px 8px rgba(229,160,13,0.25);
+    color: var(--plex-on-accent);
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--plex-orange) 25%, transparent);
 }
 
 .btn-primary:hover {
     background: var(--plex-orange-light);
     transform: translateY(-1px);
-    box-shadow: 0 4px 16px rgba(229,160,13,0.35);
+    box-shadow: 0 4px 16px color-mix(in srgb, var(--plex-orange) 35%, transparent);
 }
 
 .btn-primary:disabled {
@@ -616,7 +626,7 @@ body {
 }
 
 .btn-warning:hover {
-    background: #f9a825;
+    background: #f59e0b;
     transform: translateY(-1px);
 }
 
@@ -867,12 +877,12 @@ body {
 }
 
 .badge-pinned {
-    background: rgba(229, 160, 13, 0.18);
+    background: color-mix(in srgb, var(--plex-orange) 18%, transparent);
     color: var(--plex-orange-text);
 }
 
 .user-badge--admin {
-    background: rgba(229, 160, 13, 0.18);
+    background: color-mix(in srgb, var(--plex-orange) 18%, transparent);
     color: var(--plex-user-admin);
 }
 
@@ -932,7 +942,7 @@ th.sortable {
 
 th.sortable:hover {
     color: var(--plex-orange-text);
-    background: rgba(229, 160, 13, 0.1);
+    background: color-mix(in srgb, var(--plex-orange) 10%, transparent);
 }
 
 th.sortable .sort-icon {
@@ -1057,7 +1067,7 @@ select:focus,
 textarea:focus {
     outline: none;
     border-color: var(--plex-orange);
-    box-shadow: 0 0 0 3px rgba(229,160,13,0.15);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--plex-orange) 15%, transparent);
 }
 
 input::placeholder {
@@ -1100,7 +1110,7 @@ textarea {
     width: 40px;
     height: 22px;
     appearance: none;
-    background: var(--plex-bg-hover);
+    background: var(--plex-border-light);
     border-radius: 11px;
     position: relative;
     cursor: pointer;
@@ -1112,7 +1122,8 @@ textarea {
     position: absolute;
     width: 18px;
     height: 18px;
-    background: var(--plex-text);
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.3);
     border-radius: 50%;
     top: 2px;
     left: 2px;
@@ -1212,7 +1223,7 @@ textarea {
 
 .checkbox-card:has(input:checked) {
     border-color: var(--plex-orange);
-    background: rgba(229, 160, 13, 0.1);
+    background: color-mix(in srgb, var(--plex-orange) 10%, transparent);
 }
 
 .checkbox-card input[type="checkbox"] {
@@ -1368,7 +1379,7 @@ textarea {
 }
 
 .user-row.user-admin {
-    background: rgba(229, 160, 13, 0.05);
+    background: color-mix(in srgb, var(--plex-orange) 5%, transparent);
 }
 
 .user-col {
@@ -1547,7 +1558,7 @@ textarea {
     left: 0;
     right: 0;
     bottom: 0;
-    background: var(--plex-bg-hover);
+    background: var(--plex-border-light);
     border-radius: 10px;
     transition: background 0.2s ease;
 }
@@ -1557,7 +1568,8 @@ textarea {
     position: absolute;
     width: 16px;
     height: 16px;
-    background: var(--plex-text-muted);
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.3);
     border-radius: 50%;
     top: 2px;
     left: 2px;
@@ -1872,7 +1884,7 @@ pre.log-output-wrapped {
 }
 
 .search-toggle:has(input:checked) {
-    background: rgba(229, 160, 13, 0.15);
+    background: color-mix(in srgb, var(--plex-orange) 15%, transparent);
     border-color: var(--plex-orange);
     color: var(--plex-orange-text);
 }
@@ -1961,13 +1973,13 @@ pre.log-output-wrapped {
 }
 
 .search-highlight {
-    background: rgba(229, 160, 13, 0.4);
+    background: color-mix(in srgb, var(--plex-orange) 40%, transparent);
     border-radius: 2px;
     padding: 0 2px;
 }
 
 .log-line.current-match {
-    background: rgba(229, 160, 13, 0.2);
+    background: color-mix(in srgb, var(--plex-orange) 20%, transparent);
 }
 
 .log-viewer-wrapper {
@@ -3101,7 +3113,7 @@ footer .version {
 
 .simulation-btn.active {
     background: var(--plex-orange);
-    color: var(--plex-bg-darker);
+    color: var(--plex-on-accent);
     border-color: var(--plex-orange);
 }
 

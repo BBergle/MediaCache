@@ -121,7 +121,7 @@
         {% if row.outcome == 'pin_unknown' %}
         {{ pin_button(row.rating_key, row.pin_type, row.title, False,
                       disabled=True,
-                      disabled_reason='Plex did not answer, so PlexCache cannot tell whether this is pinned. Refresh to retry.') }}
+                      disabled_reason='Plex did not answer, so MediaCache cannot tell whether this is pinned. Refresh to retry.') }}
         {% elif row.is_pinned and row.pin_scope in ('show', 'season') %}
         {{ pin_button(row.pin_holder_key, row.pin_scope, row.pin_holder_title, True,
                       label='Unpin ' ~ row.pin_scope,
@@ -142,7 +142,7 @@
     </td>
 </tr>
 {# Expand detail: the primary media file, then any associated files, then any
-   other Plex versions of the same item (which PlexCache does not manage). #}
+   other Plex versions of the same item (which MediaCache does not manage). #}
 {{ ra_detail_file(row.filename or row.title, row.size_display, group_id if is_child else '') }}
 {% for af in row.associated_files %}
 {{ ra_detail_file(af.filename, af.size, group_id if is_child else '') }}

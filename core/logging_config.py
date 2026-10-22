@@ -275,7 +275,7 @@ class UnraidHandler(logging.Handler):
         else:
             description = record.msg
 
-        notify_args = self._build_notify_args("PlexCache", "Summary", description, icon)
+        notify_args = self._build_notify_args("MediaCache", "Summary", description, icon)
         subprocess.run(notify_args)
 
     def send_unraid_notification(self, record):
@@ -289,7 +289,7 @@ class UnraidHandler(logging.Handler):
         }
 
         icon = level_to_icon.get(record.levelname, 'normal')
-        notify_args = self._build_notify_args("PlexCache", record.levelname, record.msg, icon)
+        notify_args = self._build_notify_args("MediaCache", record.levelname, record.msg, icon)
         subprocess.run(notify_args)
 
 
@@ -529,11 +529,11 @@ class WebhookHandler(logging.Handler):
             total_moved = (self._summary_data.get('cached_count', 0) +
                           self._summary_data.get('restored_count', 0))
             if total_moved > 0:
-                title = f"{dry_run_prefix}PlexCache Summary"
+                title = f"{dry_run_prefix}MediaCache Summary"
             else:
-                title = f"{dry_run_prefix}PlexCache - No Changes"
+                title = f"{dry_run_prefix}MediaCache - No Changes"
         else:
-            title = "PlexCache Summary"
+            title = "MediaCache Summary"
 
         embed = {
             "title": title,
@@ -559,7 +559,7 @@ class WebhookHandler(logging.Handler):
         color = level_colors.get(record.levelno, self.COLORS['info'])
 
         embed = {
-            "title": f"PlexCache - {record.levelname}",
+            "title": f"MediaCache - {record.levelname}",
             "description": record.msg,
             "color": color,
             "timestamp": datetime.utcnow().isoformat() + "Z"
@@ -571,7 +571,7 @@ class WebhookHandler(logging.Handler):
         """Build Slack Block Kit for summary."""
         # Determine header text based on dry run status
         dry_run_prefix = "[DRY RUN] " if self._summary_data and self._summary_data.get('dry_run') else ""
-        header_text = f"{dry_run_prefix}PlexCache Summary"
+        header_text = f"{dry_run_prefix}MediaCache Summary"
 
         blocks = [
             {
@@ -659,7 +659,7 @@ class WebhookHandler(logging.Handler):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"{emoji} *PlexCache - {record.levelname}*\n{record.msg}"
+                        "text": f"{emoji} *MediaCache - {record.levelname}*\n{record.msg}"
                     }
                 }
             ]
@@ -669,7 +669,7 @@ class WebhookHandler(logging.Handler):
         """Build generic JSON payload for unknown webhook types."""
         # Try content first (Discord-compatible), fall back to text (Slack-compatible)
         dry_run_prefix = "[DRY RUN] " if self._summary_data and self._summary_data.get('dry_run') else ""
-        message = f"{dry_run_prefix}PlexCache Summary:\n" + (record.msg or "No files moved")
+        message = f"{dry_run_prefix}MediaCache Summary:\n" + (record.msg or "No files moved")
         return {"content": message, "text": message}
 
 

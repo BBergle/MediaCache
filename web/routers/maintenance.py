@@ -123,7 +123,7 @@ def _check_blocked(action_name: str) -> Optional[str]:
         return (
             '<div class="alert alert-warning maintenance-action-blocked" style="margin-bottom: 1rem;">'
             '<i data-lucide="alert-triangle"></i>'
-            '<span>A PlexCache operation is running. Please wait for it to complete.</span>'
+            '<span>A MediaCache operation is running. Please wait for it to complete.</span>'
             '</div><script>lucide.createIcons();</script>'
         )
 
