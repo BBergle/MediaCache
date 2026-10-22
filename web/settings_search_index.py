@@ -34,6 +34,13 @@ from typing import Any, Dict, List
 _INDEX: List[Dict[str, Any]] = [
     # --- Plex Server -------------------------------------------------------
     {
+        "tab": "plex", "setting_id": "media_server",
+        "label": "Media Server", "hint": "Plex, or Jellyfin (experimental) for caching runs.",
+        "section": "Plex Server", "subsection": "Server Connection",
+        "icon": "server", "tone": "",
+        "keywords": ["jellyfin", "media server", "plex", "api key"],
+    },
+    {
         "tab": "plex", "setting_id": "plex_url",
         "label": "Plex URL", "hint": "Base URL of your Plex Media Server.",
         "section": "Plex Server", "subsection": "Server Connection",

@@ -133,6 +133,9 @@ def test_plex_connection(request: Request):
     settings_service = get_settings_service()
     settings = settings_service.get_plex_settings()
 
+    if settings["media_server"] == "jellyfin":
+        return _test_jellyfin_connection(request, settings)
+
     plex_url = settings.get("plex_url", "")
     plex_token = settings.get("plex_token", "")
 
@@ -179,18 +182,39 @@ def test_plex_connection(request: Request):
         )
 
 
+def _test_jellyfin_connection(request: Request, settings: dict):
+    """Test the saved Jellyfin URL/API key/user"""
+    if not settings["jellyfin_url"] or not settings["jellyfin_api_key"]:
+        return templates.TemplateResponse(
+            request,
+            "partials/alert.html",
+            {"type": "error", "message": "Missing Jellyfin URL or API key. Save settings first."}
+        )
+    from core.jellyfin_api import JellyfinManager
+    jellyfin = JellyfinManager(settings["jellyfin_url"], settings["jellyfin_api_key"],
+                               settings["jellyfin_user"], timeout=10)
+    try:
+        jellyfin.connect()
+    except ConnectionError as e:
+        return templates.TemplateResponse(
+            request, "partials/alert.html", {"type": "error", "message": str(e)[:200]}
+        )
+    return templates.TemplateResponse(
+        request,
+        "partials/alert.html",
+        {"type": "success", "message": f"Connected to Jellyfin as {jellyfin.main_user}"}
+    )
+
+
 @router.put("/plex", response_class=HTMLResponse)
 def save_plex_settings(request: Request, form_data: ImmutableMultiDict = Depends(parse_form)):
-    """Save Plex Server connection settings (URL + token only)"""
+    """Save media server connection settings (Plex URL + token, or Jellyfin)"""
     settings_service = get_settings_service()
 
-    plex_url = form_data.get("plex_url", "")
-    plex_token = form_data.get("plex_token", "")
-
-    success = settings_service.save_plex_settings({
-        "plex_url": plex_url,
-        "plex_token": plex_token,
-    })
+    settings = {key: form_data.get(key, "").strip()
+                for key in ("plex_url", "plex_token", "jellyfin_url", "jellyfin_api_key", "jellyfin_user")}
+    settings["media_server"] = "jellyfin" if form_data.get("media_server") == "jellyfin" else "plex"
+    success = settings_service.save_plex_settings(settings)
 
     if success:
         return templates.TemplateResponse(

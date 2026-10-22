@@ -1,6 +1,7 @@
 {% extends "setup/base_setup.html" %}
 
 {% block content %}
+{% set jellyfin = settings.media_server == 'jellyfin' %}
 <form action="/setup/step4" method="post">
     <div class="setup-content">
         <h2>User Configuration</h2>
@@ -15,13 +16,22 @@
                        onchange="toggleUserList()">
                 <div class="checkbox-label">
                     <strong>Monitor Other Users</strong>
+                    {% if jellyfin %}
+                    <span>Cache media from other Jellyfin users' Continue Watching, Next Up and Favorites</span>
+                    {% else %}
                     <span>Cache media from other Plex users' OnDeck and Watchlist</span>
+                    {% endif %}
                 </div>
             </label>
         </div>
 
         <div id="user-list" style="{% if not users_toggle %}display: none;{% endif %}">
-            {% if users %}
+            {% if jellyfin %}
+            <div class="alert alert-info">
+                <i data-lucide="info"></i>
+                <span>Every Jellyfin user on the server is monitored. Your main user is always included.</span>
+            </div>
+            {% elif users %}
             <div class="form-group">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                     <label style="margin: 0;">Plex Users</label>
@@ -74,6 +84,7 @@
             {% endif %}
         </div>
 
+        {% if not jellyfin %}
         <div class="alert alert-info" style="margin-top: 1rem;">
             <i data-lucide="info"></i>
             <div>
@@ -105,6 +116,7 @@
                 <p class="help-text" style="margin-top: 0.25rem;">Leave blank to skip - you can add this later in Settings.</p>
             </div>
         </div>
+        {% endif %}
     </div>
 
     <div class="setup-footer">

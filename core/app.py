@@ -563,6 +563,13 @@ class PlexCacheApp:
         logging.debug("Initializing Plex manager...")
         token_cache_file = str(self.config_manager.get_user_tokens_file())
         rss_cache_file = str(self.config_manager.get_rss_cache_file())
+        plex_config = self.config_manager.plex
+        if plex_config.media_server == "jellyfin":
+            from core.jellyfin_api import JellyfinManager
+            self.plex_manager = JellyfinManager(
+                plex_config.jellyfin_url, plex_config.jellyfin_api_key, plex_config.jellyfin_user
+            )
+            return
         self.plex_manager = PlexManager(
             plex_url=self.config_manager.plex.plex_url,
             plex_token=self.config_manager.plex.plex_token,
@@ -1088,6 +1095,8 @@ class PlexCacheApp:
 
     def _get_media_path_from_session(self, session) -> Optional[str]:
         """Extract media file path from a Plex session. Returns None if unable to extract."""
+        if isinstance(session, str):
+            return session  # Jellyfin sessions are already file paths
         try:
             media = str(session.source())
             # Use regex for safer parsing: extract ID between first two colons
@@ -1386,6 +1395,9 @@ class PlexCacheApp:
         pin_entries = self.pinned_tracker.list_pins()
         if not pin_entries:
             logging.debug("No pinned media configured")
+            return
+        if self.plex_manager.plex is None:
+            logging.warning("Pinned media requires Plex; skipping pins for this media server")
             return
 
         preference = self.config_manager.plex.pinned_preferred_resolution or "highest"

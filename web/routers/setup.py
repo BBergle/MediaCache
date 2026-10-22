@@ -55,6 +55,9 @@ def is_setup_complete() -> bool:
     settings_service = get_settings_service()
     settings = settings_service.get_all()
 
+    if settings.get("media_server") == "jellyfin":
+        return bool(settings.get("jellyfin_url") and settings.get("jellyfin_api_key"))
+
     # Setup is complete if we have Plex URL and token configured
     plex_url = settings.get("PLEX_URL", "")
     plex_token = settings.get("PLEX_TOKEN", "")
@@ -94,6 +97,8 @@ def setup_wizard(request: Request, step: int = 1):
         # Plex connection - check for existing values
         context["plex_url"] = settings.get("PLEX_URL", "")
         context["plex_token"] = settings.get("PLEX_TOKEN", "")
+        for key in ("media_server", "jellyfin_url", "jellyfin_api_key", "jellyfin_user"):
+            context[key] = settings.get(key, "")
 
     elif step == 3:
         # Libraries - use cached data if available, otherwise fetch from Plex
@@ -102,6 +107,15 @@ def setup_wizard(request: Request, step: int = 1):
         if "_cached_libraries" in _setup_state:
             # Use cached libraries for faster back-navigation
             context["libraries"] = _setup_state["_cached_libraries"]
+        elif settings.get("media_server") == "jellyfin":
+            from core.jellyfin_api import JellyfinManager
+            try:
+                libraries = JellyfinManager(settings["jellyfin_url"], settings["jellyfin_api_key"],
+                                            timeout=10).get_libraries()
+            except requests.RequestException:
+                libraries = []
+            _setup_state["_cached_libraries"] = libraries
+            context["libraries"] = libraries
         elif plex_url and plex_token:
             # Fetch and cache libraries
             libraries = settings_service.get_plex_libraries(
@@ -173,10 +187,38 @@ def setup_step1_post(request: Request):
 @router.post("/setup/step2", response_class=HTMLResponse)
 def setup_step2_post(
     request: Request,
-    plex_url: str = Form(...),
-    plex_token: str = Form(...)
+    plex_url: str = Form(""),
+    plex_token: str = Form(""),
+    media_server: str = Form("plex"),
+    jellyfin_url: str = Form(""),
+    jellyfin_api_key: str = Form(""),
+    jellyfin_user: str = Form(""),
 ):
     """Handle step 2 (Plex Connection) form submission"""
+    if media_server == "jellyfin":
+        jellyfin_settings = {
+            "media_server": "jellyfin",
+            "jellyfin_url": jellyfin_url.strip(),
+            "jellyfin_api_key": jellyfin_api_key.strip(),
+            "jellyfin_user": jellyfin_user.strip(),
+        }
+        from core.jellyfin_api import JellyfinManager
+        try:
+            JellyfinManager(jellyfin_settings["jellyfin_url"], jellyfin_settings["jellyfin_api_key"],
+                            jellyfin_settings["jellyfin_user"], timeout=10).connect()
+        except ConnectionError as e:
+            return templates.TemplateResponse(
+                request,
+                "setup/step2.html",
+                {"page_title": "Setup", "step": 2, "total_steps": 7,
+                 "plex_url": plex_url, "plex_token": plex_token, **jellyfin_settings,
+                 "error": str(e)}
+            )
+        update_setup_state(jellyfin_settings)
+        _setup_state.pop("_cached_libraries", None)
+        _setup_state.pop("_cached_users", None)
+        return RedirectResponse(url="/setup?step=3", status_code=303)
+
     # Validate connection before storing in memory
     try:
         from plexapi.server import PlexServer
@@ -202,7 +244,8 @@ def setup_step2_post(
     update_setup_state({
         "PLEX_URL": plex_url,
         "PLEX_TOKEN": plex_token,
-        "plexcache_client_id": client_id
+        "plexcache_client_id": client_id,
+        "media_server": "plex",
     })
 
     # Invalidate caches to force refresh with new credentials
@@ -229,7 +272,8 @@ def setup_step3_post(request: Request, form_data: ImmutableMultiDict = Depends(p
 
     # Get selected libraries and their cacheable status
     selected_libraries = form_data.getlist("libraries")
-    valid_sections = [int(lib_id) for lib_id in selected_libraries]
+    # Plex section keys are ints; Jellyfin library ids are GUID strings
+    valid_sections = [int(lib_id) if lib_id.isdigit() else lib_id for lib_id in selected_libraries]
 
     # Get cacheable status for each library
     library_cacheable = {}

@@ -102,6 +102,10 @@ class PlexConfig:
     """Configuration for Plex server settings."""
     plex_url: str = ""
     plex_token: str = ""
+    media_server: str = "plex"  # "plex" or "jellyfin"
+    jellyfin_url: str = ""
+    jellyfin_api_key: str = ""
+    jellyfin_user: str = ""  # Main Jellyfin user; defaults to the first administrator
     valid_sections: Optional[List[int]] = None
     number_episodes: int = 10
     days_to_monitor: int = 183
@@ -457,8 +461,12 @@ class ConfigManager:
     
     def _load_plex_config(self) -> None:
         """Load Plex-related configuration."""
-        self.plex.plex_url = self.settings_data['PLEX_URL']
-        self.plex.plex_token = self.settings_data['PLEX_TOKEN']
+        self.plex.plex_url = self.settings_data.get('PLEX_URL', '')
+        self.plex.plex_token = self.settings_data.get('PLEX_TOKEN', '')
+        self.plex.media_server = self.settings_data.get('media_server', 'plex')
+        self.plex.jellyfin_url = self.settings_data.get('jellyfin_url', '')
+        self.plex.jellyfin_api_key = self.settings_data.get('jellyfin_api_key', '')
+        self.plex.jellyfin_user = self.settings_data.get('jellyfin_user', '')
         self.plex.number_episodes = self.settings_data['number_episodes']
         self.plex.valid_sections = self.settings_data['valid_sections']
         self.plex.days_to_monitor = self.settings_data['days_to_monitor']
@@ -794,7 +802,7 @@ class ConfigManager:
 
         # Core required fields (always required)
         required_fields = [
-            'PLEX_URL', 'PLEX_TOKEN', 'number_episodes', 'valid_sections',
+            'number_episodes', 'valid_sections',
             'days_to_monitor', 'users_toggle', 'watchlist_toggle',
             'watchlist_episodes', 'watched_move', 'cache_dir',
             'max_concurrent_moves_array', 'max_concurrent_moves_cache'
@@ -890,11 +898,15 @@ class ConfigManager:
             if value < 0:
                 errors.append(f"'{field}' must be non-negative, got {value}")
 
-        # Validate non-empty URL and token
-        if not self.settings_data.get('PLEX_URL', '').strip():
-            errors.append("'PLEX_URL' cannot be empty")
-        if not self.settings_data.get('PLEX_TOKEN', '').strip():
-            errors.append("'PLEX_TOKEN' cannot be empty")
+        # Validate non-empty URL and token for the configured media server
+        media_server = self.settings_data.get('media_server', 'plex')
+        if media_server not in ('plex', 'jellyfin'):
+            errors.append(f"'media_server' must be 'plex' or 'jellyfin', got {media_server!r}")
+        server_fields = (['jellyfin_url', 'jellyfin_api_key'] if media_server == 'jellyfin'
+                         else ['PLEX_URL', 'PLEX_TOKEN'])
+        for field in server_fields:
+            if not str(self.settings_data.get(field, '')).strip():
+                errors.append(f"'{field}' cannot be empty")
 
         if errors:
             error_msg = "Configuration validation errors: " + "; ".join(errors)

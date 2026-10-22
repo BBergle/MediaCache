@@ -16,7 +16,7 @@
             <h3 style="margin: 0 0 1rem 0; font-size: 1rem; color: var(--text-secondary);">Configuration Summary</h3>
 
             <div class="summary-item">
-                <span class="label">Plex Server</span>
+                <span class="label">{{ "Jellyfin" if settings.media_server == "jellyfin" else "Plex" }} Server</span>
                 <span class="value success">
                     <i data-lucide="check-circle" style="width: 14px; height: 14px; margin-right: 4px;"></i>
                     Connected

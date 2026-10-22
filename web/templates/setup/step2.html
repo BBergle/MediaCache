@@ -3,9 +3,9 @@
 {% block content %}
 <form id="plex-form" action="/setup/step2" method="post">
     <div class="setup-content">
-        <h2>Connect to Plex</h2>
+        <h2>Connect to Your Media Server</h2>
         <p class="description">
-            Enter your Plex server details or sign in with your Plex account.
+            Choose your media server, then enter its connection details.
         </p>
 
         {% if error %}
@@ -17,6 +17,43 @@
 
         <div id="connection-status"></div>
 
+        <div class="form-group">
+            <label for="media_server">Media Server</label>
+            <select id="media_server" name="media_server" onchange="toggleMediaServer()">
+                <option value="plex" {% if media_server != 'jellyfin' %}selected{% endif %}>Plex</option>
+                <option value="jellyfin" {% if media_server == 'jellyfin' %}selected{% endif %}>Jellyfin (experimental)</option>
+            </select>
+        </div>
+
+        <div data-server="jellyfin">
+            <div class="form-group">
+                <label for="jellyfin_url">Jellyfin Server URL</label>
+                <input type="text" id="jellyfin_url" name="jellyfin_url"
+                       value="{{ jellyfin_url }}"
+                       placeholder="http://192.168.1.x:8096" data-required>
+                <p class="help-text">The URL of your Jellyfin server (include port)</p>
+            </div>
+
+            <div class="form-group">
+                <label for="jellyfin_api_key">API Key</label>
+                <input type="password" id="jellyfin_api_key" name="jellyfin_api_key"
+                       value="{{ jellyfin_api_key }}"
+                       placeholder="Dashboard &rsaquo; API Keys" data-required>
+            </div>
+
+            <div class="form-group">
+                <label for="jellyfin_user">Main User</label>
+                <input type="text" id="jellyfin_user" name="jellyfin_user"
+                       value="{{ jellyfin_user }}"
+                       placeholder="First administrator">
+                <p class="help-text">
+                    Leave blank to use the first administrator. Jellyfin covers caching runs only:
+                    pinned media, Recently Added and RSS watchlists stay Plex-only.
+                </p>
+            </div>
+        </div>
+
+        <div data-server="plex">
         <!-- OAuth Button -->
         <button type="button" id="oauth-btn" class="oauth-btn" onclick="startOAuth()">
             <i data-lucide="log-in"></i>
@@ -30,7 +67,7 @@
             <input type="text" id="plex_url" name="plex_url"
                    value="{{ plex_url }}"
                    placeholder="http://192.168.1.x:32400"
-                   required>
+                   data-required>
             <p class="help-text">The URL of your Plex server (include port)</p>
         </div>
 
@@ -50,6 +87,7 @@
             <i data-lucide="wifi"></i>
             Test Connection
         </button>
+        </div>
     </div>
 
     <div class="setup-footer">
@@ -71,6 +109,17 @@
     let oauthPollInterval = null;
     let oauthPopup = null;
     let oauthPopupCheckTimer = null;
+
+    // Show only the selected server's fields; hidden fields must not block submit
+    function toggleMediaServer() {
+        const server = document.getElementById('media_server').value;
+        document.querySelectorAll('[data-server]').forEach(section => {
+            const active = section.dataset.server === server;
+            section.style.display = active ? '' : 'none';
+            section.querySelectorAll('[data-required]').forEach(input => input.required = active);
+        });
+    }
+    toggleMediaServer();
 
     // Show loading spinner on Next button when form is submitted
     document.getElementById('plex-form').addEventListener('submit', function(e) {

@@ -179,6 +179,10 @@ class SettingsService:
         return {
             "plex_url": raw.get("PLEX_URL", ""),
             "plex_token": raw.get("PLEX_TOKEN", ""),
+            "media_server": raw.get("media_server", "plex"),
+            "jellyfin_url": raw.get("jellyfin_url", ""),
+            "jellyfin_api_key": raw.get("jellyfin_api_key", ""),
+            "jellyfin_user": raw.get("jellyfin_user", ""),
             "valid_sections": raw.get("valid_sections", []),
             "days_to_monitor": raw.get("days_to_monitor", 183),
             "number_episodes": raw.get("number_episodes", 5),
@@ -199,6 +203,9 @@ class SettingsService:
 
         raw["PLEX_URL"] = new_url
         raw["PLEX_TOKEN"] = new_token
+        for key in ("media_server", "jellyfin_url", "jellyfin_api_key", "jellyfin_user"):
+            if key in settings:
+                raw[key] = settings[key]
         if "valid_sections" in settings:
             raw["valid_sections"] = settings["valid_sections"]
         if "days_to_monitor" in settings:

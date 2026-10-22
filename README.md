@@ -324,6 +324,27 @@ python3 plexcache.py
 
 For additional help, check the [Wiki](https://github.com/StudioNirin/PlexCache-D/wiki) for detailed guides. If something doesn't make sense or doesn't work, please open a new issue. But don't be upset if the answer is in the Wiki and we mock you for not reading it thoroughly first.
 
+## Jellyfin (Experimental)
+
+Caching runs can use Jellyfin instead of Plex. Pick **Jellyfin** as the media server in setup
+wizard step 2 or under **Settings → Plex Server**. For the CLI, add these to `plexcache_settings.json`
+(`PLEX_URL`/`PLEX_TOKEN` are then not needed):
+
+```json
+"media_server": "jellyfin",
+"jellyfin_url": "http://192.168.1.10:8096",
+"jellyfin_api_key": "<Dashboard > API Keys>",
+"jellyfin_user": ""
+```
+
+- **OnDeck** = Continue Watching + Next Up (plus the next `number_episodes`).
+- **Watchlist** = Favorites (favorite a series to cache its next unwatched `watchlist_episodes`).
+- `jellyfin_user` is the main user (blank = first administrator). With `users_toggle` on, all
+  Jellyfin users are included; skip users via `users` entries with `skip_ondeck`/`skip_watchlist`.
+- Requires Jellyfin 10.9+. Path mappings use Jellyfin's paths in place of Plex paths.
+- Plex-only: pinned media, recently added, remote RSS watchlists, Plex OAuth login, and the
+  Libraries/Users settings tabs (the wizard's library picker works with Jellyfin).
+
 ## Notes
 
 This script might be compatible with other systems, especially Linux-based ones, although I have primarily tested it on Unraid with plex as docker container. While I cannot support every case, it's worth checking the GitHub issues to see if your specific case has already been discussed. Particularly worth checking the original Bexem repo issues page.
