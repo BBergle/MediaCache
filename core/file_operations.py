@@ -1371,6 +1371,41 @@ class WatchlistTracker(JSONTracker):
 
             self._save()
 
+    def rekey_paths(self, convert: Callable[[str], str]) -> int:
+        """Re-key every entry to convert(key); merge entries that collide.
+
+        On collision the already-present target keeps its fields, except users
+        are unioned and the most recent watchlisted_at / last_seen win.
+
+        Returns:
+            Number of keys that changed. Saves only if any changed.
+        """
+        with self._lock:
+            rekeyed: Dict[str, dict] = {}
+            moved = []
+            for key, entry in self._data.items():
+                new_key = convert(key)
+                if new_key == key:
+                    rekeyed[key] = entry
+                else:
+                    moved.append((new_key, entry))
+            for new_key, entry in moved:
+                target = rekeyed.get(new_key)
+                if target is None:
+                    rekeyed[new_key] = entry
+                    continue
+                for u in entry.get('users', []):
+                    if u not in target.setdefault('users', []):
+                        target['users'].append(u)
+                # ISO strings from the same source sort chronologically
+                for field in ('watchlisted_at', 'last_seen'):
+                    if entry.get(field) and entry[field] > target.get(field, ''):
+                        target[field] = entry[field]
+            if moved:
+                self._data = rekeyed
+                self._save()
+            return len(moved)
+
     def is_expired(self, file_path: str, retention_days: int, username: str = None) -> bool:
         """Check if a watchlist item has expired based on retention period.
 
@@ -1691,7 +1726,7 @@ class OnDeckTracker(JSONTracker):
                 self._save()
                 logging.debug(f"Removed {self._tracker_name} entry for: {file_path}")
 
-    def prepare_for_run(self) -> None:
+    def prepare_for_run(self, keep_user: Optional[Callable[[str], bool]] = None) -> None:
         """Prepare tracker for a new run while preserving first_seen timestamps.
 
         Clears per-run fields (users, ondeck_users, episode_info) on all entries
@@ -1700,13 +1735,21 @@ class OnDeckTracker(JSONTracker):
 
         Unlike the old clear_for_run(), this does NOT delete entries — first_seen
         timestamps are preserved so OnDeck retention can accumulate correctly.
+
+        Users for whom keep_user(user) is true (e.g. a media server that is
+        down this run) are carried over, and entries still holding one count
+        as seen so cleanup_unseen() keeps them.
         """
         with self._lock:
             self._seen_this_run = set()
             for file_path, entry in self._data.items():
-                entry['users'] = []
-                entry['ondeck_users'] = []
-                entry.pop('episode_info', None)
+                kept = [u for u in entry.get('users', []) if keep_user and keep_user(u)]
+                entry['users'] = kept
+                entry['ondeck_users'] = [u for u in entry.get('ondeck_users', []) if u in kept]
+                if kept:
+                    self._seen_this_run.add(file_path)
+                else:
+                    entry.pop('episode_info', None)
             # Don't save yet — update_entry() calls will save as entries are refreshed
             logging.debug("Prepared OnDeck tracker for new run (preserved first_seen timestamps)")
 
