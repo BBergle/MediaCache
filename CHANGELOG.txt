@@ -1,5 +1,42 @@
 ## Changelog
 
+### v3.3.0: MediaCache (October 2026)
+
+First release under the MediaCache name (formerly BBergle/PlexCache). Image: `ghcr.io/bbergle/mediacache`.
+
+**Jellyfin Support (Experimental)**
+- Use Jellyfin instead of Plex: Continue Watching + Next Up count as OnDeck, and Favorites count as the Watchlist
+- Choose Jellyfin in setup wizard step 2, or under Settings → Media Server, with a Jellyfin connection test
+- Wizard step 3 lists Jellyfin libraries for path mappings; requires Jellyfin 10.9+
+
+**Plex and Jellyfin at the Same Time**
+- New `"media_server": "both"` setting, with a switch per server in Settings → Media Server
+- Files are matched by their real path on the array, so an episode wanted on both servers is cached once
+- A file stays cached while anyone on either server still needs it, even when the servers name the show differently
+- If a server is unreachable, nothing is moved back or evicted that run, and its users and retention clocks carry over
+- Users are per server: Jellyfin users are named `"<name> (Jellyfin)"`, so a Plex "Ben" and a Jellyfin "Ben" stay separate
+- Settings → Users lists both servers' users; syncing one server never wipes the other's, and a failed sync shows a warning
+- The dashboard shows a connection badge for each enabled server
+- Path mappings for one real folder share their flags, and Settings → Libraries warns when they disagree
+- The watchlist tracker is now keyed by real path; existing entries are re-keyed automatically
+
+**New Look**
+- Graphite + Mint theme, in light and dark, replacing the Plex grey and yellow
+- Page content uses up to 1920px on wide screens; the setup wizard is wider
+- Recoloured app icon and favicon
+
+**Fixes**
+- Recently Added keeps the Watchlist badge with real-path tracker keys
+- The remote RSS watchlist pass no longer fetches Jellyfin favourites twice
+- Plex-only installs don't get new warnings when eviction is off
+- The web UI follows CLI runs that log the new `=== MediaCache` header, as well as older logs
+- Upgrading a cached file moves its watchlist entry by real path
+
+**Upgrading**
+- Existing `"plex"` and `"jellyfin"` settings keep working, and the settings file and Docker paths are unchanged
+- Migrating from PlexCache-D: point the MediaCache container's Config at your existing appdata folder
+- Jellyfin-only installs: Jellyfin users are now named `"<name> (Jellyfin)"`, so use Settings → Users → Sync Users and re-set any per-user options
+
 ### v3.2.0 Updates (March 2026)
 
 **Shared User Token Recovery (Plex API Security Change)**
