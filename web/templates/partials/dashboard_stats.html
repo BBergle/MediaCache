@@ -142,12 +142,12 @@
         {% if stats.plex_connected %}
         <span class="badge badge-success">
             <i data-lucide="plug"></i>
-            Plex Connected
+            {{ media_server_name() }} Connected
         </span>
         {% else %}
         <span class="badge badge-warning">
             <i data-lucide="plug-off"></i>
-            Plex Not Connected
+            {{ media_server_name() }} Not Connected
         </span>
         {% endif %}
     </div>

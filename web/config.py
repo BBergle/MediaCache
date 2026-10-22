@@ -89,6 +89,15 @@ def _share_warning(mapping) -> dict:
 
 templates.env.globals["share_warning"] = _share_warning
 
+
+def _media_server_name() -> str:
+    """'Jellyfin' or 'Plex', for status text that names the configured server."""
+    from web.services.settings_service import get_settings_service  # circular at import time
+    return "Jellyfin" if get_settings_service().get_all().get("media_server") == "jellyfin" else "Plex"
+
+
+templates.env.globals["media_server_name"] = _media_server_name
+
 # Searchable Settings index — exposed as JSON for client-side search.
 # See web/settings_search_index.py for the source of truth. Module lives outside
 # web/services/ to avoid a circular import (services/__init__.py loads cache_service

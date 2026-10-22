@@ -146,6 +146,8 @@ class RecentlyAddedService:
             logger.warning(f"RecentlyAddedService: settings not loadable: {e}")
             return self._empty_result("PlexCache is not configured yet.")
 
+        if config.plex.media_server == "jellyfin":
+            return self._empty_result("Recently Added needs Plex, so it isn't available with Jellyfin.")
         if not config.plex.plex_url or not config.plex.plex_token:
             return self._empty_result("Plex server is not configured.")
 
