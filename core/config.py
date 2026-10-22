@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass
+from core.media_servers import enabled_media_servers
 from core.system_utils import parse_size_bytes
 
 # Get the directory where config.py is located
@@ -102,7 +103,7 @@ class PlexConfig:
     """Configuration for Plex server settings."""
     plex_url: str = ""
     plex_token: str = ""
-    media_server: str = "plex"  # "plex" or "jellyfin"
+    media_server: str = "plex"  # "plex", "jellyfin" or "both"
     jellyfin_url: str = ""
     jellyfin_api_key: str = ""
     jellyfin_user: str = ""  # Main Jellyfin user; defaults to the first administrator
@@ -900,13 +901,13 @@ class ConfigManager:
 
         # Validate non-empty URL and token for the configured media server
         media_server = self.settings_data.get('media_server', 'plex')
-        if media_server not in ('plex', 'jellyfin'):
-            errors.append(f"'media_server' must be 'plex' or 'jellyfin', got {media_server!r}")
-        server_fields = (['jellyfin_url', 'jellyfin_api_key'] if media_server == 'jellyfin'
-                         else ['PLEX_URL', 'PLEX_TOKEN'])
-        for field in server_fields:
-            if not str(self.settings_data.get(field, '')).strip():
-                errors.append(f"'{field}' cannot be empty")
+        if media_server not in ('plex', 'jellyfin', 'both'):
+            errors.append(f"'media_server' must be 'plex', 'jellyfin' or 'both', got {media_server!r}")
+        required = {'plex': ['PLEX_URL', 'PLEX_TOKEN'], 'jellyfin': ['jellyfin_url', 'jellyfin_api_key']}
+        for server in enabled_media_servers(media_server):
+            for field in required[server]:
+                if not str(self.settings_data.get(field, '')).strip():
+                    errors.append(f"'{field}' cannot be empty")
 
         if errors:
             error_msg = "Configuration validation errors: " + "; ".join(errors)
