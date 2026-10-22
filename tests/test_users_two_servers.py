@@ -130,3 +130,20 @@ def test_jellyfin_users_have_no_token_panel(env):
     client, _ = env({"media_server": "both", "users": [dict(BEN), dict(JF_BEN)]})
     page = client.get("/settings/users/list").text
     assert "user_token_Ben (Jellyfin)" not in page
+
+
+def test_sync_hides_disabled_server_users(env):
+    client, svc = env({"media_server": "plex", "users": [dict(BEN), dict(JF_BEN)]})
+    account = MagicMock(title="Ben", username="Ben", id=1, uuid="x")
+    account.users.return_value = []
+    with patch("plexapi.server.PlexServer") as ps:
+        ps.return_value.myPlexAccount.return_value = account
+        page = client.post("/settings/users/sync").text
+    assert "Synced 1 users" in page and "(Jellyfin)" not in page
+
+
+def test_sync_shows_error_of_failed_server(env):
+    client, _ = env({"media_server": "both", "users": []})
+    with patch("plexapi.server.PlexServer", side_effect=Exception("plex down")):
+        page = client.post("/settings/users/sync").text
+    assert "kid (Jellyfin)" in page and "plex down" in page

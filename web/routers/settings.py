@@ -246,6 +246,12 @@ def _user_server(user):
     return user.get("server") or server_of_user(user.get("title", ""))
 
 
+def _enabled_users(settings_service, users):
+    """Users belonging to an enabled media server."""
+    enabled = enabled_media_servers(settings_service.get_plex_settings()["media_server"])
+    return [u for u in users if _user_server(u) in enabled]
+
+
 @router.get("/users", response_class=HTMLResponse)
 def settings_users(request: Request):
     """Users settings tab - renders with skeleton for lazy load"""
@@ -278,8 +284,7 @@ def get_users_list(request: Request):
         settings_service = get_settings_service()
         user_settings = settings_service.get_user_settings()
         plex_error = settings_service.get_last_plex_error()
-        enabled = enabled_media_servers(settings_service.get_plex_settings()["media_server"])
-        users = [u for u in user_settings.get("users", []) if _user_server(u) in enabled]
+        users = _enabled_users(settings_service, user_settings.get("users", []))
 
         logger.info(f"Loading users list: {len(users)} users found")
 
@@ -307,11 +312,14 @@ def sync_users(request: Request):
     result = settings_service.sync_users()
 
     if result["success"]:
-        message = f"Synced {len(result['users'])} users"
+        users = _enabled_users(settings_service, result["users"])
+        message = f"Synced {len(users)} users"
         if result["added_count"] > 0:
             message += f" (+{result['added_count']} new)"
         if result["removed_count"] > 0:
             message += f" (-{result['removed_count']} removed)"
+        if result["error"]:
+            message += f". Warning: {result['error']}"
 
         # Return updated user list with success message
         user_settings = settings_service.get_user_settings()
@@ -321,7 +329,7 @@ def sync_users(request: Request):
             {
                 "success": True,
                 "message": message,
-                "users": result["users"],
+                "users": users,
                 "settings": user_settings
             }
         )
