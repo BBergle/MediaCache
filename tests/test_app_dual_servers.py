@@ -328,3 +328,25 @@ def test_path_mappings_keep_user_flags_while_conversion_shares_them():
     assert real == "/mnt/user/tv/Show/e1.mkv"
     cache, _ = app.file_path_modifier.convert_real_to_cache(real)
     assert cache == "/mnt/cache/tv/Show/e1.mkv"
+
+
+# --- upgrades ---
+
+def test_upgrade_moves_real_path_watchlist_entry(tmp_path):
+    from core.file_operations import WatchlistTracker
+    tracker = WatchlistTracker(str(tmp_path / "watchlist.json"))
+    tracker.update_entry("/mnt/user/tv/Old.mkv", "Ben", None, rating_key="42", media_type="movie")
+    first_added = tracker.get_entry("/mnt/user/tv/Old.mkv")["watchlisted_at"]
+
+    app = _app()
+    app.file_path_modifier = None
+    app.timestamp_tracker = None
+    app.ondeck_tracker = MagicMock()
+    app.watchlist_tracker = tracker
+    app._handle_upgrade_plexcached = MagicMock()
+    app._transfer_upgrade_tracking("/mnt/user/tv/Old.mkv", "/mnt/user/tv/New.mkv",
+                                   SimpleNamespace(rating_key="42", episode_info=None))
+
+    assert tracker.get_entry("/mnt/user/tv/Old.mkv") is None
+    moved = tracker._data["/mnt/user/tv/New.mkv"]
+    assert moved["users"] == ["Ben"] and moved["watchlisted_at"] == first_added

@@ -2053,7 +2053,7 @@ class CacheService:
                 logger.debug(f"Upgrade detected (rk={rating_key}) but new file not yet on cache: {new_cache_path}")
                 continue
 
-            # Derive plex paths for watchlist tracker (uses plex path keys)
+            # Plex path for watchlist trackers not yet re-keyed to real paths
             old_plex_path = self._real_to_plex(old_real_path, path_mappings)
 
             logger.info(f"[UPGRADE] Detected file upgrade (rk={rating_key}): "
@@ -2138,11 +2138,14 @@ class CacheService:
                 save_json_atomically(str(self.ondeck_file), ondeck_data, label="ondeck tracker")
 
             # 4. Watchlist tracker: transfer entry if exists
-            # Watchlist tracker keys are plex paths (/data/...)
+            # Keys are real paths (/mnt/user/...); trackers the next run hasn't
+            # re-keyed yet still use plex paths (/data/...)
             watchlist_data = self.get_watchlist_tracker()
-            if old_plex_path and old_plex_path in watchlist_data:
-                watchlist_data[new_plex_path] = watchlist_data.pop(old_plex_path)
-                save_json_atomically(str(self.watchlist_file), watchlist_data, label="watchlist tracker")
+            for old_key, new_key in ((old_real_path, new_real_path), (old_plex_path, new_plex_path)):
+                if old_key and new_key and old_key in watchlist_data:
+                    watchlist_data[new_key] = watchlist_data.pop(old_key)
+                    save_json_atomically(str(self.watchlist_file), watchlist_data, label="watchlist tracker")
+                    break
 
             # 5. Handle .plexcached backups
             self._handle_upgrade_plexcached(

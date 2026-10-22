@@ -722,6 +722,32 @@ class TestTransferTrackingAtomicWrites:
         assert len(wl_calls) == 1, f"Expected 1 watchlist atomic write, got {len(wl_calls)}: {mock_atomic.call_args_list}"
 
 
+class TestTransferWatchlistEntry:
+    """The watchlist tracker is keyed by real path; older trackers by plex path."""
+
+    def _transfer(self, svc, watchlist):
+        import web.services.cache_service as cs_mod
+        svc.watchlist_file.write_text(json.dumps(watchlist), encoding="utf-8")
+        svc.timestamps_file.write_text("{}", encoding="utf-8")
+        with patch.object(cs_mod, "remove_from_exclude_file"), \
+             patch.object(cs_mod, "remove_from_timestamps_file"), \
+             patch.object(cs_mod, "get_array_direct_path", side_effect=lambda p: p.replace("/mnt/user/", "/mnt/user0/")), \
+             patch.object(cs_mod, "get_media_identity", return_value="Old"), \
+             patch.object(cs_mod, "find_matching_plexcached", return_value=None):
+            assert TestTransferTrackingAtomicWrites()._call_transfer(svc)
+        return json.loads(svc.watchlist_file.read_text(encoding="utf-8"))
+
+    def test_real_path_entry_moves_to_new_real_path(self, tmp_path):
+        entry = {"users": ["bob"], "watchlisted_at": "2026-01-01T00:00:00"}
+        result = self._transfer(_make_service(tmp_path), {"/mnt/user/media/Movies/Old.mkv": entry})
+        assert result == {"/mnt/user/media/Movies/New.mkv": entry}
+
+    def test_plex_path_entry_not_yet_rekeyed_still_moves(self, tmp_path):
+        entry = {"users": ["bob"], "watchlisted_at": "2026-01-01T00:00:00"}
+        result = self._transfer(_make_service(tmp_path), {"/data/media/Movies/Old.mkv": entry})
+        assert result == {"/data/media/Movies/New.mkv": entry}
+
+
 # ============================================================================
 # Upgrade backup ordering — _handle_upgrade_plexcached()
 # ============================================================================
