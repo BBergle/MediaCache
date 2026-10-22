@@ -55,7 +55,7 @@
                            onchange="toggleScheduleOptions()">
                     <span>Enable scheduled runs</span>
                 </label>
-                <div class="form-hint">When enabled, PlexCache will run automatically on schedule while the Web UI is running.</div>
+                <div class="form-hint">When enabled, MediaCache will run automatically on schedule while the Web UI is running.</div>
             </div>
 
             <div id="schedule-options" {% if not schedule.enabled %}style="opacity: 0.5; pointer-events: none;"{% endif %}>
@@ -264,7 +264,7 @@
 
 .radio-card input:checked + .radio-card-content {
     border-color: var(--plex-orange);
-    background: rgba(229, 160, 13, 0.1);
+    background: color-mix(in srgb, var(--plex-orange) 10%, transparent);
 }
 
 .radio-card input:checked + .radio-card-content i {

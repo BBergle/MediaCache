@@ -913,8 +913,17 @@ class SettingsService:
         return self._save_raw(raw)
 
     def check_plex_connection(self) -> bool:
-        """Check if Plex server is reachable"""
+        """Check if the configured media server (Plex, or Jellyfin) is reachable"""
         settings = self.get_plex_settings()
+        if settings["media_server"] == "jellyfin":
+            import requests
+            from core.jellyfin_api import JellyfinManager
+            jellyfin = JellyfinManager(settings["jellyfin_url"], settings["jellyfin_api_key"], timeout=5)
+            try:
+                jellyfin._get("/System/Info")
+                return True
+            except requests.RequestException:
+                return False
         plex_url = settings.get("plex_url", "")
         plex_token = settings.get("plex_token", "")
 

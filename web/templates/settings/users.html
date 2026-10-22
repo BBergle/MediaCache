@@ -73,7 +73,7 @@
                        onchange="document.getElementById('auth-link-url').style.display = this.checked ? 'block' : 'none';">
                 <span>Enable Self-Service Auth Link</span>
             </label>
-            <div class="form-hint">Allow shared users to link their Plex account by visiting a URL. This captures their access token so PlexCache can monitor their OnDeck items. Requires PlexCache to be reachable by the user (reverse proxy, Tailscale, etc.).</div>
+            <div class="form-hint">Allow shared users to link their Plex account by visiting a URL. This captures their access token so MediaCache can monitor their OnDeck items. Requires MediaCache to be reachable by the user (reverse proxy, Tailscale, etc.).</div>
         </div>
 
         <div id="auth-link-url" class="form-group mb-0" data-setting-id="auth_link_url" style="{% if not settings.auth_link_enabled %}display: none;{% endif %}">
@@ -106,7 +106,7 @@
                    placeholder="/plex/">
             <div class="form-hint">
                 Path to the Plex database folder or file (read-only). When shared users don't have an access token,
-                PlexCache can read their OnDeck items directly from the database. You can point to the folder
+                MediaCache can read their OnDeck items directly from the database. You can point to the folder
                 (the <code>.db</code> file is auto-detected) or the full file path. Mount the Plex Databases directory
                 into the container as a read-only volume, e.g.:
                 <code style="display: block; margin-top: 0.35rem; font-size: 0.8rem;">- /path/to/PlexMediaServer/Library/Application Support/Plex Media Server/Plug-in Support/Databases:/plex:ro</code>

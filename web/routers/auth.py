@@ -408,7 +408,7 @@ def link_oauth_poll(request: Request, client_id: str = Query(...), pin_id: int =
                 "success": True,
                 "complete": True,
                 "linked": False,
-                "error": f"'{plex_username}' is not in the PlexCache user list. Ask the server admin to add you first.",
+                "error": f"'{plex_username}' is not in the MediaCache user list. Ask the server admin to add you first.",
             })
 
     except requests.RequestException as e:

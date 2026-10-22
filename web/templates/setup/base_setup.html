@@ -37,9 +37,9 @@
 
         .setup-card {
             background: var(--plex-bg-card);
-            border-radius: 12px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(229, 160, 13, 0.1);
-            max-width: 600px;
+            border-radius: 20px;
+            box-shadow: var(--plex-shadow-elevated);
+            max-width: 760px;
             width: 100%;
             overflow: hidden;
             position: relative;
@@ -48,7 +48,7 @@
         }
 
         .setup-header {
-            background: rgba(229, 160, 13, 0.08);
+            background: color-mix(in srgb, var(--plex-orange) 8%, transparent);
             padding: 1.5rem 2rem;
             border-bottom: 1px solid var(--plex-border);
             text-align: center;
@@ -99,7 +99,7 @@
         .setup-progress .step-dot.active {
             background: var(--plex-orange);
             transform: scale(1.2);
-            box-shadow: 0 0 8px rgba(229, 160, 13, 0.5);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--plex-orange) 50%, transparent);
         }
 
         .setup-progress .step-dot.completed {
@@ -202,7 +202,7 @@
         .form-group select:focus {
             outline: none;
             border-color: var(--plex-orange);
-            box-shadow: 0 0 0 3px rgba(229, 160, 13, 0.2);
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--plex-orange) 20%, transparent);
         }
 
         .form-group .help-text {
@@ -333,7 +333,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 4px 20px rgba(229, 160, 13, 0.3);
+            box-shadow: 0 4px 20px color-mix(in srgb, var(--plex-orange) 30%, transparent);
         }
 
         .welcome-icon i {
@@ -370,7 +370,7 @@
         .oauth-btn {
             width: 100%;
             padding: 1rem;
-            background: #e5a00d;
+            background: var(--plex-orange);
             border: none;
             border-radius: var(--plex-radius-sm);
             color: #1a1a1a;

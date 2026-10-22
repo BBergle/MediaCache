@@ -69,6 +69,12 @@ def test_settings_tab_saves_and_tests_jellyfin(client):
     page = test_client.get("/settings/plex").text
     assert '<option value="jellyfin" selected>' in page and 'value="http://jf:8096"' in page
     assert "Connected to Jellyfin as admin" in test_client.post("/settings/plex/test").text
+    assert "</i> Media Server </a>" in " ".join(page.split())  # tab is no longer "Plex Server"
+
+    # Dashboard "connected" badges follow the configured server, not Plex
+    assert svc.check_plex_connection() is True
+    with patch("core.jellyfin_api.JellyfinManager._get", side_effect=requests.ConnectionError("down")):
+        assert svc.check_plex_connection() is False
 
 
 def test_wizard_step2_jellyfin_feeds_step3_libraries(client):

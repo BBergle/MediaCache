@@ -371,7 +371,7 @@
                     These pinned files are on cache but not in the Unraid mover exclude list. The next mover run would move them back to the array.
                     <span style="display: block; margin-top: 0.25rem; font-size: 0.85em; opacity: 0.8;">
                         <i data-lucide="info" style="width: 12px; height: 12px; vertical-align: middle;"></i>
-                        Fix: trigger a PlexCache run — pinned files are re-added to the exclude list automatically.
+                        Fix: trigger a MediaCache run — pinned files are re-added to the exclude list automatically.
                     </span>
                 </p>
                 <div id="stale-pinned-missing-list" class="stale-entries-list" style="display: none;">
@@ -870,7 +870,7 @@ function keepOnCacheSelected() {
             <ol style="margin: 0.5rem 0 0 1.5rem; padding: 0;">
                 <li>Copy each file to the array as a <code>.plexcached</code> backup</li>
                 <li>Add to the {% if is_unraid %}Unraid mover exclude list{% else %}cache tracking list{% endif %}</li>
-                <li>Add to PlexCache's cache tracking (one-time — not a pin)</li>
+                <li>Add to MediaCache's cache tracking (one-time — not a pin)</li>
             </ol>
         </div>
 

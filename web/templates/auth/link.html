@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Link Account - PlexCache</title>
+    <title>Link Account - MediaCache</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <script src="{{ static_url('js/vendor/lucide.min.js') }}"></script>
     <link rel="stylesheet" href="{{ static_url('css/plex-theme.css') }}">
@@ -39,7 +39,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 4px 24px rgba(229, 160, 13, 0.25);
+            box-shadow: 0 4px 24px color-mix(in srgb, var(--plex-orange) 25%, transparent);
         }
 
         .link-brand-icon i {
@@ -99,8 +99,8 @@
         .btn-plex {
             width: 100%;
             padding: 0.75rem 1rem;
-            background: rgba(229, 160, 13, 0.08);
-            border: 1px solid rgba(229, 160, 13, 0.4);
+            background: color-mix(in srgb, var(--plex-orange) 8%, transparent);
+            border: 1px solid color-mix(in srgb, var(--plex-orange) 40%, transparent);
             border-radius: 8px;
             color: #fff;
             font-weight: 600;
@@ -114,8 +114,8 @@
         }
 
         .btn-plex:hover {
-            background: rgba(229, 160, 13, 0.15);
-            border-color: rgba(229, 160, 13, 0.6);
+            background: color-mix(in srgb, var(--plex-orange) 15%, transparent);
+            border-color: color-mix(in srgb, var(--plex-orange) 60%, transparent);
         }
 
         .btn-plex:disabled {
@@ -218,7 +218,7 @@
                 <i data-lucide="link"></i>
             </div>
             <h1>Link Your Account</h1>
-            <p>PlexCache</p>
+            <p>MediaCache</p>
         </div>
 
         <div class="link-body">
@@ -229,7 +229,7 @@
             </div>
             {% else %}
             <div class="link-info">
-                Sign in with your Plex account to link it with this PlexCache server. This allows PlexCache to monitor your OnDeck items.
+                Sign in with your Plex account to link it with this MediaCache server. This allows MediaCache to monitor your OnDeck items.
             </div>
 
             <!-- Plex OAuth -->
