@@ -83,8 +83,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ vars.DOCKERHUB_ENABLED == 'true' && format('{0}/plexcache-d', secrets.DOCKERHUB_USERNAME) || '' }}
-            ghcr.io/${{ github.repository_owner }}/plexcache-d
+            ${{ vars.DOCKERHUB_ENABLED == 'true' && format('{0}/mediacache', secrets.DOCKERHUB_USERNAME) || '' }}
+            ghcr.io/${{ github.repository_owner }}/mediacache
           tags: |
             # dev tag for main/dev pushes (rolling test channel, tracks merged work)
             type=raw,value=dev,enable=${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') }}
@@ -92,8 +92,9 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            # latest only for full (non-prerelease) releases
-            type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
+            # latest for full (non-prerelease) releases and every merge to main,
+            # so the Unraid template's :latest follows main without cutting releases
+            type=raw,value=latest,enable=${{ (github.event_name == 'release' && !github.event.release.prerelease) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
       - name: Compute IMAGE_TAG build arg
         id: image_tag

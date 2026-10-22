@@ -1,14 +1,14 @@
-# PlexCache-D Dockerfile
-# Intelligent Plex media caching for Unraid
+# MediaCache Dockerfile
+# Media caching for Plex and Jellyfin on Unraid
 FROM python:3.11-slim
 
 # Labels for Unraid/OCI
-LABEL maintainer="Brandon Haney"
-LABEL org.opencontainers.image.title="PlexCache-D"
-LABEL org.opencontainers.image.description="Intelligent Plex media caching for Unraid"
-LABEL org.opencontainers.image.url="https://github.com/StudioNirin/PlexCache-D"
-LABEL org.opencontainers.image.source="https://github.com/StudioNirin/PlexCache-D"
-LABEL org.opencontainers.image.vendor="Brandon Haney"
+LABEL maintainer="BBergle"
+LABEL org.opencontainers.image.title="MediaCache"
+LABEL org.opencontainers.image.description="Media caching for Plex and Jellyfin on Unraid"
+LABEL org.opencontainers.image.url="https://github.com/BBergle/MediaCache"
+LABEL org.opencontainers.image.source="https://github.com/BBergle/MediaCache"
+LABEL org.opencontainers.image.vendor="BBergle"
 
 # Build args for version tracking
 ARG GIT_COMMIT=unknown
