@@ -11,6 +11,10 @@ built on [PlexCache](https://github.com/bexem/PlexCache) by bexem.
 - **Unraid template:** [BBergle/unraid-templates › mediacache](https://github.com/BBergle/unraid-templates/tree/main/mediacache)
 - **Issues:** [BBergle/MediaCache/issues](https://github.com/BBergle/MediaCache/issues)
 
+![MediaCache dashboard with Plex and Jellyfin both connected](docs/screenshots/dashboard.png)
+
+<sub>Screenshots use demo data.</sub>
+
 ## Overview
 
 MediaCache reduces energy use and array spin-ups when you watch recurring media like TV series.
@@ -29,6 +33,10 @@ it goes back to the array.
 - **Web UI:** a dashboard, cached-file browser, storage view, maintenance tools, live logs and scheduled runs.
 - **Notifications:** Unraid, Discord and Slack.
 - **Unraid integration:** a mover exclusion file, so the mover leaves cached files alone.
+
+| Cached files (light mode) | Storage |
+|---|---|
+| ![Cached files list showing OnDeck and Watchlist items for Plex and Jellyfin users](docs/screenshots/cached-files-light.png) | ![Storage page with drive usage, cache limit and breakdown by source](docs/screenshots/storage.png) |
 
 ## Installation
 
@@ -201,6 +209,8 @@ Under **Settings → Media Server**, switch on **Plex**, **Jellyfin**, or both. 
 own connection fields and **Test Connection** button. The dashboard shows whether each enabled
 server is connected.
 
+![Settings → Media Server with Plex and Jellyfin both switched on](docs/screenshots/settings-media-servers.png)
+
 **How Jellyfin maps to MediaCache:**
 - **OnDeck** = Continue Watching + Next Up, plus the next `number_episodes`.
 - **Watchlist** = Favorites. Favorite a series to cache its next unwatched `watchlist_episodes`.
@@ -220,6 +230,8 @@ server is connected.
 3. **Sync users.** Under **Settings → Users**, click **Sync Users**. Users from both servers are
    listed, and Jellyfin users are named `"<name> (Jellyfin)"`, e.g. `"Ben (Jellyfin)"`. Each person
    gets their own skip and retention settings.
+
+   ![Users page listing Plex and Jellyfin users with per-user settings](docs/screenshots/users.png)
 
 **How it behaves:**
 - **A file stays on cache while anyone on either server still needs it.** Watching an episode on
