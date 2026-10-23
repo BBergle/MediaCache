@@ -1,5 +1,16 @@
 ## Changelog
 
+### v3.3.1 (October 2026)
+
+**Settings → Media Servers**
+- The Media Server settings tab is now Media Servers, with a tab each for Plex and Jellyfin
+- Each server's tab has its own Enabled toggle, Save Connection and Test Connection
+- Test Connection checks only that tab's server, using what's typed, so it works before you save
+- Turning a server off hides its fields, so they don't block saving
+
+**Fixes**
+- Jellyfin URLs work without `http://` (`192.168.1.x:8096`) and with a doubled one (`http://http://…`), including URLs already saved
+
 ### v3.3.0: MediaCache (October 2026)
 
 First release under the MediaCache name (formerly BBergle/PlexCache). Image: `ghcr.io/bbergle/mediacache`.
