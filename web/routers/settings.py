@@ -87,7 +87,7 @@ def settings_plex(request: Request):
         request,
         "settings/plex.html",
         {
-            "page_title": "Plex Server Settings",
+            "page_title": "Media Server Settings",
             "active_tab": "plex",
             "settings": settings,
             "enabled_servers": enabled_media_servers(settings["media_server"]),

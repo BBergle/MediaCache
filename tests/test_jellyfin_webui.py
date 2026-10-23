@@ -71,7 +71,7 @@ def test_settings_tab_saves_and_tests_jellyfin(client):
     assert re.search(r'name="jellyfin_enabled"[^>]*checked', page) and 'value="http://jf:8096"' in page
     assert not re.search(r'name="plex_enabled"[^>]*checked', page)
     assert "Connected to Jellyfin as admin" in test_client.post("/settings/plex/test").text
-    assert "</i> Media Server </a>" in " ".join(page.split())  # tab is no longer "Plex Server"
+    assert "</i> Media Servers </a>" in " ".join(page.split())  # tab is no longer "Plex Server"
 
     # Dashboard "connected" badges follow the configured server, not Plex
     assert svc.check_plex_connection() is True
