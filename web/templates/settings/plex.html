@@ -1,6 +1,25 @@
 {% extends "settings/index.html" %}
 
 {% block settings_content %}
+{# Save submits the whole form; Test checks only this tab's server, with what's typed #}
+{% macro server_actions(key) %}
+        <div class="form-group mb-0" style="display: flex; gap: 1rem; align-items: center; margin-top: 1.5rem;">
+            <button type="submit" class="btn btn-primary">
+                <i data-lucide="save"></i>
+                Save Connection
+            </button>
+            <button type="button" class="btn btn-secondary"
+                    data-setting-id="{{ key }}_test"
+                    hx-post="/settings/plex/test"
+                    hx-vals='{"server": "{{ key }}"}'
+                    hx-target="#{{ key }}-test-result"
+                    hx-swap="innerHTML">
+                <i data-lucide="plug"></i>
+                Test Connection
+            </button>
+            <div id="{{ key }}-test-result"></div>
+        </div>
+{% endmacro %}
 <form id="media-server-form" hx-put="/settings/plex" hx-target="#settings-alert-container" hx-swap="innerHTML">
 <div class="card">
     <div class="card-header">
@@ -49,6 +68,7 @@
                 </div>
             </div>
         </div>
+        {{ server_actions("plex") }}
         </div>
 
         <div data-server="jellyfin" role="tabpanel">
@@ -90,26 +110,7 @@
                 <div class="form-hint">Leave blank to use the first administrator account</div>
             </div>
         </div>
-        </div>
-    </div>
-</div>
-
-<div class="card">
-    <div class="card-body" style="padding: 1rem 1.25rem;">
-        <div class="form-group mb-0" style="display: flex; gap: 1rem; align-items: center;">
-            <button type="submit" class="btn btn-primary">
-                <i data-lucide="save"></i>
-                Save Connection
-            </button>
-            <button type="button" class="btn btn-secondary"
-                    data-setting-id="plex_test"
-                    hx-post="/settings/plex/test"
-                    hx-target="#plex-test-result"
-                    hx-swap="innerHTML">
-                <i data-lucide="plug"></i>
-                Test Connection
-            </button>
-            <div id="plex-test-result"></div>
+        {{ server_actions("jellyfin") }}
         </div>
     </div>
 </div>

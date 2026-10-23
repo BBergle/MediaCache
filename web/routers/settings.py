@@ -131,12 +131,18 @@ def get_plex_users(request: Request):
     )
 
 
+CONNECTION_FIELDS = ("plex_url", "plex_token", "jellyfin_url", "jellyfin_api_key", "jellyfin_user")
+
+
 @router.post("/plex/test", response_class=HTMLResponse)
-def test_plex_connection(request: Request):
-    """Test each enabled media server and return one combined status"""
+def test_plex_connection(request: Request, form_data: ImmutableMultiDict = Depends(parse_form)):
+    """Test the server a tab's Test button names, or each enabled server, and return one status"""
     settings_service = get_settings_service()
     settings = settings_service.get_plex_settings()
-    servers = enabled_media_servers(settings["media_server"])
+    # Test what's typed, so Test works before Save
+    settings.update({key: form_data[key].strip() for key in CONNECTION_FIELDS if key in form_data})
+    server = form_data.get("server")
+    servers = [server] if server in ("plex", "jellyfin") else enabled_media_servers(settings["media_server"])
 
     results = []
     for server in servers:
@@ -158,7 +164,7 @@ def _test_plex_connection(settings_service, settings: dict):
     plex_token = settings.get("plex_token", "")
 
     if not plex_url or not plex_token:
-        return False, "Missing Plex URL or token. Save settings first."
+        return False, "Missing Plex URL or token."
 
     try:
         from plexapi.server import PlexServer
@@ -190,7 +196,7 @@ def _test_plex_connection(settings_service, settings: dict):
 def _test_jellyfin_connection(settings: dict):
     """Test the saved Jellyfin URL/API key/user; returns (ok, message)"""
     if not settings["jellyfin_url"] or not settings["jellyfin_api_key"]:
-        return False, "Missing Jellyfin URL or API key. Save settings first."
+        return False, "Missing Jellyfin URL or API key."
     from core.jellyfin_api import JellyfinManager
     jellyfin = JellyfinManager(settings["jellyfin_url"], settings["jellyfin_api_key"],
                                settings["jellyfin_user"], timeout=10)
@@ -206,8 +212,7 @@ def save_plex_settings(request: Request, form_data: ImmutableMultiDict = Depends
     """Save media server connection settings (Plex URL + token, Jellyfin, or both)"""
     settings_service = get_settings_service()
 
-    settings = {key: form_data.get(key, "").strip()
-                for key in ("plex_url", "plex_token", "jellyfin_url", "jellyfin_api_key", "jellyfin_user")}
+    settings = {key: form_data.get(key, "").strip() for key in CONNECTION_FIELDS}
     media_server = media_server_value(form_data.get("plex_enabled") == "on",
                                       form_data.get("jellyfin_enabled") == "on")
     if media_server is None:
