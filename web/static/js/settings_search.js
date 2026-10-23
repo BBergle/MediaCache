@@ -299,6 +299,9 @@
         // Clear any prior pinned highlight before flashing the new target
         clearPinned(/*instant=*/true);
 
+        // Let a page with in-page tabs show the target's tab before scrolling
+        target.dispatchEvent(new CustomEvent('ss:reveal', { bubbles: true }));
+
         // Phase 1: bright pulse (matches @keyframes ss-flash-pulse duration)
         target.classList.add('ss-flash-highlight');
         if (card) card.classList.add('ss-flash-highlight-card');
