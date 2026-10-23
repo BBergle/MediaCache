@@ -101,3 +101,12 @@ def test_jellyfin_libraries():
         {"id": "abc", "title": "Movies", "type": "movie", "type_label": "Movies", "locations": ["/media/movies"]},
         {"id": "def", "title": "Home", "type": "mixed", "type_label": "Mixed", "locations": []},
     ]
+
+
+def test_url_scheme_missing_or_doubled():
+    for typed, url in [("192.168.0.103:8096", "http://192.168.0.103:8096"),
+                       ("http://jf:8096/", "http://jf:8096"),
+                       ("http://http://192.168.0.103:8096/", "http://192.168.0.103:8096"),
+                       (" HTTPS://jf.example.com ", "https://jf.example.com"),
+                       ("http://https://jf.example.com", "https://jf.example.com")]:
+        assert JellyfinManager(typed, "key").url == url
