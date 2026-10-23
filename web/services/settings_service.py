@@ -1344,7 +1344,7 @@ class SettingsService:
         """Sync Jellyfin users, replacing only the server == "jellyfin" entries."""
         settings = self.get_plex_settings()
         if not settings["jellyfin_url"] or not settings["jellyfin_api_key"]:
-            return {"success": False, "error": "Missing Jellyfin URL or API key. Configure in Media Server settings first."}
+            return {"success": False, "error": "Missing Jellyfin URL or API key. Configure in Media Servers settings first."}
         try:
             from core.jellyfin_api import JellyfinManager
 

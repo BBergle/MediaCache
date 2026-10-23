@@ -1,57 +1,50 @@
 {% extends "settings/index.html" %}
 
 {% block settings_content %}
-<form hx-put="/settings/plex" hx-target="#settings-alert-container" hx-swap="innerHTML">
+{# Save submits the whole form; Test checks only this tab's server, with what's typed #}
+{% macro server_actions(key) %}
+        <div class="form-group mb-0" style="display: flex; gap: 1rem; align-items: center; margin-top: 1.5rem;">
+            <button type="submit" class="btn btn-primary">
+                <i data-lucide="save"></i>
+                Save Connection
+            </button>
+            <button type="button" class="btn btn-secondary"
+                    data-setting-id="{{ key }}_test"
+                    hx-post="/settings/plex/test"
+                    hx-vals='{"server": "{{ key }}"}'
+                    hx-target="#{{ key }}-test-result"
+                    hx-swap="innerHTML">
+                <i data-lucide="plug"></i>
+                Test Connection
+            </button>
+            <div id="{{ key }}-test-result"></div>
+        </div>
+{% endmacro %}
+<form id="media-server-form" hx-put="/settings/plex" hx-target="#settings-alert-container" hx-swap="innerHTML">
 <div class="card">
     <div class="card-header">
         <i data-lucide="link"></i>
         <h2>Server Connection</h2>
     </div>
     <div class="card-body">
-        <div class="form-group" data-setting-id="media_server">
-            <label>Media Servers</label>
-            {% for key, label in (("plex", "Plex"), ("jellyfin", "Jellyfin (experimental)")) %}
-            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem;">
-                <label class="toggle-switch">
-                    <input type="checkbox" id="{{ key }}_enabled" name="{{ key }}_enabled" value="on"
-                           {% if key in enabled_servers %}checked{% endif %}
-                           onchange="toggleMediaServer()">
-                    <span class="toggle-slider"></span>
-                </label>
-                <label for="{{ key }}_enabled" style="margin-bottom: 0;">{{ label }}</label>
-            </div>
+        <div class="tabs" role="tablist" data-setting-id="media_server">
+            {% for key, label in (("plex", "Plex"), ("jellyfin", "Jellyfin")) %}
+            <button type="button" class="tab" role="tab" data-server-tab="{{ key }}"
+                    onclick="showServerTab('{{ key }}')">{{ label }}</button>
             {% endfor %}
-            <div class="form-hint">
-                Jellyfin drives caching runs only: Continue Watching + Next Up as OnDeck, Favorites as Watchlist.
-                Pinned media, Recently Added and RSS watchlists stay Plex-only.
-            </div>
         </div>
 
-        <div class="grid grid-2" data-server="jellyfin">
-            <div class="form-group" data-setting-id="jellyfin_url">
-                <label for="jellyfin_url">Jellyfin URL</label>
-                <input type="text" id="jellyfin_url" name="jellyfin_url"
-                       value="{{ settings.jellyfin_url }}"
-                       placeholder="http://192.168.1.x:8096" data-required>
-            </div>
-
-            <div class="form-group" data-setting-id="jellyfin_api_key">
-                <label for="jellyfin_api_key">API Key</label>
-                <input type="password" id="jellyfin_api_key" name="jellyfin_api_key"
-                       value="{{ settings.jellyfin_api_key }}"
-                       placeholder="Dashboard &rsaquo; API Keys" data-required>
-            </div>
-
-            <div class="form-group mb-0" data-setting-id="jellyfin_user">
-                <label for="jellyfin_user">Main User</label>
-                <input type="text" id="jellyfin_user" name="jellyfin_user"
-                       value="{{ settings.jellyfin_user }}"
-                       placeholder="First administrator">
-                <div class="form-hint">Leave blank to use the first administrator account</div>
-            </div>
+        <div data-server="plex" role="tabpanel">
+        <div class="form-group" style="display: flex; align-items: center; gap: 1rem;">
+            <label class="toggle-switch">
+                <input type="checkbox" id="plex_enabled" name="plex_enabled" value="on"
+                       {% if "plex" in enabled_servers %}checked{% endif %}
+                       onchange="toggleMediaServer('plex')">
+                <span class="toggle-slider"></span>
+            </label>
+            <label for="plex_enabled" style="margin-bottom: 0;">Enabled</label>
         </div>
-
-        <div class="grid grid-2" data-server="plex">
+        <div class="grid grid-2" data-server-fields="plex">
             <div class="form-group" data-setting-id="plex_url">
                 <label for="plex_url">Plex URL</label>
                 <input type="text" id="plex_url" name="plex_url"
@@ -75,25 +68,49 @@
                 </div>
             </div>
         </div>
-    </div>
-</div>
+        {{ server_actions("plex") }}
+        </div>
 
-<div class="card">
-    <div class="card-body" style="padding: 1rem 1.25rem;">
-        <div class="form-group mb-0" style="display: flex; gap: 1rem; align-items: center;">
-            <button type="submit" class="btn btn-primary">
-                <i data-lucide="save"></i>
-                Save Connection
-            </button>
-            <button type="button" class="btn btn-secondary"
-                    data-setting-id="plex_test"
-                    hx-post="/settings/plex/test"
-                    hx-target="#plex-test-result"
-                    hx-swap="innerHTML">
-                <i data-lucide="plug"></i>
-                Test Connection
-            </button>
-            <div id="plex-test-result"></div>
+        <div data-server="jellyfin" role="tabpanel">
+        <div class="form-group">
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="jellyfin_enabled" name="jellyfin_enabled" value="on"
+                           {% if "jellyfin" in enabled_servers %}checked{% endif %}
+                           onchange="toggleMediaServer('jellyfin')">
+                    <span class="toggle-slider"></span>
+                </label>
+                <label for="jellyfin_enabled" style="margin-bottom: 0;">Enabled</label>
+            </div>
+            <div class="form-hint">
+                Experimental. Jellyfin drives caching runs only: Continue Watching + Next Up as OnDeck, Favorites as Watchlist.
+                Pinned media, Recently Added and RSS watchlists stay Plex-only.
+            </div>
+        </div>
+        <div class="grid grid-2" data-server-fields="jellyfin">
+            <div class="form-group" data-setting-id="jellyfin_url">
+                <label for="jellyfin_url">Jellyfin URL</label>
+                <input type="text" id="jellyfin_url" name="jellyfin_url"
+                       value="{{ settings.jellyfin_url }}"
+                       placeholder="192.168.1.x:8096" data-required>
+            </div>
+
+            <div class="form-group" data-setting-id="jellyfin_api_key">
+                <label for="jellyfin_api_key">API Key</label>
+                <input type="password" id="jellyfin_api_key" name="jellyfin_api_key"
+                       value="{{ settings.jellyfin_api_key }}"
+                       placeholder="Dashboard &rsaquo; API Keys" data-required>
+            </div>
+
+            <div class="form-group mb-0" data-setting-id="jellyfin_user">
+                <label for="jellyfin_user">Main User</label>
+                <input type="text" id="jellyfin_user" name="jellyfin_user"
+                       value="{{ settings.jellyfin_user }}"
+                       placeholder="First administrator">
+                <div class="form-hint">Leave blank to use the first administrator account</div>
+            </div>
+        </div>
+        {{ server_actions("jellyfin") }}
         </div>
     </div>
 </div>
@@ -120,15 +137,37 @@
 </div>
 
 <script>
-    // Show only the enabled servers' fields; hidden fields must not block submit
-    function toggleMediaServer() {
-        document.querySelectorAll('[data-server]').forEach(section => {
-            const active = document.getElementById(section.dataset.server + '_enabled').checked;
-            section.style.display = active ? '' : 'none';
-            section.querySelectorAll('[data-required]').forEach(input => input.required = active);
+    function showServerTab(server) {
+        document.querySelectorAll('[data-server-tab]').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.serverTab === server);
+            tab.setAttribute('aria-selected', tab.dataset.serverTab === server);
+        });
+        document.querySelectorAll('[data-server]').forEach(panel => {
+            panel.hidden = panel.dataset.server !== server;
         });
     }
-    toggleMediaServer();
+
+    // A disabled server's fields are hidden and must not block submit
+    function toggleMediaServer(server) {
+        const on = document.getElementById(server + '_enabled').checked;
+        const fields = document.querySelector(`[data-server-fields="${server}"]`);
+        fields.style.display = on ? '' : 'none';
+        fields.querySelectorAll('[data-required]').forEach(input => input.required = on);
+    }
+    toggleMediaServer('plex');
+    toggleMediaServer('jellyfin');
+    showServerTab(document.getElementById('plex_enabled').checked ? 'plex' : 'jellyfin');
+
+    // A required field on a hidden tab can't show its error; open that tab first
+    document.getElementById('media-server-form').addEventListener('invalid', e => {
+        const panel = e.target.closest('[data-server]');
+        if (panel) showServerTab(panel.dataset.server);
+    }, true);
+
+    // Settings search can jump to a field on the other tab
+    document.querySelectorAll('[data-server]').forEach(panel => {
+        panel.addEventListener('ss:reveal', () => showServerTab(panel.dataset.server));
+    });
 
     // Plex OAuth flow (server-side)
     let oauthWindow = null;

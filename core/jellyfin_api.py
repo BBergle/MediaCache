@@ -51,7 +51,12 @@ class JellyfinManager:
     """Drop-in replacement for PlexManager during a caching run."""
 
     def __init__(self, url: str, api_key: str, main_user: str = "", timeout: int = 30):
-        self.url = url.rstrip("/")
+        # Accept "host:8096", "http://host:8096" and a doubled "http://http://host:8096";
+        # when doubled, the innermost scheme wins (it's the one that was pasted)
+        url, scheme = url.strip().rstrip("/"), "http"
+        while url.lower().startswith(("http://", "https://")):
+            scheme, url = url.split("://", 1)
+        self.url = f"{scheme.lower()}://{url}"
         self.main_user = main_user
         self.timeout = timeout
         self.plex = None  # Plex-only features (pins, session lookup) check this

@@ -1727,6 +1727,15 @@ textarea {
     border-bottom-color: var(--plex-orange);
 }
 
+/* In-page tabs (e.g. Plex / Jellyfin) are buttons, not links */
+button.tab {
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    font: inherit;
+    cursor: pointer;
+}
+
 /* ==================== Alerts ==================== */
 
 .alert {
