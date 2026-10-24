@@ -625,6 +625,8 @@ def settings_libraries(request: Request):
     # Load path mappings
     raw_settings = settings_service.get_all()
     mappings = raw_settings.get("path_mappings", [])
+    servers = enabled_media_servers(raw_settings.get("media_server", "plex"))
+    jellyfin_libraries = settings_service.get_jellyfin_libraries() if "jellyfin" in servers else []
     valid_sections = raw_settings.get("valid_sections", [])
 
     # Group mappings by section_id
@@ -636,7 +638,7 @@ def settings_libraries(request: Request):
         sid = m.get("section_id")
         if sid is not None:
             library_mappings.setdefault(sid, []).append(m_copy)
-        else:
+        elif m.get("jellyfin_library_id") is None:
             orphan_mappings.append(m_copy)
 
     # Build library cards
@@ -659,6 +661,9 @@ def settings_libraries(request: Request):
             "page_title": "Library Settings",
             "active_tab": "libraries",
             "library_cards": library_cards,
+            "plex_enabled": "plex" in servers,
+            "jellyfin_enabled": "jellyfin" in servers,
+            "jellyfin_cards": [_jellyfin_card(lib, mappings) for lib in jellyfin_libraries],
             "orphan_mappings": orphan_mappings,
             "mapping_conflicts": find_mapping_conflicts(mappings),
         }
@@ -763,19 +768,18 @@ def toggle_library(request: Request, section_id: int):
     )
 
 
-@router.put("/libraries/{section_id}/paths", response_class=HTMLResponse)
-async def update_library_paths(request: Request, section_id: int):
-    """Update all path mappings for a library at once and return refreshed card"""
-    settings_service = get_settings_service()
-    form = await request.form()
+def _save_library_paths_form(settings_service, form, link_key: str, link_id) -> List[Dict[str, Any]]:
+    """Apply a library card's Edit Paths form to the mappings linked by link_key == link_id.
 
+    Saves and returns all path mappings.
+    """
     raw = settings_service._load_raw()
     all_mappings = raw.get("path_mappings", [])
 
     # Collect mapping indices for this library
     lib_indices = [
         i for i, m in enumerate(all_mappings)
-        if m.get("section_id") == section_id
+        if m.get(link_key) == link_id
     ]
 
     # Parse form fields — each mapping's fields are suffixed with its position.
@@ -805,7 +809,7 @@ async def update_library_paths(request: Request, section_id: int):
             "host_cache_path": effective_host_cache_path if effective_host_cache_path else None,
             "cacheable": cacheable == "on",
             "enabled": True,
-            "section_id": existing.get("section_id"),
+            link_key: existing.get(link_key),
             # Clear auto_fill flag — user has reviewed paths
         })
 
@@ -816,6 +820,89 @@ async def update_library_paths(request: Request, section_id: int):
     raw["path_mappings"] = all_mappings
     settings_service._rebuild_valid_sections(raw)
     settings_service._save_raw(raw)
+    return all_mappings
+
+
+def _jellyfin_card(library: Dict[str, Any], all_mappings: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Library card for a Jellyfin library; its mappings are linked by jellyfin_library_id."""
+    lib_maps = [dict(m, _index=i) for i, m in enumerate(all_mappings)
+                if m.get("jellyfin_library_id") == library["id"]]
+    return {
+        "library": library,
+        "enabled": any(m.get("enabled", True) for m in lib_maps),
+        "mappings": lib_maps,
+        "has_mappings": bool(lib_maps),
+        "key": f"jf-{library['id']}",
+        "url": f"/settings/libraries/jellyfin/{library['id']}",
+        "server": "Jellyfin",
+    }
+
+
+def _render_jellyfin_card(request: Request, settings_service, library_id: str, all_mappings):
+    library = next((lib for lib in settings_service.get_jellyfin_libraries() if lib["id"] == library_id), None)
+    if not library:
+        return HTMLResponse("<div class='alert alert-error'>Jellyfin library not found</div>")
+    return templates.TemplateResponse(
+        request,
+        "settings/partials/library_card.html",
+        {"card": _jellyfin_card(library, all_mappings)}
+    )
+
+
+@router.post("/libraries/jellyfin/{library_id}/toggle", response_class=HTMLResponse)
+def toggle_jellyfin_library(request: Request, library_id: str):
+    """Toggle a Jellyfin library on/off, auto-creating its mappings on first enable"""
+    settings_service = get_settings_service()
+    raw = settings_service._load_raw()
+    mappings = raw.get("path_mappings", [])
+    linked = [m for m in mappings if m.get("jellyfin_library_id") == library_id]
+
+    if any(m.get("enabled", True) for m in linked):
+        for m in linked:
+            m["enabled"] = False
+    else:
+        library = next((lib for lib in settings_service.get_jellyfin_libraries()
+                        if lib["id"] == library_id), None)
+        if not library:
+            return HTMLResponse("<div class='alert alert-error'>Jellyfin library not found</div>")
+        locations = {loc.rstrip("/") + "/" for loc in library.get("locations", [])}
+        # Drop mappings for locations no longer in Jellyfin, re-enable the rest
+        mappings = [m for m in mappings
+                    if m.get("jellyfin_library_id") != library_id or m.get("plex_path") in locations]
+        for m in mappings:
+            if m.get("jellyfin_library_id") == library_id:
+                m["enabled"] = True
+        covered = {m.get("plex_path") for m in mappings if m.get("jellyfin_library_id") == library_id}
+        for loc in sorted(locations - covered):
+            # Adopt an unlinked mapping for this path (e.g. from the setup wizard) over a duplicate
+            unlinked = next((m for m in mappings if m.get("plex_path") == loc
+                             and m.get("section_id") is None and m.get("jellyfin_library_id") is None), None)
+            if unlinked:
+                unlinked.update(jellyfin_library_id=library_id, enabled=True)
+            else:
+                mappings.append(settings_service.auto_fill_jellyfin_mapping(library, loc, raw))
+
+    raw["path_mappings"] = mappings
+    settings_service._save_raw(raw)
+    return _render_jellyfin_card(request, settings_service, library_id, mappings)
+
+
+@router.put("/libraries/jellyfin/{library_id}/paths", response_class=HTMLResponse)
+async def update_jellyfin_library_paths(request: Request, library_id: str):
+    """Update all path mappings for a Jellyfin library and return its refreshed card"""
+    settings_service = get_settings_service()
+    form = await request.form()
+    all_mappings = _save_library_paths_form(settings_service, form, "jellyfin_library_id", library_id)
+    return _render_jellyfin_card(request, settings_service, library_id, all_mappings)
+
+
+@router.put("/libraries/{section_id}/paths", response_class=HTMLResponse)
+async def update_library_paths(request: Request, section_id: int):
+    """Update all path mappings for a library at once and return refreshed card"""
+    settings_service = get_settings_service()
+    form = await request.form()
+
+    all_mappings = _save_library_paths_form(settings_service, form, "section_id", section_id)
 
     # Re-render the full library card
     libraries = settings_service.get_plex_libraries()

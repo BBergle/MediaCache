@@ -4,7 +4,7 @@
 <div class="card">
     <div class="card-header">
         <i data-lucide="library"></i>
-        <h2>Plex Libraries</h2>
+        <h2>{% if jellyfin_enabled %}Libraries{% else %}Plex Libraries{% endif %}</h2>
     </div>
     <div class="card-body">
         <p class="text-muted mb-2">Select libraries to cache and configure their path mappings.</p>
@@ -18,18 +18,42 @@
         </div>
         {% endif %}
 
-        {% if not library_cards %}
+        {% if plex_enabled and not library_cards %}
         <div class="alert alert-info">
             <i data-lucide="alert-circle"></i>
             <span>Unable to fetch libraries from Plex. Check your <a href="/settings/plex" style="color: var(--plex-orange-text);">server connection</a>.</span>
         </div>
         {% endif %}
 
+        {% if jellyfin_enabled and plex_enabled %}
+        <h3 style="font-size: 1rem; color: var(--plex-text-muted); margin-bottom: 1rem;">
+            <i data-lucide="library" style="width: 18px; height: 18px; vertical-align: middle;"></i>
+            Plex Libraries
+        </h3>
+        {% endif %}
         <div id="library-cards" data-setting-id="library_toggles">
             {% for card in library_cards %}
                 {% include "settings/partials/library_card.html" %}
             {% endfor %}
         </div>
+
+        {% if jellyfin_enabled %}
+        <h3 style="font-size: 1rem; color: var(--plex-text-muted); margin: 1.5rem 0 1rem;">
+            <i data-lucide="library" style="width: 18px; height: 18px; vertical-align: middle;"></i>
+            Jellyfin Libraries
+        </h3>
+        {% if not jellyfin_cards %}
+        <div class="alert alert-info">
+            <i data-lucide="alert-circle"></i>
+            <span>Unable to fetch libraries from Jellyfin. Check your <a href="/settings/plex" style="color: var(--plex-orange-text);">server connection</a>.</span>
+        </div>
+        {% endif %}
+        <div id="jellyfin-library-cards">
+            {% for card in jellyfin_cards %}
+                {% include "settings/partials/library_card.html" %}
+            {% endfor %}
+        </div>
+        {% endif %}
 
         {% if orphan_mappings %}
         <hr style="border-color: var(--plex-border); margin: 1.5rem 0;">

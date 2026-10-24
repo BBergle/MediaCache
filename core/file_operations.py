@@ -2801,10 +2801,11 @@ class PlexcachedMigration:
 
 
 def merge_shared_real_paths(mappings: List['PathMapping']) -> List['PathMapping']:
-    """Mappings from two servers can point at one real folder; share their flags.
+    """Mappings from two servers can point at one real folder; share their caching.
 
-    If any mapping in the group is enabled/cacheable, all are. Missing cache paths
-    come from the first cacheable mapping. Returns copies; input is untouched.
+    If any mapping in the group is cacheable, all are. Missing cache paths come from
+    the first cacheable mapping. Enabled stays per mapping, so each server's library
+    toggle works on its own. Returns copies; input is untouched.
     """
     import dataclasses
 
@@ -2814,10 +2815,9 @@ def merge_shared_real_paths(mappings: List['PathMapping']) -> List['PathMapping'
 
     merged = {}
     for group in groups.values():
-        enabled = any(m.enabled for m in group)
         source = next((m for m in group if m.cacheable), None)
         for m in group:
-            changes = {"enabled": enabled}
+            changes = {}
             if source:
                 changes["cacheable"] = True
                 changes["cache_path"] = m.cache_path or source.cache_path
@@ -2837,12 +2837,11 @@ def find_mapping_conflicts(mappings: List[dict]) -> List[str]:
 
     for group in by_real.values():
         first = group[0]
-        for key, label, outcome in (("cacheable", "caching", "cached"), ("enabled", "enabled", "used")):
-            other = next((m for m in group[1:] if m.get(key, True) != first.get(key, True)), None)
-            if other:
-                warnings.append(
-                    f"'{first.get('name')}' and '{other.get('name')}' point at {first.get('real_path')} "
-                    f"but disagree on {label}. It will be {outcome}.")
+        other = next((m for m in group[1:] if m.get("cacheable", True) != first.get("cacheable", True)), None)
+        if other:
+            warnings.append(
+                f"'{first.get('name')}' and '{other.get('name')}' point at {first.get('real_path')} "
+                f"but disagree on caching. It will be cached.")
 
     for group in by_plex.values():
         first = group[0]

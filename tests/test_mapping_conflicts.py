@@ -22,11 +22,15 @@ def test_cacheable_if_any_mapping_to_folder_is():
     assert mod.convert_plex_to_real("/media/tv/S/e1.mkv")[0] == "/mnt/user/tv/S/e1.mkv"
 
 
-def test_enabled_if_any_mapping_to_folder_is():
+def test_enabled_stays_per_mapping():
+    # Each server's library toggle works on its own: a disabled Jellyfin mapping
+    # stays disabled even when Plex's mapping to the same folder is enabled.
     plex, jf = _pair()
     jf.enabled = False
     merged = {m.name: m for m in merge_shared_real_paths([plex, jf])}
-    assert merged["Jellyfin TV"].enabled
+    assert not merged["Jellyfin TV"].enabled and merged["Plex TV"].enabled
+    mod = MultiPathModifier([plex, jf])
+    assert mod.convert_plex_to_real("/media/tv/S/e1.mkv")[1] is None
 
 
 def _dicts():
@@ -42,12 +46,6 @@ def test_conflict_messages():
     assert find_mapping_conflicts(_dicts()) == [
         "'Plex TV' and 'Jellyfin TV' point at /mnt/user/tv/ but disagree on caching. It will be cached."]
 
-    d = _dicts()
-    d[1]["cacheable"] = True
-    d[1]["enabled"] = False
-    assert find_mapping_conflicts(d) == [
-        "'Plex TV' and 'Jellyfin TV' point at /mnt/user/tv/ but disagree on enabled. It will be used."]
-
     same_path = [
         {"name": "A", "plex_path": "/data/", "real_path": "/mnt/a/", "cacheable": True, "enabled": True},
         {"name": "B", "plex_path": "/data/", "real_path": "/mnt/b/", "cacheable": True, "enabled": True},
@@ -59,4 +57,6 @@ def test_conflict_messages():
 def test_agreeing_mappings_have_no_conflicts():
     d = _dicts()
     d[1]["cacheable"] = True
+    assert find_mapping_conflicts(d) == []
+    d[1]["enabled"] = False  # per-server toggles may differ
     assert find_mapping_conflicts(d) == []

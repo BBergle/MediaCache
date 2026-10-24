@@ -343,7 +343,7 @@ def test_path_mappings_keep_user_flags_while_conversion_shares_them():
     plex = PathMapping(name="Plex", plex_path="/data/tv", real_path="/mnt/user/tv",
                        cache_path="/mnt/cache/tv", cacheable=True, enabled=True)
     jf = PathMapping(name="Jellyfin", plex_path="/media/tv", real_path="/mnt/user/tv",
-                     cache_path=None, cacheable=False, enabled=False)
+                     cache_path=None, cacheable=False, enabled=True)
     app = PlexCacheApp.__new__(PlexCacheApp)
     cm = MagicMock()
     cm.has_legacy_path_arrays.return_value = False
@@ -353,7 +353,7 @@ def test_path_mappings_keep_user_flags_while_conversion_shares_them():
 
     # Settings keep the user's own flags (they are saved back to the settings file)
     assert cm.paths.path_mappings[0] is plex and cm.paths.path_mappings[1] is jf
-    assert not jf.enabled and not jf.cacheable and jf.cache_path is None
+    assert not jf.cacheable and jf.cache_path is None
 
     # Path conversion shares the folder's flags
     real, _ = app.file_path_modifier.convert_plex_to_real("/media/tv/Show/e1.mkv")
