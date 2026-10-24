@@ -1,5 +1,18 @@
 ## Changelog
 
+### v3.3.2 (October 2026)
+
+**Settings → Libraries: Jellyfin libraries**
+- Jellyfin libraries are listed under their own heading, each with its own toggle and Edit Paths, like Plex libraries
+- Turning a Jellyfin library on creates its path mapping for you: it finds the real folder that already holds the library's files (a Plex library's folder, or one next to it) and reuses its real and cache paths
+- If no folder matches, the card asks you to check its paths under Edit Paths
+- Jellyfin mappings no longer need to be added by hand under Custom Mappings
+- Matching needs an administrator API key in Jellyfin
+
+**Changes**
+- Each server's library toggle now works on its own: turning a Jellyfin library off stops caching what Jellyfin wants from it, even if the Plex library for the same folder is on. Before, a folder was used if any of its mappings was on
+- Mappings for the same folder still share caching; Settings only warns when they disagree on caching
+
 ### v3.3.1 (October 2026)
 
 **Settings → Media Servers**
