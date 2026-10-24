@@ -69,7 +69,7 @@ class JellyfinManager:
         self._ondeck_complete = True
         self._watchlist_complete = True
 
-    def _get(self, path: str, **params):
+    def _get(self, path: str, /, **params):  # positional-only: "path" can also be a query param
         resp = self._http.get(f"{self.url}{path}", params=params, timeout=self.timeout)
         resp.raise_for_status()
         return resp.json()

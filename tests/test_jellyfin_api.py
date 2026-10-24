@@ -1,6 +1,7 @@
 """JellyfinManager maps Jellyfin API responses onto the PlexManager run interface."""
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 from core.jellyfin_api import JellyfinManager
 
@@ -110,3 +111,14 @@ def test_url_scheme_missing_or_doubled():
                        (" HTTPS://jf.example.com ", "https://jf.example.com"),
                        ("http://https://jf.example.com", "https://jf.example.com")]:
         assert JellyfinManager(typed, "key").url == url
+
+
+def test_list_folder_sends_path_as_query_param():
+    # Stubs HTTP, not _get: a "path" query param must not collide with _get's endpoint argument
+    m = JellyfinManager("http://jf", "key")
+    m._http = MagicMock()
+    m._http.get.return_value.json.return_value = [{"Name": "Ted Lasso (2020)", "Type": "Directory"}]
+    assert m.list_folder("/data/tvshows") == ["Ted Lasso (2020)"]
+    url, = m._http.get.call_args.args
+    assert url == "http://jf/Environment/DirectoryContents"
+    assert m._http.get.call_args.kwargs["params"]["path"] == "/data/tvshows"
