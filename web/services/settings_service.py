@@ -9,10 +9,13 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field, asdict
 
+import requests
+
 from web.config import DATA_DIR, SETTINGS_FILE, IS_DOCKER
 # Defaults come from core's dataclass rather than repeated literals: the engine
 # reads CacheConfig, so anything hardcoded here can disagree with what runs.
 from core.config import CacheConfig
+from core.media_servers import enabled_media_servers
 from web.dependencies import get_system_detector
 
 logger = logging.getLogger(__name__)
@@ -249,15 +252,16 @@ class SettingsService:
     def update_path_mapping(self, index: int, mapping: Dict[str, Any]) -> bool:
         """Update an existing path mapping by index (sanitizes paths to strip whitespace).
 
-        Preserves section_id from the existing mapping if not in the update dict.
+        Preserves section_id / jellyfin_library_id from the existing mapping if not in the update dict.
         """
         raw = self._load_raw()
         mappings = raw.get("path_mappings", [])
         if 0 <= index < len(mappings):
-            # Preserve section_id from existing mapping if not provided
+            # Preserve library links from existing mapping if not provided
             existing = mappings[index]
-            if "section_id" not in mapping and "section_id" in existing:
-                mapping["section_id"] = existing["section_id"]
+            for key in ("section_id", "jellyfin_library_id"):
+                if key not in mapping and key in existing:
+                    mapping[key] = existing[key]
             mappings[index] = self._sanitize_path_mapping(mapping)
             raw["path_mappings"] = mappings
             return self._save_raw(raw)
@@ -515,7 +519,7 @@ class SettingsService:
         migrated = False
         for m in mappings:
             plex_path = m.get("plex_path", "").rstrip("/") + "/" if m.get("plex_path") else ""
-            if plex_path in path_to_section:
+            if plex_path in path_to_section and m.get("jellyfin_library_id") is None:
                 m["section_id"] = path_to_section[plex_path]
                 migrated = True
 
@@ -586,6 +590,79 @@ class SettingsService:
             "section_id": library["id"],
             "auto_fill_recognized": path_recognized,
         }
+
+    def _jellyfin(self):
+        """A JellyfinManager for the saved connection, or None when Jellyfin is off."""
+        s = self.get_plex_settings()
+        if "jellyfin" not in enabled_media_servers(s["media_server"]) or not s["jellyfin_url"] \
+                or not s["jellyfin_api_key"]:
+            return None
+        from core.jellyfin_api import JellyfinManager
+        return JellyfinManager(s["jellyfin_url"], s["jellyfin_api_key"], timeout=5)
+
+    def get_jellyfin_libraries(self) -> List[Dict[str, Any]]:
+        """Jellyfin libraries in get_plex_libraries' shape; [] when off or unreachable."""
+        jf = self._jellyfin()
+        if not jf:
+            return []
+        try:
+            return jf.get_libraries()
+        except requests.RequestException as e:
+            logger.warning("Could not fetch Jellyfin libraries: %s", e)
+            return []
+
+    def _jellyfin_folder_names(self, location: str) -> List[str]:
+        """First few entry names in a Jellyfin library folder, for matching it to a real folder."""
+        jf = self._jellyfin()
+        try:
+            return jf.list_folder(location)[:3] if jf else []
+        except requests.RequestException as e:
+            logger.warning("Could not list Jellyfin folder %s: %s", location, e)
+            return []
+
+    @staticmethod
+    def _find_real_folder(names: List[str], mappings: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Paths for the folder holding every name: an existing mapping's real folder, else a
+        sibling of one (Jellyfin's /data/my-rips next to Plex's .../movies). None if no match."""
+        if not names:
+            return None
+
+        def holds(folder):
+            return all(os.path.exists(os.path.join(folder, n)) for n in names)
+
+        def swap_last(path, name):
+            return f"{os.path.dirname(path.rstrip('/'))}/{name}/" if path else None
+
+        for m in mappings:
+            if m.get("real_path") and holds(m["real_path"]):
+                return {k: m.get(k) for k in ("real_path", "cache_path", "host_cache_path", "cacheable")}
+        for m in mappings:
+            real = (m.get("real_path") or "").rstrip("/")
+            if not real:
+                continue
+            try:
+                siblings = sorted(os.listdir(os.path.dirname(real)))
+            except OSError:
+                continue
+            for name in siblings:
+                if holds(os.path.join(os.path.dirname(real), name)):
+                    return {"real_path": swap_last(real, name),
+                            "cache_path": swap_last(m.get("cache_path"), name),
+                            "host_cache_path": swap_last(m.get("host_cache_path"), name),
+                            "cacheable": m.get("cacheable", True)}
+        return None
+
+    def auto_fill_jellyfin_mapping(self, library: Dict, location: str, settings: Dict[str, Any]) -> Dict[str, Any]:
+        """Pre-filled mapping for a Jellyfin library location, reusing the real folder that
+        already holds its files; falls back to auto_fill_mapping's guess, flagged for review."""
+        mapping = self.auto_fill_mapping(library, location, settings)
+        del mapping["section_id"]
+        mapping["jellyfin_library_id"] = library["id"]
+        match = self._find_real_folder(self._jellyfin_folder_names(location.rstrip("/")),
+                                       settings.get("path_mappings", []))
+        mapping.update(match or {})
+        mapping["auto_fill_recognized"] = match is not None
+        return mapping
 
     def get_cache_settings(self) -> Dict[str, Any]:
         """Get cache behavior settings"""

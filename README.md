@@ -243,13 +243,18 @@ server is connected.
 ### Running both at the same time
 
 1. **Connect both servers** under **Settings → Media Server**.
-2. **Add a path mapping for each server.** Plex and Jellyfin usually mount the same media at
-   different container paths, e.g. `/data/tv` for Plex and `/media/tv` for Jellyfin. Under
-   **Settings → Libraries**, add a mapping for each, both pointing at the same real folder
-   (e.g. `/mnt/user/tv/`).
+2. **Turn on libraries for each server.** **Settings → Libraries** lists Plex and Jellyfin
+   libraries, each with its own toggle. Plex and Jellyfin usually mount the same media at
+   different container paths, e.g. `/data/media/tv` for Plex and `/data/tvshows` for Jellyfin.
+   Turning a Jellyfin library on finds the real folder that already holds its files (a Plex
+   library's folder, or one next to it) and reuses its real and cache paths, so you don't type
+   them. If no folder matches, the card asks you to check its paths under **Edit Paths**.
    - Files are matched on that real path, so an episode wanted on both servers is cached once.
    - A shared folder counts as cacheable if any of its mappings says so.
-   - Settings warns you when two mappings for the same folder disagree.
+   - Each toggle works on its own: turning a Jellyfin library off stops caching what Jellyfin
+     wants from it, even if the Plex library for the same folder is on.
+   - Settings warns you when two mappings for the same folder disagree on caching.
+   - Matching needs an administrator API key in Jellyfin (Dashboard → API Keys gives one).
 3. **Sync users.** Under **Settings → Users**, click **Sync Users**. Users from both servers are
    listed, and Jellyfin users are named `"<name> (Jellyfin)"`, e.g. `"Ben (Jellyfin)"`. Each person
    gets their own skip and retention settings.

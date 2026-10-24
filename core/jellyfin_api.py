@@ -101,6 +101,11 @@ class JellyfinManager:
                               "type_label": label, "locations": folder.get("Locations") or []})
         return libraries
 
+    def list_folder(self, path: str) -> List[str]:
+        """Entry names in a library folder as Jellyfin sees it (needs an admin API key)."""
+        return [e["Name"] for e in self._get("/Environment/DirectoryContents", path=path,
+                                             includeFiles="true", includeDirectories="true")]
+
     # PlexManager API used by PlexCacheApp; Jellyfin needs no per-user tokens.
     def load_user_tokens(self, **kwargs) -> None:
         pass
